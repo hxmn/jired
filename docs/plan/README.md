@@ -17,13 +17,40 @@ them with Jira Cloud (REST v3, ADF) or Jira Data Center (REST v2, wiki markup).
 
 ## Milestones
 
-| ID | File | Scope | Size |
+| ID | File | Scope | Status |
 |---|---|---|---|
-| M1 | [m1-foundation.md](milestones/m1-foundation.md) | Skeleton, config, auth, API clients, `init`/`fetch`, read-only pull | L |
-| M2 | [m2-sync-engine.md](milestones/m2-sync-engine.md) | Three-way merge, `diff`, MD→ADF/wiki, `push` for fields+description, `status` | XL |
-| M3 | [m3-collaboration.md](milestones/m3-collaboration.md) | Comments, attachments, checklists, `create`/`transition`/`assign`/`search`/`log`/`resolve`/`clean` | L |
-| M4 | [m4-grouping-tui.md](milestones/m4-grouping-tui.md) | Grouping folders, Windows link fallback, board moves, TUI screens | M |
-| M5 | [m5-agent-json-polish.md](milestones/m5-agent-json-polish.md) | Final JSON schemas, agent docs, completion, plugin adapter, hardening, release | M |
+| M1 | [m1-foundation.md](milestones/m1-foundation.md) | Skeleton, config, auth, API clients, `init`/`fetch`, read-only pull | done |
+| M2 | [m2-sync-engine.md](milestones/m2-sync-engine.md) | Three-way merge, `diff`, MD→ADF/wiki, `push`, `status` | done |
+| M3 | [m3-collaboration.md](milestones/m3-collaboration.md) | Comments, attachments, checklists, `create`/`transition`/`assign`/`log`/`resolve`/`clean` | done but for `search --pull` and per-field resolve |
+| M4 | [m4-grouping-tui.md](milestones/m4-grouping-tui.md) | Grouping folders, link fallback, board moves, TUI | grouping done; **TUI not built** |
+| M5 | [m5-agent-json-polish.md](milestones/m5-agent-json-polish.md) | JSON schemas, agent docs, completion, hardening, release | contract and security done; **plugin adapter and packaging not built** |
+
+## Where the project stands
+
+Working end to end against recorded fixtures for **both Cloud and Data Center**:
+
+```
+init → pull → edit → status/diff → push --dry-run → push
+```
+
+plus `comment`, `transition`, `assign`, `create`, `attach`,
+`attachments pull`, `log`, `search`, `resolve`, `clean`, `config`, `whoami`,
+`projects`/`boards`/`sprints`, `open`, `completion`, `schema` and `agent-docs`.
+
+Guards that hold the design in place, each verified rather than asserted:
+
+| Guard | What it prevents |
+|---|---|
+| Property suite on conversion idempotence | A pull that rewrites files it did not need to, or a push that reshapes an issue |
+| Raw-block reassembly from stored originals | An untouched panel, macro or media node changing on push |
+| Schema drift test | A command shipping a JSON document agents cannot validate |
+| Agent-docs drift test | Docs that no longer describe the binary |
+| Leak tests (themselves leak-tested) | A credential reaching output, a fixture or a config file |
+| Scale benchmark | Silent quadratic behaviour as a workspace grows |
+
+**Not built:** the TUI, the checklist-plugin adapter, release packaging, and
+recording fixtures from real instances (`jired-record` exists but needs
+credentials to run).
 
 ## Tracking conventions
 
