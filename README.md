@@ -29,8 +29,10 @@ jired push              # apply
 
 `jired init` writes `CLAUDE.md` and `AGENTS.md` into the workspace documenting
 the file format, the frontmatter schema, editability rules, and the exit-code
-table. Every command takes `--json` (stable versioned schema on stdout, prose on
-stderr) and `--no-input` (never prompt; exit 7 naming any missing value).
+table. Every command takes `--json` and `--no-input`. In JSON mode both streams are
+machine-readable: stdout carries one versioned result document, stderr carries
+the structured error and nothing else. `--no-input` never prompts and exits 7
+naming any missing value.
 
 ```sh
 jired pull --json --no-input || test $? -eq 5   # 5 means conflicts, nothing written

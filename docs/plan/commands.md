@@ -19,10 +19,13 @@ stderr.
 `5` conflict · `6` lossy blocked · `7` missing value (non-interactive) · `8` locked ·
 `9` corrupt state · `10` unsupported server.
 
-**`--json` mode:** stable versioned JSON on stdout (`"schema":"jired/<name>/1"`),
-human text on stderr, structured errors on stderr:
+**`--json` mode:** stdout carries exactly one versioned result document
+(`"schema":"jired/<name>/1"`); stderr carries the structured error and nothing
+else:
 `{"schema":"jired/error/1","code":5,"kind":"conflict","message":"…","details":{}}`.
-Deterministic ordering in all outputs.
+Narration and warnings are suppressed — mixing prose into stderr would make the
+error document unparseable, so commands that model warnings carry them inside
+their result document instead. Ordering is deterministic in all outputs.
 
 ## Commands
 

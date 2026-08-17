@@ -800,18 +800,41 @@ fn strategy_merge_writes_conflict_markers() {
 // contracts
 // ---------------------------------------------------------------------------
 
+/// In `--json` mode *both* streams must be machine-readable: stdout carries the
+/// result document and stderr carries the structured error, nothing else.
+/// Narration mixed into stderr would sit alongside the error and make it
+/// unparseable, which defeats the point of the flag.
 #[test]
-fn json_mode_keeps_stdout_parseable_and_prose_on_stderr() {
+fn json_mode_keeps_both_streams_machine_readable() {
     let ws = Ws::new();
     ws.init();
-    let out = ws.cmd(&["pull", "--json"]).output().unwrap();
 
+    let out = ws.cmd(&["pull", "--json"]).output().unwrap();
     serde_json::from_slice::<Value>(&out.stdout).expect("stdout is pure JSON");
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("new"),
-        "human summary belongs on stderr: {stderr}"
+        out.stderr.is_empty(),
+        "a successful --json run must say nothing on stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
+
+    // On failure, stderr is exactly one error document.
+    let out = ws
+        .cmd(&["transition", "PROJ-142", "--to", "Nowhere", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err: Value = serde_json::from_slice(&out.stderr).expect("stderr is pure JSON");
+    assert_eq!(err["schema"], "jired/error/1");
+}
+
+/// Without `--json` the narration is the whole point, and it goes to stdout.
+#[test]
+fn human_mode_narrates_on_stdout() {
+    let ws = Ws::new();
+    ws.init();
+    let out = ws.cmd(&["pull"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("new"), "expected a summary: {stdout}");
 }
 
 #[test]
@@ -1576,4 +1599,139 @@ fn a_staged_attachment_makes_the_issue_dirty() {
 
     ws.json(&["push"]);
     assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Conflict resolution [M3.8]
+// ---------------------------------------------------------------------------
+
+/// Put the workspace into the state a conflicting pull leaves behind.
+fn conflicted(ws: &Ws) {
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("summary: Fix login flow", "summary: Ours");
+    ws.write(ISSUE_FILE, &text);
+
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["summary"] = "Theirs".into();
+        issue["fields"]["updated"] = "2026-08-20T09:00:00.000+0000".into();
+    });
+
+    let out = ws.cmd(&["pull", "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(5), "the setup must conflict");
+}
+
+#[test]
+fn resolve_lists_what_is_stuck() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    conflicted(&ws);
+
+    let report = ws.json(&["resolve", "--list"]);
+    let c = &report["conflicts"][0];
+    assert_eq!(c["issue_key"], "PROJ-142");
+    assert_eq!(c["field"], "summary");
+}
+
+#[test]
+fn resolve_without_a_choice_refuses_rather_than_guessing() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    conflicted(&ws);
+
+    let err = ws.json_err(&["resolve"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(err["hint"].as_str().unwrap().contains("--ours"));
+    // Still stuck, deliberately.
+    assert_eq!(
+        ws.json(&["status"])["conflicts"].as_array().unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn resolve_theirs_takes_the_server_value_and_clears_the_conflict() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    conflicted(&ws);
+
+    let report = ws.json(&["resolve", "--theirs"]);
+    assert_eq!(report["strategy"], "theirs");
+    assert_eq!(report["resolved"][0], "PROJ-142");
+
+    assert!(ws.read("PROJ-142. Theirs.md").contains("summary: Theirs"));
+    let status = ws.json(&["status"]);
+    assert!(status["conflicts"].as_array().unwrap().is_empty());
+    assert!(status["dirty"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn resolve_ours_keeps_the_local_value_and_leaves_it_to_push() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    conflicted(&ws);
+
+    ws.json(&["resolve", "--ours"]);
+
+    assert!(ws.read("PROJ-142. Ours.md").contains("summary: Ours"));
+    let status = ws.json(&["status"]);
+    assert!(status["conflicts"].as_array().unwrap().is_empty());
+    // Keeping the local value means there is something to send.
+    assert_eq!(status["dirty"][0]["key"], "PROJ-142");
+    assert!(status["dirty"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::from("summary")));
+}
+
+#[test]
+fn resolve_done_refuses_a_file_that_still_has_markers() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // Conflict in the body so `--strategy merge` writes markers.
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("Steps to reproduce are below.", "Our steps.");
+    ws.write(ISSUE_FILE, &text);
+    ws.mutate_remote("PROJ-142", |issue| {
+        let content = issue["fields"]["description"]["content"]
+            .as_array_mut()
+            .unwrap();
+        content[2]["content"][0]["text"] = "Their steps.".into();
+        issue["fields"]["updated"] = "2026-08-20T09:00:00.000+0000".into();
+    });
+    let out = ws
+        .cmd(&["pull", "--strategy", "merge", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    assert!(ws.read(ISSUE_FILE).contains("<<<<<<< LOCAL"));
+
+    // Pushing markers into the issue would be worse than the conflict.
+    let err = ws.json_err(&["resolve", "--done"], 5);
+    assert_eq!(err["kind"], "conflict");
+    assert!(err["hint"].as_str().unwrap().contains("<<<<<<<"));
+
+    // Edit them out by hand, then accept.
+    let cleaned: String = ws
+        .read(ISSUE_FILE)
+        .lines()
+        .filter(|l| !l.starts_with("<<<<<<<") && !l.starts_with(">>>>>>>") && *l != "=======")
+        .filter(|l| !l.contains("Their steps."))
+        .collect::<Vec<_>>()
+        .join("\n");
+    ws.write(ISSUE_FILE, &format!("{cleaned}\n"));
+
+    let report = ws.json(&["resolve", "--done"]);
+    assert_eq!(report["strategy"], "manual");
+    assert!(ws.json(&["status"])["conflicts"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }

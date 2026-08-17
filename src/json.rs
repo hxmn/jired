@@ -49,20 +49,27 @@ impl Out {
         let _ = stdout.write_all(b"\n");
     }
 
-    /// Human-facing line: stdout normally, stderr in JSON mode.
+    /// Human-facing line, written to stdout.
+    ///
+    /// Suppressed entirely in JSON mode: stdout is reserved for the result
+    /// document, and prose on stderr would sit alongside the structured error
+    /// and make *that* stream unparseable too. Everything narration conveys is
+    /// already in the JSON.
     pub fn say(&self, msg: impl AsRef<str>) {
-        if self.quiet {
+        if self.quiet || self.json {
             return;
         }
-        if self.json {
-            eprintln!("{}", msg.as_ref());
-        } else {
-            println!("{}", msg.as_ref());
-        }
+        println!("{}", msg.as_ref());
     }
 
-    /// Warning: always stderr, never suppressed by `--quiet`.
+    /// Warning about something the user should act on.
+    ///
+    /// Suppressed in JSON mode for the same reason as [`say`](Self::say);
+    /// commands that model warnings carry them in their result document.
     pub fn warn(&self, msg: impl AsRef<str>) {
+        if self.json {
+            return;
+        }
         eprintln!("warning: {}", msg.as_ref());
     }
 

@@ -86,6 +86,18 @@ impl PullReport {
 }
 
 pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
+    run_scoped(ctx, args, None)
+}
+
+/// Pull, optionally restricted to a set of issues.
+///
+/// `jired resolve` uses this to re-merge just the conflicted issues under a
+/// chosen strategy, rather than reimplementing the merge a second way.
+pub fn run_scoped(
+    ctx: &mut Context,
+    args: &PullArgs,
+    only: Option<&[String]>,
+) -> Result<PullReport> {
     let engine = Engine::open(ctx)?;
     let strategy = args.effective_strategy();
 
@@ -119,6 +131,9 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
         if row.key.starts_with("NEW-") {
             continue;
         }
+        if only.is_some_and(|keys| !keys.contains(&row.key)) {
+            continue;
+        }
         let existing = files.get(&row.key).map(|f| f.relative.clone());
 
         if row.deleted_remote {
@@ -141,6 +156,7 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
             (None, _) | (Some(_), None) => {
                 planned.push(PlannedWrite {
                     key: row.key.clone(),
+                    base_doc: remote_doc.doc.clone(),
                     doc: remote_doc.doc,
                     description_storage: remote_doc.description_storage,
                     description_raw: remote_doc.description_raw,
@@ -168,6 +184,7 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
                     let changed = changed_fields(&row, markup, &fields, &base_url)?;
                     planned.push(PlannedWrite {
                         key: row.key.clone(),
+                        base_doc: remote_doc.doc.clone(),
                         doc: remote_doc.doc,
                         description_storage: remote_doc.description_storage,
                         description_raw: remote_doc.description_raw,
@@ -225,6 +242,7 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
 
                 planned.push(PlannedWrite {
                     key: row.key.clone(),
+                    base_doc: remote_doc.doc,
                     doc: outcome.doc,
                     description_storage: remote_doc.description_storage,
                     description_raw: remote_doc.description_raw,
@@ -255,6 +273,12 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
             .projector
             .write(&write.doc, write.previous.as_deref())?;
         attachment_folders.push((write.key.clone(), outcome.relative.clone()));
+        // Ours and theirs decide, so the recorded conflict is spent. Merge
+        // deliberately does not: it writes markers precisely so the conflict
+        // survives until someone edits the file and runs `resolve --done`.
+        if matches!(strategy, Strategy::Ours | Strategy::Theirs) {
+            engine.state.clear_conflicts(&write.key)?;
+        }
         engine
             .state
             .replace_raw_blocks(&write.key, "description", &write.description_raw)?;
@@ -263,10 +287,22 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
                 .state
                 .replace_raw_blocks(&write.key, container, blocks)?;
         }
+        // Hash the base rendering, not the file that was written: they are the
+        // same for a clean pull and deliberately differ after a merge that kept
+        // a local value.
+        let base_hash = {
+            let mut base_doc = write.base_doc.clone();
+            base_doc.frontmatter.jired.content_hash = String::new();
+            let provisional = base_doc.render()?;
+            base_doc.frontmatter.jired.content_hash =
+                crate::store::state::content_hash(&provisional);
+            crate::store::state::content_hash(&base_doc.render()?)
+        };
+
         engine.state.advance_base(
             &write.key,
             &write.description_storage,
-            &outcome.content_hash,
+            &base_hash,
             &outcome.relative,
         )?;
 
@@ -322,6 +358,13 @@ enum ChangeKind {
 struct PlannedWrite {
     key: String,
     doc: IssueDoc,
+    /// The file as it would look rendered purely from the incoming snapshot.
+    ///
+    /// `base_md_hash` has to describe *base*, not whatever the merge decided to
+    /// write. When a strategy keeps a local value the two differ, and recording
+    /// the merged file instead would make the issue look clean while still
+    /// holding unpushed edits.
+    base_doc: IssueDoc,
     description_storage: String,
     description_raw: Vec<crate::convert::ast::RawBlock>,
     comment_raw: std::collections::BTreeMap<String, Vec<crate::convert::ast::RawBlock>>,

@@ -146,7 +146,7 @@ pub fn render() -> String {
 
     s.push_str("## Agent-friendly flags\n\n");
     s.push_str("| Flag | Effect |\n|---|---|\n");
-    s.push_str("| `--json` | Stable versioned JSON on stdout, human text on stderr, structured errors on stderr. |\n");
+    s.push_str("| `--json` | One versioned JSON document on stdout; stderr carries the structured error and nothing else. Narration is suppressed so both streams stay parseable. |\n");
     s.push_str(
         "| `--no-input` | Never prompt; missing values fail with exit 7 naming the value. |\n",
     );
