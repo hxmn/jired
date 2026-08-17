@@ -3,29 +3,61 @@
   "$id": "jired/push/1",
   "title": "jired push result",
   "type": "object",
-  "required": ["schema", "dry_run", "results"],
+  "required": [
+    "schema",
+    "dry_run",
+    "results"
+  ],
   "properties": {
-    "schema": { "const": "jired/push/1" },
-    "dry_run": { "type": "boolean" },
+    "schema": {
+      "const": "jired/push/1"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
     "results": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "ok", "ops"],
+        "required": [
+          "key",
+          "ok",
+          "ops"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "ok": { "type": "boolean" },
+          "key": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
           "new_key": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Real key assigned to a locally created NEW-* issue"
           },
-          "error": { "type": ["string", "null"] },
-          "error_kind": { "type": ["string", "null"] },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ops": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["kind", "status"],
+              "required": [
+                "kind",
+                "status"
+              ],
               "properties": {
                 "kind": {
                   "type": "string",
@@ -43,14 +75,32 @@
                 },
                 "status": {
                   "type": "string",
-                  "enum": ["planned", "done", "failed", "skipped"]
+                  "enum": [
+                    "planned",
+                    "done",
+                    "failed",
+                    "skipped"
+                  ]
                 },
-                "summary": { "type": ["string", "null"] },
+                "summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "request": {
-                  "type": ["object", "null"],
+                  "type": [
+                    "object",
+                    "null"
+                  ],
                   "description": "Method, path and body preview, present in --dry-run"
                 },
-                "error": { "type": ["string", "null"] }
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
               }
             }
           }
@@ -60,7 +110,16 @@
     "stale": {
       "type": "array",
       "description": "Issues refused because the server changed since base",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Things push deliberately did not do, and why",
+      "items": {
+        "type": "string"
+      }
     }
   }
 }

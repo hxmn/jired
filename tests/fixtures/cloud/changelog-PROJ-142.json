@@ -1,0 +1,31 @@
+[
+  {
+    "id": "70001",
+    "author": "Jane D",
+    "created": "2026-08-14T09:00:00Z",
+    "items": [
+      {
+        "field": "status",
+        "from": "To Do",
+        "to": "In Progress"
+      }
+    ]
+  },
+  {
+    "id": "70002",
+    "author": "Ilya A",
+    "created": "2026-08-16T12:03:00Z",
+    "items": [
+      {
+        "field": "priority",
+        "from": "Medium",
+        "to": "High"
+      },
+      {
+        "field": "labels",
+        "from": null,
+        "to": "auth backend"
+      }
+    ]
+  }
+]

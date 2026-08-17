@@ -24,6 +24,8 @@ pub struct PushReport {
     pub dry_run: bool,
     pub results: Vec<IssueResult>,
     pub stale: Vec<String>,
+    /// Things push deliberately did not do, and why.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +61,9 @@ impl PushReport {
     pub fn render(&self, out: Out) {
         if self.results.is_empty() {
             out.say("nothing to push");
+            for w in &self.warnings {
+                out.warn(w);
+            }
             return;
         }
         for r in &self.results {
@@ -101,6 +106,9 @@ impl PushReport {
             ));
             out.say("run `jired pull` first, or push with --force to overwrite");
         }
+        for w in &self.warnings {
+            out.warn(w);
+        }
         if self.dry_run {
             out.say("\ndry run — nothing was sent");
         }
@@ -127,11 +135,26 @@ struct Op {
 enum Action {
     UpdateFields(Value),
     UpdateDescription(RichText),
-    Transition { to_status: String },
+    Transition {
+        to_status: String,
+    },
     CreateComment(RichText),
-    UpdateComment { id: String, body: RichText },
-    DeleteComment { id: String },
-    UploadAttachment { filename: String, bytes: Vec<u8> },
+    UpdateComment {
+        id: String,
+        body: RichText,
+    },
+    DeleteComment {
+        id: String,
+    },
+    UploadAttachment {
+        filename: String,
+        bytes: Vec<u8>,
+    },
+    /// Transition a *different* issue: ticking a subtask's checklist box.
+    TransitionOther {
+        key: String,
+        to_status: String,
+    },
 }
 
 pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
@@ -145,6 +168,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         .resolver
         .get_u64("attachments.max_upload")?
         .unwrap_or(50 * 1024 * 1024);
+    let done_transition = ctx.resolver.get_value("checklist.done_transition")?;
     let mut wanted: Vec<String> = args.issues.iter().map(|k| k.to_uppercase()).collect();
 
     // `--resume` narrows the run to issues an interrupted push left unfinished.
@@ -163,6 +187,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 dry_run: args.dry_run,
                 results: Vec::new(),
                 stale: Vec::new(),
+                warnings: Vec::new(),
             });
         }
         for key in &unfinished {
@@ -179,6 +204,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         dry_run: args.dry_run,
         results: Vec::new(),
         stale: Vec::new(),
+        warnings: Vec::new(),
     };
 
     // Locally created issues go first: an existing issue may name one as its
@@ -305,6 +331,8 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             args,
             &attachment_dir,
             max_upload,
+            done_transition.as_deref(),
+            &mut report.warnings,
         )?;
         if ops.is_empty() {
             continue;
@@ -496,6 +524,8 @@ fn plan(
     args: &PushArgs,
     attachment_dir: &std::path::Path,
     max_upload: u64,
+    done_transition: Option<&str>,
+    warnings: &mut Vec<String>,
 ) -> Result<Vec<Op>> {
     let mut ops = Vec::new();
     let mut fields = serde_json::Map::new();
@@ -648,6 +678,45 @@ fn plan(
                 });
             }
         }
+    }
+
+    // A ticked checklist box means "this subtask is done". Acting on it is off
+    // until `checklist.done_transition` is configured (decision D12): silently
+    // transitioning an issue because a box was ticked is too surprising to be
+    // the default.
+    for item in &working.checklist {
+        let Some(key) = &item.key else {
+            continue;
+        };
+        let was_checked = base
+            .checklist
+            .iter()
+            .find(|b| b.key.as_deref() == Some(key.as_str()))
+            .map(|b| b.checked);
+        if was_checked != Some(false) || !item.checked {
+            continue;
+        }
+        let Some(to_status) = done_transition else {
+            warnings.push(format!(
+                "{key} is ticked in {} but checklist.done_transition is not set, \
+                 so nothing was transitioned",
+                base.frontmatter.key
+            ));
+            continue;
+        };
+        ops.push(Op {
+            kind: "transition",
+            summary: format!("{key} → {to_status} (checklist)"),
+            request: json!({
+                "method": "POST",
+                "path": format!("/issue/{key}/transitions"),
+                "body": {"to": to_status}
+            }),
+            action: Action::TransitionOther {
+                key: key.clone(),
+                to_status: to_status.to_string(),
+            },
+        });
     }
 
     // Files the user dropped into the attachment folder. Planned last so an
@@ -837,6 +906,32 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                     .update_fields(key, json!({ "description": rich.to_field_value() }))
                     .await
             }
+            Action::TransitionOther {
+                key: other,
+                to_status,
+            } => {
+                let available = client.transitions(other).await?;
+                let target = available
+                    .iter()
+                    .find(|t| t.to_status.eq_ignore_ascii_case(to_status))
+                    .or_else(|| {
+                        available
+                            .iter()
+                            .find(|t| t.name.eq_ignore_ascii_case(to_status))
+                    })
+                    .ok_or_else(|| {
+                        JiredError::usage(format!(
+                            "{other} cannot move to `{to_status}` from its current status"
+                        ))
+                        .with_detail("issue", other.clone())
+                        .with_detail(
+                            "available",
+                            json!(available.iter().map(|t| &t.to_status).collect::<Vec<_>>()),
+                        )
+                        .with_hint("check checklist.done_transition against the workflow")
+                    })?;
+                client.do_transition(other, &target.id, None).await
+            }
             Action::Transition { to_status } => {
                 let available = client.transitions(key).await?;
                 let target = available
@@ -937,6 +1032,7 @@ mod tests {
             dry_run: false,
             results: vec![],
             stale: vec![],
+            warnings: vec![],
         };
         assert_eq!(ok.exit_code(), ExitCode::Success);
 
@@ -944,6 +1040,7 @@ mod tests {
             dry_run: false,
             results: vec![],
             stale: vec!["PROJ-1".into()],
+            warnings: vec![],
         };
         assert_eq!(stale.exit_code(), ExitCode::Conflict);
 
@@ -958,6 +1055,7 @@ mod tests {
                 ops: vec![],
             }],
             stale: vec![],
+            warnings: vec![],
         };
         assert_eq!(failed.exit_code(), ExitCode::Generic);
     }

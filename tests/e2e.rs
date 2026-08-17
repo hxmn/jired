@@ -1735,3 +1735,230 @@ fn resolve_done_refuses_a_file_that_still_has_markers() {
         .unwrap()
         .is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// History and housekeeping [M3.7, M3.9]
+// ---------------------------------------------------------------------------
+
+#[test]
+fn log_shows_the_changelog_newest_first_and_caches_it() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["log", "PROJ-142"]);
+    let entries = report["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["id"], "70002", "newest first");
+    assert_eq!(entries[0]["items"][0]["field"], "priority");
+    assert_eq!(entries[1]["items"][0]["from"], "To Do");
+
+    // Cached, so a second run needs no server at all.
+    let out = ws
+        .cmd(&["log", "PROJ-142", "--json"])
+        .env_remove("JIRED_FIXTURES")
+        .env("JIRED_FIXTURES", "")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "a cached changelog must not need the network: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cached: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(cached["entries"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn log_honours_the_limit() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let report = ws.json(&["log", "PROJ-142", "--limit", "1"]);
+    assert_eq!(report["entries"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn log_on_an_unknown_issue_is_a_usage_error() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let err = ws.json_err(&["log", "PROJ-999"], 2);
+    assert_eq!(err["kind"], "usage");
+}
+
+#[test]
+fn clean_removes_a_file_whose_issue_left_the_server() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // Drop the issue from the fixture "server" entirely.
+    let path = ws.fixtures.join("issues.json");
+    let mut issues: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    issues
+        .as_array_mut()
+        .unwrap()
+        .retain(|i| i["key"] != "PROJ-150");
+    std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
+
+    ws.json(&["fetch", "--full"]);
+    let orphan = "PROJ-150. Rotate IdP certificate.md";
+    assert!(ws.path().join(orphan).is_file());
+
+    let dry = ws.json(&["clean", "--dry-run"]);
+    assert_eq!(dry["kept"][0]["key"], "PROJ-150");
+    assert_eq!(dry["kept"][0]["reason"], "gone from the server");
+    assert!(
+        ws.path().join(orphan).is_file(),
+        "a dry run removes nothing"
+    );
+
+    let report = ws.json(&["clean", "--yes"]);
+    assert_eq!(report["removed"][0]["key"], "PROJ-150");
+    assert!(!ws.path().join(orphan).exists());
+}
+
+#[test]
+fn clean_keeps_an_orphan_that_still_holds_unpushed_edits() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let orphan = "PROJ-150. Rotate IdP certificate.md";
+    let text = ws.read(orphan).replace("- ops\n", "- ops\n- unpushed\n");
+    ws.write(orphan, &text);
+
+    let path = ws.fixtures.join("issues.json");
+    let mut issues: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    issues
+        .as_array_mut()
+        .unwrap()
+        .retain(|i| i["key"] != "PROJ-150");
+    std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
+    ws.json(&["fetch", "--full"]);
+
+    // Deleting it would lose work the server has never seen.
+    let out = ws.cmd(&["clean", "--yes", "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(report["removed"].as_array().unwrap().is_empty());
+    assert_eq!(report["kept"][0]["dirty"], true);
+    assert!(ws.path().join(orphan).is_file());
+
+    // --force says "yes, I mean it".
+    let report = ws.json(&["clean", "--yes", "--force"]);
+    assert_eq!(report["removed"][0]["key"], "PROJ-150");
+    assert!(!ws.path().join(orphan).exists());
+}
+
+#[test]
+fn clean_leaves_a_healthy_workspace_alone() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let report = ws.json(&["clean", "--yes"]);
+    assert!(report["removed"].as_array().unwrap().is_empty());
+    assert!(ws.path().join(ISSUE_FILE).is_file());
+}
+
+// ---------------------------------------------------------------------------
+// Checklists [M3.4]
+// ---------------------------------------------------------------------------
+
+#[test]
+fn subtasks_render_as_a_checklist_with_their_done_state() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws.read(ISSUE_FILE);
+    assert!(text.contains("- [ ] PROJ-143 Add integration test"));
+    assert!(text.contains("- [x] PROJ-144 Update runbook"));
+}
+
+#[test]
+fn ticking_a_box_does_nothing_until_a_done_transition_is_configured() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("- [ ] PROJ-143", "- [x] PROJ-143");
+    ws.write(ISSUE_FILE, &text);
+
+    // The edit is visible, but transitioning an issue because a box was ticked
+    // is too surprising to do without being asked (decision D12).
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::from("checklist")));
+
+    // Nothing is planned, and push says why rather than leaving the file
+    // mysteriously dirty.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let planned: Vec<&Value> = dry["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|r| r["ops"].as_array().unwrap())
+        .collect();
+    assert!(
+        !planned.iter().any(|o| o["kind"] == "transition"),
+        "nothing should be transitioned: {planned:?}"
+    );
+    let warning = dry["warnings"][0].as_str().unwrap_or_default();
+    assert!(warning.contains("PROJ-143"), "{warning}");
+    assert!(warning.contains("checklist.done_transition"), "{warning}");
+}
+
+#[test]
+fn ticking_a_box_transitions_the_subtask_when_configured() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["config", "set", "checklist.done_transition", "Done"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("- [ ] PROJ-143", "- [x] PROJ-143");
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["kind"] == "transition")
+        .expect("the subtask transition was planned");
+    // The transition targets the subtask, not the issue holding the checklist.
+    assert_eq!(op["request"]["path"], "/issue/PROJ-143/transitions");
+    assert_eq!(op["request"]["body"]["to"], "Done");
+
+    let push = ws.json(&["push"]);
+    let ops = push["results"][0]["ops"].as_array().unwrap();
+    assert!(ops
+        .iter()
+        .any(|o| o["kind"] == "transition" && o["status"] == "done"));
+
+    // The subtask really moved on the server, so pulling brings its new status
+    // back into the working copy.
+    assert!(ws
+        .read("PROJ-143. Add integration test.md")
+        .contains("status: To Do"));
+
+    ws.json(&["fetch", "--full"]);
+    let pulled = ws.json(&["pull", "--no-fetch"]);
+    assert!(
+        pulled["updated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["key"] == "PROJ-143"),
+        "the subtask's new status should come back: {pulled}"
+    );
+    assert!(ws
+        .read("PROJ-143. Add integration test.md")
+        .contains("status: Done"));
+}

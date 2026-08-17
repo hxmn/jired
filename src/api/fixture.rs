@@ -153,12 +153,30 @@ impl FixtureClient {
     }
 
     fn bump_updated(&self, key: &str) {
-        let mut issues = self.issues.lock().expect("fixture lock");
-        if let Some(issue) = issues.get_mut(key) {
-            // A real server advances `updated` on every write; the fixture must
-            // too, or the optimistic-concurrency check would never be exercised.
-            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
-            issue["fields"]["updated"] = json!(now);
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            if let Some(issue) = issues.get_mut(key) {
+                // A real server advances `updated` on every write; the fixture
+                // must too, or the optimistic-concurrency check would never be
+                // exercised.
+                let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
+                issue["fields"]["updated"] = json!(now);
+            }
+        }
+        self.persist();
+    }
+
+    /// Write the mutated issues back to disk.
+    ///
+    /// Every `jired` invocation is a separate process with a fresh client, so
+    /// without this the "server" would forget each write as soon as the command
+    /// that made it exited — and a multi-command test would silently assert
+    /// against stale state.
+    fn persist(&self) {
+        let issues = self.issues.lock().expect("fixture lock");
+        let all: Vec<&Value> = issues.values().collect();
+        if let Ok(text) = serde_json::to_string_pretty(&all) {
+            let _ = std::fs::write(self.dir.join("issues.json"), text);
         }
     }
 
@@ -361,6 +379,7 @@ impl JiraApi for FixtureClient {
             .lock()
             .expect("fixture lock")
             .insert(key.clone(), issue);
+        self.persist();
         Ok((key, id))
     }
 

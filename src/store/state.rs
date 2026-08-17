@@ -13,9 +13,10 @@ use crate::workspace::Workspace;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: r#"
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: r#"
 CREATE TABLE workspace (key TEXT PRIMARY KEY, value TEXT);
 
 CREATE TABLE issue (
@@ -105,7 +106,22 @@ CREATE TABLE transition_cache (
   required_fields TEXT, fetched_at TEXT, PRIMARY KEY (issue_key, tid)
 );
 "#,
-}];
+    },
+    Migration {
+        version: 2,
+        sql: r#"
+CREATE TABLE changelog (
+  issue_key  TEXT NOT NULL,
+  entry_id   TEXT NOT NULL,
+  author     TEXT,
+  created    TEXT,
+  items_json TEXT NOT NULL,
+  PRIMARY KEY (issue_key, entry_id)
+);
+CREATE INDEX changelog_issue ON changelog(issue_key, created);
+"#,
+    },
+];
 
 /// The last state jired successfully synced to a file.
 #[derive(Debug, Clone)]
@@ -564,6 +580,54 @@ impl StateStore {
             params![issue_key, id, sha256],
         )?;
         Ok(())
+    }
+
+    // ---- changelog -----------------------------------------------------------
+
+    pub fn save_changelog(
+        &self,
+        issue_key: &str,
+        entries: &[crate::api::ChangelogEntry],
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for e in entries {
+            tx.execute(
+                "INSERT INTO changelog (issue_key, entry_id, author, created, items_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(issue_key, entry_id) DO UPDATE SET
+                   author = excluded.author, created = excluded.created,
+                   items_json = excluded.items_json",
+                params![
+                    issue_key,
+                    e.id,
+                    e.author,
+                    e.created.as_ref().map(crate::api::model::format_timestamp),
+                    serde_json::to_string(&e.items)?,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn changelog(&self, issue_key: &str) -> Result<Vec<crate::api::ChangelogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT entry_id, author, created, items_json FROM changelog
+             WHERE issue_key = ?1 ORDER BY created DESC, entry_id DESC",
+        )?;
+        let rows = stmt.query_map([issue_key], |r| {
+            let items: String = r.get(3)?;
+            Ok(crate::api::ChangelogEntry {
+                id: r.get(0)?,
+                author: r.get(1)?,
+                created: r
+                    .get::<_, Option<String>>(2)?
+                    .as_deref()
+                    .and_then(parse_timestamp),
+                items: serde_json::from_str(&items).unwrap_or_default(),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     // ---- field metadata ------------------------------------------------------
