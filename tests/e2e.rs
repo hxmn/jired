@@ -1962,3 +1962,280 @@ fn ticking_a_box_transitions_the_subtask_when_configured() {
         .read("PROJ-143. Add integration test.md")
         .contains("status: Done"));
 }
+
+// ---------------------------------------------------------------------------
+// Grouping folders [M4.2, M4.3, M4.4, M4.5]
+//
+// These are views over state.db, never the source of truth, which is what lets
+// `clean --regroup` throw them away and rebuild.
+// ---------------------------------------------------------------------------
+
+/// Resolve a link of whichever kind this platform produced.
+fn resolves_to_issue(link: &Path, key: &str) -> bool {
+    match std::fs::read_to_string(link) {
+        // A symlink or hard link reads as the issue itself.
+        Ok(text) if text.contains(&format!("key: {key}")) => true,
+        // A stub points at it instead.
+        Ok(text) => text.contains("link: '") && text.contains(key),
+        Err(_) => false,
+    }
+}
+
+#[test]
+fn pull_builds_the_parent_and_sprint_folders() {
+    let ws = Ws::new();
+    ws.init();
+    let report = ws.json(&["pull"]);
+
+    let groups = &report["groups"];
+    assert!(groups["links"].as_u64().unwrap() > 0, "{report}");
+
+    // PROJ-143 is a subtask of PROJ-142, so it groups under the parent's file.
+    let parent = ws
+        .path()
+        .join("by-parent/PROJ-142. Fix login flow/PROJ-143. Add integration test.md");
+    assert!(
+        std::fs::symlink_metadata(&parent).is_ok(),
+        "expected a link at {}",
+        parent.display()
+    );
+    assert!(resolves_to_issue(&parent, "PROJ-143"));
+
+    // PROJ-142 is in Sprint 42.
+    let sprint = ws
+        .path()
+        .join("sprints/Sprint 42/PROJ-142. Fix login flow.md");
+    assert!(std::fs::symlink_metadata(&sprint).is_ok());
+    assert!(resolves_to_issue(&sprint, "PROJ-142"));
+}
+
+#[test]
+fn a_closed_sprint_is_skipped_unless_asked_for() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    // Sprint 41 is closed in the fixture and no issue references it, so the
+    // folder must not appear.
+    assert!(!ws.path().join("sprints/Sprint 41").exists());
+}
+
+#[test]
+fn board_columns_group_issues_by_status() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // PROJ-142 is In Progress (status id 3), PROJ-143 and PROJ-150 are To Do.
+    let in_progress = ws
+        .path()
+        .join("boards/Platform Board/In Progress/PROJ-142. Fix login flow.md");
+    assert!(
+        std::fs::symlink_metadata(&in_progress).is_ok(),
+        "expected {}",
+        in_progress.display()
+    );
+    let todo = ws
+        .path()
+        .join("boards/Platform Board/To Do/PROJ-150. Rotate IdP certificate.md");
+    assert!(std::fs::symlink_metadata(&todo).is_ok());
+}
+
+#[test]
+fn grouping_folders_are_never_mistaken_for_issues() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // Three issues, however many links exist beneath the grouping roots.
+    let status = ws.json(&["status"]);
+    assert_eq!(status["workspace"]["issues"], 3);
+    assert!(status["dirty"].as_array().unwrap().is_empty());
+
+    // And a second pull still sees nothing to do.
+    let again = ws.json(&["pull"]);
+    assert_eq!(again["updated"].as_array().unwrap().len(), 0);
+    assert_eq!(again["unchanged"], 3);
+}
+
+#[test]
+fn clean_regroup_rebuilds_everything_from_the_database() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let sprint = ws
+        .path()
+        .join("sprints/Sprint 42/PROJ-142. Fix login flow.md");
+    assert!(std::fs::symlink_metadata(&sprint).is_ok());
+
+    // Throw the whole lot away, as a confused user or a bad merge might.
+    for root in ["by-parent", "sprints", "boards"] {
+        std::fs::remove_dir_all(ws.path().join(root)).unwrap();
+    }
+    assert!(!ws.path().join("sprints").exists());
+
+    let report = ws.json(&["clean", "--regroup"]);
+    assert!(report["regrouped"]["links"].as_u64().unwrap() > 0);
+    assert!(
+        std::fs::symlink_metadata(&sprint).is_ok(),
+        "regroup must restore the link"
+    );
+    assert!(resolves_to_issue(&sprint, "PROJ-142"));
+}
+
+#[test]
+fn regroup_clears_a_stale_group_rather_than_leaving_it() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // A group folder from an earlier sprint the issue has since left.
+    let stale = ws.path().join("sprints/Sprint 40");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("PROJ-142. Fix login flow.md"), "stale").unwrap();
+
+    ws.json(&["clean", "--regroup"]);
+    assert!(
+        !stale.exists(),
+        "a group nothing belongs to must not survive a rebuild"
+    );
+    assert!(ws
+        .path()
+        .join("sprints/Sprint 42/PROJ-142. Fix login flow.md")
+        .exists());
+}
+
+#[test]
+fn stub_mode_produces_followable_files_where_links_are_unavailable() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["config", "set", "links.mode", "stub"]);
+
+    let report = ws.json(&["clean", "--regroup"]);
+    assert_eq!(report["regrouped"]["kind"], "stub");
+
+    let stub = ws
+        .path()
+        .join("sprints/Sprint 42/PROJ-142. Fix login flow.md");
+    let text = std::fs::read_to_string(&stub).unwrap();
+    assert!(text.starts_with("---\nlink: '"), "{text}");
+    assert!(text.contains("../../PROJ-142. Fix login flow.md"), "{text}");
+    // Readable by a human in any editor, not just resolvable by the filesystem.
+    assert!(text.contains("[Open the issue]"), "{text}");
+}
+
+#[test]
+fn dragging_a_card_between_columns_stages_a_transition() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // Move PROJ-142's link from "In Progress" to "Done", as dragging the card
+    // on a board would.
+    let from = ws
+        .path()
+        .join("boards/Platform Board/In Progress/PROJ-142. Fix login flow.md");
+    let to_dir = ws.path().join("boards/Platform Board/Done");
+    std::fs::create_dir_all(&to_dir).unwrap();
+    std::fs::rename(&from, to_dir.join("PROJ-142. Fix login flow.md")).unwrap();
+
+    // The `.md` file is untouched, so only the board folders reveal this.
+    let status = ws.json(&["status"]);
+    let staged = &status["staged_transitions"][0];
+    assert_eq!(staged["key"], "PROJ-142");
+    assert_eq!(staged["from"], "In Progress");
+    assert_eq!(staged["to"], "Done");
+    assert_eq!(staged["origin"], "board-move");
+
+    // `push --dry-run` accounts for it, so nothing happens unannounced.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["kind"] == "transition")
+        .expect("the move was planned");
+    assert_eq!(op["request"]["body"]["to"], "Done");
+
+    let push = ws.json(&["push"]);
+    assert!(push["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|o| o["kind"] == "transition" && o["status"] == "done"));
+
+    // The issue really moved, and the rebuilt board reflects it.
+    let after = ws.read(ISSUE_FILE);
+    assert!(after.contains("status: Done"), "{after}");
+    assert!(ws.json(&["status"])["staged_transitions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn a_card_left_where_it_belongs_stages_nothing() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let status = ws.json(&["status"]);
+    assert!(
+        status["staged_transitions"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+}
+
+#[test]
+fn an_explicit_status_edit_wins_over_a_board_move() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // Say one thing in the file and another on the board.
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("status: In Progress", "status: Done");
+    ws.write(ISSUE_FILE, &text);
+
+    let from = ws
+        .path()
+        .join("boards/Platform Board/In Progress/PROJ-142. Fix login flow.md");
+    let to_dir = ws.path().join("boards/Platform Board/To Do");
+    std::fs::rename(&from, to_dir.join("PROJ-142. Fix login flow.md")).unwrap();
+
+    // The file is the more explicit statement of intent, so it wins.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["kind"] == "transition")
+        .expect("a transition was planned");
+    assert_eq!(op["request"]["body"]["to"], "Done");
+}
+
+#[test]
+fn a_card_dropped_somewhere_that_is_not_a_column_says_so() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // "In Review" is a workflow status but not a column on this board, so a
+    // link left there means nothing — and saying nothing would leave the user
+    // believing they had moved the card.
+    let from = ws
+        .path()
+        .join("boards/Platform Board/In Progress/PROJ-142. Fix login flow.md");
+    let to_dir = ws.path().join("boards/Platform Board/In Review");
+    std::fs::create_dir_all(&to_dir).unwrap();
+    std::fs::rename(&from, to_dir.join("PROJ-142. Fix login flow.md")).unwrap();
+
+    let status = ws.json(&["status"]);
+    assert!(status["staged_transitions"].as_array().unwrap().is_empty());
+    let warning = status["warnings"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(warning.contains("PROJ-142"), "{status}");
+    assert!(warning.contains("not a column"), "{warning}");
+}

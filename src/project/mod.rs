@@ -4,6 +4,7 @@
 //! attachment folders that track them. Nothing else in jired touches those
 //! paths, so the rules about identity and renaming live in one place.
 
+pub mod links;
 pub mod naming;
 
 use crate::doc::IssueDoc;

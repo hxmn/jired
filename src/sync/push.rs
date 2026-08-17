@@ -257,6 +257,13 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         }
     }
 
+    // A card dragged between board columns stages a transition (decision D4).
+    let (moves, move_warnings) =
+        crate::sync::group::detect_moves(&engine, engine.projector.root())?;
+    let board_moves: std::collections::BTreeMap<String, String> =
+        moves.into_iter().map(|m| (m.key, m.to_status)).collect();
+    report.warnings.extend(move_warnings);
+
     for row in engine.state.issues()? {
         if row.key.starts_with("NEW-") {
             continue;
@@ -276,7 +283,8 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         let has_uploads =
             !crate::sync::attachments::pending_uploads(&engine.state, &row.key, &attachment_dir)?
                 .is_empty();
-        if hash == base.md_hash && !has_uploads {
+        let moved = board_moves.get(&row.key);
+        if hash == base.md_hash && !has_uploads && moved.is_none() {
             continue;
         }
 
@@ -332,6 +340,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             &attachment_dir,
             max_upload,
             done_transition.as_deref(),
+            moved.map(String::as_str),
             &mut report.warnings,
         )?;
         if ops.is_empty() {
@@ -525,6 +534,7 @@ fn plan(
     attachment_dir: &std::path::Path,
     max_upload: u64,
     done_transition: Option<&str>,
+    board_move: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Result<Vec<Op>> {
     let mut ops = Vec::new();
@@ -627,17 +637,23 @@ fn plan(
         });
     }
 
+    // A board move and a frontmatter edit are the same intent expressed two
+    // ways; the file wins, since it is the more explicit of the two.
+    let target_status = if bf.status != wf.status {
+        Some(wf.status.clone())
+    } else {
+        board_move.map(str::to_string)
+    };
+
     // Status is a transition, not a field, so it is planned after the fields
     // that its screen may require.
-    if bf.status != wf.status {
+    if let Some(to) = target_status {
         ops.push(Op {
             kind: "transition",
-            summary: format!("{} → {}", bf.status, wf.status),
+            summary: format!("{} → {to}", bf.status),
             request: json!({"method": "POST", "path": "/issue/{key}/transitions",
-                            "body": {"to": wf.status}}),
-            action: Action::Transition {
-                to_status: wf.status.clone(),
-            },
+                            "body": {"to": to}}),
+            action: Action::Transition { to_status: to },
         });
     }
 

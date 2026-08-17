@@ -293,6 +293,30 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
         }
     }
 
+    // A card dragged between columns is a status change the `.md` file knows
+    // nothing about, so it can only be found by looking at the board folders.
+    let (moves, move_warnings) =
+        crate::sync::group::detect_moves(&engine, engine.projector.root())?;
+    for m in moves {
+        if staged.iter().any(|s| s.key == m.key) {
+            continue;
+        }
+        staged.push(StagedTransition {
+            key: m.key,
+            from: Some(m.from_status),
+            to: m.to_status,
+            origin: "board-move",
+        });
+    }
+
+    for message in move_warnings {
+        warnings.push(Warning {
+            key: String::new(),
+            file: String::new(),
+            message,
+        });
+    }
+
     let last_fetch = engine.state.last_fetch_at()?;
     let workspace = WorkspaceStatus {
         root: ctx.workspace.root().display().to_string(),

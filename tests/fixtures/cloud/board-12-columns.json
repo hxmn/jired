@@ -1,0 +1,5 @@
+[
+  { "name": "To Do", "status_ids": ["1"] },
+  { "name": "In Progress", "status_ids": ["3"] },
+  { "name": "Done", "status_ids": ["5"] }
+]

@@ -191,6 +191,23 @@ pub struct PendingOp {
     pub error: Option<String>,
 }
 
+/// A board and the column-to-status mapping the grouping projector needs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BoardRow {
+    pub id: String,
+    pub name: String,
+    pub board_type: String,
+    pub columns: Vec<crate::api::BoardColumn>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SprintRow {
+    pub id: String,
+    pub board_id: Option<String>,
+    pub name: String,
+    pub state: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ConflictRow {
     pub id: i64,
@@ -580,6 +597,76 @@ impl StateStore {
             params![issue_key, id, sha256],
         )?;
         Ok(())
+    }
+
+    // ---- boards and sprints --------------------------------------------------
+
+    pub fn save_boards(&self, boards: &[BoardRow]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for b in boards {
+            tx.execute(
+                "INSERT INTO board (id, name, type, columns_json) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET
+                   name = excluded.name, type = excluded.type,
+                   columns_json = excluded.columns_json",
+                params![
+                    b.id,
+                    b.name,
+                    b.board_type,
+                    serde_json::to_string(&b.columns)?
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn boards(&self) -> Result<Vec<BoardRow>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, type, columns_json FROM board ORDER BY name, id")?;
+        let rows = stmt.query_map([], |r| {
+            let columns: Option<String> = r.get(3)?;
+            Ok(BoardRow {
+                id: r.get(0)?,
+                name: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                board_type: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                columns: columns
+                    .and_then(|c| serde_json::from_str(&c).ok())
+                    .unwrap_or_default(),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn save_sprints(&self, sprints: &[crate::api::Sprint]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for s in sprints {
+            tx.execute(
+                "INSERT INTO sprint (id, board_id, name, state, raw) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                   board_id = excluded.board_id, name = excluded.name,
+                   state = excluded.state, raw = excluded.raw",
+                params![s.id, s.board_id, s.name, s.state, serde_json::to_string(s)?],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn sprints(&self) -> Result<Vec<SprintRow>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, board_id, name, state FROM sprint ORDER BY name, id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(SprintRow {
+                id: r.get(0)?,
+                board_id: r.get(1)?,
+                name: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                state: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     // ---- changelog -----------------------------------------------------------

@@ -28,6 +28,8 @@ pub struct PullReport {
     pub renamed: Vec<Rename>,
     pub unchanged: usize,
     pub conflicts: Vec<Conflict>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<crate::sync::group::GroupReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -341,6 +343,18 @@ pub fn run_scoped(
             {
                 ctx.out.warn(format!("{key}: {}", e.message));
             }
+        }
+    }
+
+    // Grouping folders are views over what was just written, so they are
+    // rebuilt last and only when the working copy actually moved.
+    if !attachment_folders.is_empty() {
+        let options = crate::sync::group::GroupOptions::from_context(ctx)?;
+        match crate::sync::group::regroup(&engine, engine.projector.root(), &options) {
+            Ok(groups) => report.groups = Some(groups),
+            Err(e) => ctx
+                .out
+                .warn(format!("cannot rebuild grouping folders: {}", e.message)),
         }
     }
 

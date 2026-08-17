@@ -3,6 +3,7 @@
 pub mod attachments;
 pub mod diff;
 pub mod fetch;
+pub mod group;
 pub mod merge;
 pub mod pull;
 pub mod push;

@@ -63,6 +63,14 @@ pub fn run_with(
         Err(e) => tracing::warn!("cannot refresh field definitions: {}", e.message),
     }
 
+    // Boards and sprints drive the grouping folders; caching them here is what
+    // lets `clean --regroup` rebuild without a network round trip.
+    if let Some(project) = ctx.resolver.get_value("workspace.project")? {
+        if let Err(e) = cache_agile(engine, client, &project) {
+            tracing::debug!("agile metadata unavailable: {}", e.message);
+        }
+    }
+
     let watermark = engine.state.last_fetch_at()?;
     let incremental = !args.full && args.updated_since.is_none() && watermark.is_some();
     let since = incremental.then(|| skew_adjusted(watermark.expect("checked")));
@@ -127,6 +135,32 @@ pub fn run_with(
         keys: changed_keys,
         fetched_at: crate::api::model::format_timestamp(&started),
     })
+}
+
+/// Cache boards, their column mapping, and sprints.
+///
+/// Best-effort: plenty of Jira instances have no Agile boards at all, or deny
+/// the endpoint, and neither is a reason to fail a fetch.
+fn cache_agile(engine: &Engine, client: &dyn crate::api::JiraApi, project: &str) -> Result<()> {
+    let boards = crate::api::block_on(client.boards(Some(project)))?;
+    let mut rows = Vec::new();
+    let mut sprints = Vec::new();
+
+    for board in &boards {
+        let columns = crate::api::block_on(client.board_columns(&board.id)).unwrap_or_default();
+        rows.push(crate::store::state::BoardRow {
+            id: board.id.clone(),
+            name: board.name.clone(),
+            board_type: board.board_type.clone(),
+            columns,
+        });
+        if let Ok(mut found) = crate::api::block_on(client.sprints(&board.id)) {
+            sprints.append(&mut found);
+        }
+    }
+    engine.state.save_boards(&rows)?;
+    engine.state.save_sprints(&sprints)?;
+    Ok(())
 }
 
 /// Back-date the watermark slightly: Jira indexes asynchronously, so an issue

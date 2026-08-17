@@ -31,13 +31,26 @@ struct Orphan {
 }
 
 pub fn run(g: &GlobalArgs, args: &CleanArgs, out: Out) -> Result<ExitCode> {
-    if args.regroup {
-        return Err(crate::cli::not_yet("jired clean --regroup", "M4.5"));
-    }
-
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
     let engine = Engine::open(&ctx)?;
+
+    if args.regroup {
+        // Grouping folders are views: throwing them away and rebuilding from
+        // the database is always safe, and is the recovery path when a link
+        // ends up dangling or a group was renamed by hand.
+        let options = crate::sync::group::GroupOptions::from_context(&mut ctx)?;
+        let report = crate::sync::group::regroup(&engine, engine.projector.root(), &options)?;
+        out.say(format!(
+            "rebuilt {} link(s) across {} parent(s), {} sprint(s), {} board(s)",
+            report.links, report.parents, report.sprints, report.boards
+        ));
+        for w in &report.warnings {
+            out.warn(w);
+        }
+        out.emit("clean", &serde_json::json!({ "regrouped": report }));
+        return Ok(ExitCode::Success);
+    }
 
     let files = engine.projector.scan()?;
     let rows = engine.state.issues()?;
