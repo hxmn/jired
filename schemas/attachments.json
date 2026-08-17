@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/attachments/1",
+  "title": "jired attachments result",
+  "description": "Known attachments and whether their content is present",
+  "type": "object",
+  "required": [
+    "schema",
+    "attachments"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/attachments/1"
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "mime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "downloaded": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "id",
+          "filename",
+          "size",
+          "downloaded"
+        ]
+      }
+    }
+  }
+}

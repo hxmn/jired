@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/resolve/1",
+  "title": "jired resolve result",
+  "description": "Conflict resolution",
+  "type": "object",
+  "required": [
+    "schema"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/resolve/1"
+    },
+    "strategy": {
+      "type": "string",
+      "enum": [
+        "ours",
+        "theirs",
+        "manual"
+      ]
+    },
+    "resolved": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "issue_key": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "issue_key",
+          "field"
+        ]
+      }
+    },
+    "pull": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The jired/pull/1 document produced by the re-merge"
+    }
+  }
+}

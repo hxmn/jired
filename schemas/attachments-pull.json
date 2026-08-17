@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/attachments-pull/1",
+  "title": "jired attachments-pull result",
+  "description": "Attachment contents downloaded",
+  "type": "object",
+  "required": [
+    "schema",
+    "downloaded",
+    "skipped"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/attachments-pull/1"
+    },
+    "downloaded": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "filename"
+        ]
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "filename"
+        ]
+      }
+    }
+  }
+}

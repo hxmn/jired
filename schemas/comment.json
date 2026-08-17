@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/comment/1",
+  "title": "jired comment result",
+  "description": "Result of staging a comment",
+  "type": "object",
+  "required": [
+    "schema",
+    "key",
+    "file",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/comment/1"
+    },
+    "key": {
+      "type": "string"
+    },
+    "file": {
+      "type": "string"
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

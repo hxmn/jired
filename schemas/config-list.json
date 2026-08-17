@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/config-list/1",
+  "title": "jired config-list result",
+  "description": "Every setting, its value, and where it came from",
+  "type": "object",
+  "required": [
+    "schema",
+    "settings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/config-list/1"
+    },
+    "settings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "doc": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "source",
+          "env"
+        ]
+      }
+    }
+  }
+}

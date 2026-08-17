@@ -63,7 +63,11 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
             check_key(&a.key)?;
             match ctx.resolver.get(&a.key)? {
                 Some((v, src)) if !keys::is_secret(&a.key) => {
-                    println!("{v}");
+                    // Bare value for scripts that just want it; in JSON mode
+                    // stdout is reserved for the one result document.
+                    if !out.json {
+                        println!("{v}");
+                    }
                     out.emit(
                         "config",
                         &serde_json::json!({"key": a.key, "value": v, "source": src.as_str()}),

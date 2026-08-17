@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/assign/1",
+  "title": "jired assign result",
+  "description": "Result of staging an assignee change",
+  "type": "object",
+  "required": [
+    "schema",
+    "key",
+    "file",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/assign/1"
+    },
+    "key": {
+      "type": "string"
+    },
+    "assignee": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "file": {
+      "type": "string"
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

@@ -12,17 +12,55 @@ pub struct SchemaArgs {
 
 /// Embedded schema documents, keyed by their `jired/<name>/1` tag.
 pub const SCHEMAS: &[(&str, &str)] = &[
+    (
+        "agent-docs",
+        include_str!("../../../schemas/agent-docs.json"),
+    ),
+    ("assign", include_str!("../../../schemas/assign.json")),
+    ("attach", include_str!("../../../schemas/attach.json")),
+    (
+        "attachments",
+        include_str!("../../../schemas/attachments.json"),
+    ),
+    (
+        "attachments-pull",
+        include_str!("../../../schemas/attachments-pull.json"),
+    ),
+    ("boards", include_str!("../../../schemas/boards.json")),
+    ("clean", include_str!("../../../schemas/clean.json")),
+    ("comment", include_str!("../../../schemas/comment.json")),
+    ("config", include_str!("../../../schemas/config.json")),
+    (
+        "config-list",
+        include_str!("../../../schemas/config-list.json"),
+    ),
+    ("create", include_str!("../../../schemas/create.json")),
+    ("diff", include_str!("../../../schemas/diff.json")),
     ("error", include_str!("../../../schemas/error.json")),
+    ("fetch", include_str!("../../../schemas/fetch.json")),
     (
         "frontmatter",
         include_str!("../../../schemas/frontmatter.json"),
     ),
     ("init", include_str!("../../../schemas/init.json")),
-    ("fetch", include_str!("../../../schemas/fetch.json")),
+    ("log", include_str!("../../../schemas/log.json")),
+    ("open", include_str!("../../../schemas/open.json")),
+    ("projects", include_str!("../../../schemas/projects.json")),
     ("pull", include_str!("../../../schemas/pull.json")),
     ("push", include_str!("../../../schemas/push.json")),
-    ("diff", include_str!("../../../schemas/diff.json")),
+    ("resolve", include_str!("../../../schemas/resolve.json")),
+    ("search", include_str!("../../../schemas/search.json")),
+    ("sprints", include_str!("../../../schemas/sprints.json")),
     ("status", include_str!("../../../schemas/status.json")),
+    (
+        "transition",
+        include_str!("../../../schemas/transition.json"),
+    ),
+    (
+        "transitions",
+        include_str!("../../../schemas/transitions.json"),
+    ),
+    ("whoami", include_str!("../../../schemas/whoami.json")),
 ];
 
 pub fn get(name: &str) -> Option<&'static str> {

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/projects/1",
+  "title": "jired projects result",
+  "description": "Projects visible to the account",
+  "type": "object",
+  "required": [
+    "schema",
+    "projects"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/projects/1"
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "key"
+        ]
+      }
+    }
+  }
+}

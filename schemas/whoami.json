@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/whoami/1",
+  "title": "jired whoami result",
+  "description": "Authenticated account",
+  "type": "object",
+  "required": [
+    "schema",
+    "base_url",
+    "deployment",
+    "auth_kind"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/whoami/1"
+    },
+    "base_url": {
+      "type": "string"
+    },
+    "deployment": {
+      "type": "string"
+    },
+    "auth_kind": {
+      "type": "string"
+    },
+    "identity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "display_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "account_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "secret_storage": {
+      "type": "string"
+    }
+  }
+}

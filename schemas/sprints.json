@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/sprints/1",
+  "title": "jired sprints result",
+  "description": "Sprints on a board",
+  "type": "object",
+  "required": [
+    "schema",
+    "sprints"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/sprints/1"
+    },
+    "sprints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "board_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state"
+        ]
+      }
+    }
+  }
+}

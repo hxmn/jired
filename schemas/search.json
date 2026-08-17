@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/search/1",
+  "title": "jired search result",
+  "description": "JQL search results",
+  "type": "object",
+  "required": [
+    "schema",
+    "jql",
+    "total",
+    "issues"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/search/1"
+    },
+    "jql": {
+      "type": "string"
+    },
+    "total": {
+      "type": "integer"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key"
+        ]
+      }
+    }
+  }
+}

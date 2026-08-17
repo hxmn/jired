@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/transitions/1",
+  "title": "jired transitions result",
+  "description": "Transitions available from the issue's current status",
+  "type": "object",
+  "required": [
+    "schema",
+    "key",
+    "transitions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/transitions/1"
+    },
+    "key": {
+      "type": "string"
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "to_status": {
+            "type": "string"
+          },
+          "to_status_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "to_status"
+        ]
+      }
+    }
+  }
+}

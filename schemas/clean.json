@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/clean/1",
+  "title": "jired clean result",
+  "description": "Orphan removal, or a grouping rebuild",
+  "type": "object",
+  "required": [
+    "schema"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/clean/1"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "removed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dirty": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "file"
+        ]
+      }
+    },
+    "kept": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dirty": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "file"
+        ]
+      }
+    },
+    "regrouped": {
+      "type": "object",
+      "properties": {
+        "parents": {
+          "type": "integer"
+        },
+        "sprints": {
+          "type": "integer"
+        },
+        "boards": {
+          "type": "integer"
+        },
+        "links": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "symlink",
+            "hardlink",
+            "stub",
+            null
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "parents",
+        "sprints",
+        "boards",
+        "links"
+      ]
+    }
+  }
+}

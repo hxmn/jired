@@ -184,6 +184,44 @@ pub fn render() -> String {
 mod tests {
     use super::*;
 
+    /// The docs are generated from the CLI's own definitions, so this catches
+    /// the case they exist to prevent: a new command, flag or setting that the
+    /// docs never mention, leaving an agent unable to discover it.
+    #[test]
+    fn generated_docs_mention_every_command_and_setting() {
+        let doc = render();
+        let cmd = crate::cli::Cli::command();
+
+        for sub in cmd.get_subcommands() {
+            assert!(
+                doc.contains(&format!("| `jired {}` |", sub.get_name())),
+                "`{}` is missing from the generated docs",
+                sub.get_name()
+            );
+        }
+        for def in keys::KEYS {
+            assert!(
+                doc.contains(def.env),
+                "{} is missing from the generated docs",
+                def.env
+            );
+            assert!(doc.contains(def.key), "{} is missing", def.key);
+        }
+    }
+
+    /// Every exit code the binary can return has to be documented, or an agent
+    /// cannot tell a conflict from a crash.
+    #[test]
+    fn generated_docs_cover_every_exit_code() {
+        let doc = render();
+        for code in 0..=10 {
+            assert!(
+                doc.contains(&format!("| {code} |")),
+                "exit code {code} is undocumented"
+            );
+        }
+    }
+
     #[test]
     fn generated_docs_cover_the_contract() {
         let doc = render();

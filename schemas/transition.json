@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/transition/1",
+  "title": "jired transition result",
+  "description": "Result of staging a status change",
+  "type": "object",
+  "required": [
+    "schema",
+    "key",
+    "to",
+    "file",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/transition/1"
+    },
+    "key": {
+      "type": "string"
+    },
+    "to": {
+      "type": "string"
+    },
+    "transition_id": {
+      "type": "string"
+    },
+    "file": {
+      "type": "string"
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

@@ -25,7 +25,9 @@ pub fn run(g: &GlobalArgs, args: &OpenArgs, out: Out) -> Result<ExitCode> {
     if launch {
         open::that_detached(&url)
             .map_err(|e| JiredError::generic(format!("cannot open browser: {e}")))?;
-    } else {
+    } else if !out.json {
+        // In JSON mode the URL is in the document; a bare line as well would
+        // leave stdout holding two things.
         println!("{url}");
     }
     out.emit(
