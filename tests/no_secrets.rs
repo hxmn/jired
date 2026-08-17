@@ -1,0 +1,173 @@
+//! Secret-leak guards [M1.12, M5.5].
+//!
+//! Two things must never carry a credential: the fixtures committed to this
+//! repository, and anything jired prints. Both are checked mechanically here
+//! rather than by review, because a review only has to miss once.
+
+use assert_cmd::Command;
+use std::path::{Path, PathBuf};
+use tempfile::TempDir;
+
+fn repo() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Substrings that would indicate a real credential or host in a fixture.
+///
+/// Deliberately blunt: a fixture has no legitimate reason to contain any of
+/// these, so a false positive means the fixture should be renamed, not the
+/// rule relaxed.
+const FORBIDDEN_IN_FIXTURES: &[&str] = &[
+    ".atlassian.net",
+    "Authorization",
+    "Bearer ",
+    "Basic ",
+    "api_token=",
+    "ATATT",      // Atlassian API token prefix
+    "avatarUrls", // signed URLs, and the recorder drops them
+];
+
+#[test]
+fn committed_fixtures_carry_no_credentials_or_real_hosts() {
+    let root = repo().join("tests/fixtures");
+    let mut checked = 0;
+
+    for entry in walk(&root) {
+        let text = std::fs::read_to_string(&entry).unwrap();
+        checked += 1;
+        for needle in FORBIDDEN_IN_FIXTURES {
+            assert!(
+                !text.contains(needle),
+                "{} contains {needle:?}",
+                entry.display()
+            );
+        }
+    }
+    assert!(
+        checked > 0,
+        "no fixtures were checked; did the layout move?"
+    );
+}
+
+#[test]
+fn fixture_hosts_are_reserved_names() {
+    // `.invalid` and `.example` are reserved by RFC 2606, so a fixture URL can
+    // never accidentally resolve to something real.
+    for entry in walk(&repo().join("tests/fixtures")) {
+        let text = std::fs::read_to_string(&entry).unwrap();
+        for line in text.lines() {
+            for token in line.split(['"', ' ', ',']) {
+                if let Some(rest) = token
+                    .strip_prefix("https://")
+                    .or(token.strip_prefix("http://"))
+                {
+                    let host = rest.split('/').next().unwrap_or("");
+                    assert!(
+                        host.ends_with(".invalid") || host.contains(".example"),
+                        "{}: {host} is not a reserved test host",
+                        entry.display()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The token is passed to a full workflow; it must appear in no output.
+#[test]
+fn no_command_output_or_config_contains_the_token() {
+    const TOKEN: &str = "leak-canary-token-value";
+    let dir = TempDir::new().unwrap();
+    let fixtures = dir.path().join(".fixtures");
+    std::fs::create_dir_all(&fixtures).unwrap();
+    for entry in std::fs::read_dir(repo().join("tests/fixtures/cloud"))
+        .unwrap()
+        .flatten()
+    {
+        std::fs::copy(entry.path(), fixtures.join(entry.file_name())).unwrap();
+    }
+
+    let run = |args: &[&str]| -> String {
+        let out = Command::cargo_bin("jired")
+            .unwrap()
+            .current_dir(dir.path())
+            .env("JIRED_FIXTURES", &fixtures)
+            .env("JIRED_NO_KEYRING", "1")
+            .env("JIRED_SECRET_KEY", "passphrase")
+            .env("JIRED_URL", "https://fixture.invalid")
+            .env("JIRED_EMAIL", "ilya@example.invalid")
+            .env("JIRED_TOKEN", TOKEN)
+            .env("JIRED_PROJECT", "PROJ")
+            // Maximum verbosity: if a log line would ever print the credential,
+            // this is where it shows up.
+            .env("JIRED_LOG", "trace")
+            .args(args)
+            .arg("--no-input")
+            .output()
+            .unwrap();
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+
+    let mut output = String::new();
+    output.push_str(&run(&["init", "--no-pull", "--json"]));
+    output.push_str(&run(&["pull", "--json"]));
+    output.push_str(&run(&["status", "--json"]));
+    output.push_str(&run(&["whoami", "--json"]));
+    output.push_str(&run(&["config", "list", "--all", "--json"]));
+    output.push_str(&run(&["diff", "--json"]));
+    output.push_str(&run(&["push", "--dry-run", "--json"]));
+
+    assert!(
+        !output.contains(TOKEN),
+        "a credential reached command output:\n{output}"
+    );
+
+    // And nothing readable on disk holds it either, apart from the encrypted
+    // blob in session.db.
+    let config = std::fs::read_to_string(dir.path().join(".jired/config.toml")).unwrap();
+    assert!(!config.contains(TOKEN), "credential in config.toml");
+
+    for name in ["CLAUDE.md", "AGENTS.md", ".gitignore"] {
+        let text = std::fs::read_to_string(dir.path().join(name)).unwrap();
+        assert!(!text.contains(TOKEN), "credential in {name}");
+    }
+
+    let session = std::fs::read(dir.path().join(".jired/session.db")).unwrap();
+    assert!(
+        !contains(&session, TOKEN.as_bytes()),
+        "credential stored verbatim in session.db"
+    );
+}
+
+#[test]
+fn generated_agent_docs_only_reference_the_token_by_variable() {
+    let docs = std::fs::read_to_string(repo().join("README.md")).unwrap();
+    // A doc example that pastes a literal token teaches the habit of doing it.
+    for line in docs.lines().filter(|l| l.contains("--token")) {
+        assert!(line.contains('$'), "README shows a literal token: {line}");
+    }
+}
+
+fn walk(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(walk(&path));
+        } else if path.extension().is_some_and(|e| e == "json") {
+            out.push(path);
+        }
+    }
+    out
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}

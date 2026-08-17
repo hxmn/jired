@@ -1,0 +1,6 @@
+[
+  { "id": "11", "name": "Stop Progress", "to_status": "Open", "to_status_id": "1", "required_fields": [] },
+  { "id": "21", "name": "Start Progress", "to_status": "In Progress", "to_status_id": "3", "required_fields": [] },
+  { "id": "31", "name": "Resolve Issue", "to_status": "Resolved", "to_status_id": "5", "required_fields": ["resolution"] },
+  { "id": "41", "name": "Close Issue", "to_status": "Closed", "to_status_id": "6", "required_fields": [] }
+]

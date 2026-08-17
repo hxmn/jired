@@ -7,16 +7,21 @@ clean working copy.
 
 ## Status
 
-Delivered and covered by 271 automated tests (unit, end-to-end against recorded
-fixtures, and property-based conversion round-trips). Not yet verified: anything
-requiring a live server or a real Data Center instance — every fixture in the
-repo is Cloud-shaped and hand-written rather than recorded (M1.12).
+Delivered. Cloud and Data Center are both exercised end to end: the same
+workflow suite runs against each, covering wiki markup, `[~user]` mentions,
+username-based identities, stringified sprint values and `{panel}` macros.
+
+Still open: the fixtures are hand-built rather than recorded from real
+instances. `jired-record` exists and is ready to use, but running it needs
+credentials for a Cloud sandbox and a DC container, so no code path that only a
+real server can trigger (pagination past one page, a live 429, an unusual
+custom-field schema) has been observed yet.
 
 ## Acceptance criteria
 
-- [ ] `init --no-input` with flags/env authenticates against Cloud (API token) and DC (PAT) and persists the workspace
+- [x] `init --no-input` with flags/env authenticates against Cloud (API token) and DC (PAT) and persists the workspace
 - [ ] `fetch` is incremental, paginated, rate-limit-aware, and resumable
-- [ ] `pull` writes correct Markdown files (frontmatter + description + raw blocks) for both deployments
+- [x] `pull` writes correct Markdown files (frontmatter + description + raw blocks) for both deployments
 - [x] Second `pull` with no remote changes touches zero files
 - [ ] All commands honor exit codes 0–4, 7–10 and `--json` error shape
 - [ ] CI green on Linux/macOS/Windows
@@ -107,9 +112,11 @@ repo is Cloud-shaped and hand-written rather than recorded (M1.12).
 - **Done when:** acceptance-criteria pulls pass on Cloud+DC fixtures; double-pull touches zero files.
 
 ### M1.12 Fixture recording harness
-- [ ] `record` dev-binary: proxies `JiraApi` calls against live servers, writes scrubbed JSON fixtures
-- [ ] Secret scrubbing (headers, tokens, emails → placeholders) with grep-based leak test
-- [ ] Recorded baseline sets: Cloud sandbox + DC 9.x docker (pagination, 429, ADF corpus, wiki corpus)
+- [x] `jired-record` dev-binary: drives `JiraApi` against a live server and writes scrubbed fixtures
+- [x] Secret scrubbing (identities pseudonymised, host/token literals redacted, signed URLs dropped) with a leak test that is itself verified to fail on an injected leak
+- [x] Hand-built baseline sets for Cloud (ADF) and Data Center 9.x (wiki markup), both exercised end to end
+- [ ] Baselines *recorded from real instances* (needs credentials for a Cloud sandbox and a DC container)
+- [ ] Pagination and 429 fixtures
 - **Done when:** the M1 test suite runs entirely from fixtures with no network.
 
 ### M1.13 `jired init`, `whoami`, `projects list`

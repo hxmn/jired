@@ -9,31 +9,96 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cloud")
+/// Which product a workspace talks to. The same suite runs against both so a
+/// change cannot pass on Cloud while quietly breaking Data Center.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Deployment {
+    Cloud,
+    DataCenter,
+}
+
+impl Deployment {
+    fn dir(self) -> &'static str {
+        match self {
+            Deployment::Cloud => "cloud",
+            Deployment::DataCenter => "datacenter",
+        }
+    }
+
+    fn project(self) -> &'static str {
+        match self {
+            Deployment::Cloud => "PROJ",
+            Deployment::DataCenter => "DC",
+        }
+    }
+
+    /// The issue every shared test edits.
+    fn issue_file(self) -> &'static str {
+        match self {
+            Deployment::Cloud => "PROJ-142. Fix login flow.md",
+            Deployment::DataCenter => "DC-77. Rotate the LDAP bind credential.md",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Deployment::Cloud => "PROJ-142",
+            Deployment::DataCenter => "DC-77",
+        }
+    }
+
+    /// A line of the description that no lossy region covers, safe to edit.
+    fn editable_line(self) -> &'static str {
+        match self {
+            Deployment::Cloud => "Steps to reproduce are below.",
+            Deployment::DataCenter => "See DC-78 for the rollback plan.",
+        }
+    }
+}
+
+fn fixtures_for(deployment: Deployment) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(deployment.dir())
 }
 
 /// A workspace directory plus a `jired` invoker wired to the fixture server.
 struct Ws {
     dir: TempDir,
     fixtures: PathBuf,
+    deployment: Deployment,
 }
 
 impl Ws {
     /// Each workspace gets its own copy of the fixtures so a test that mutates
     /// the "server" cannot leak into another test.
-    fn new() -> Self {
+    fn of(deployment: Deployment) -> Self {
         let dir = TempDir::new().expect("tempdir");
         let fixtures = dir.path().join(".fixtures");
         std::fs::create_dir_all(&fixtures).unwrap();
-        for entry in std::fs::read_dir(fixtures_src()).unwrap().flatten() {
+        for entry in std::fs::read_dir(fixtures_for(deployment))
+            .unwrap()
+            .flatten()
+        {
             std::fs::copy(entry.path(), fixtures.join(entry.file_name())).unwrap();
         }
-        Self { dir, fixtures }
+        Self {
+            dir,
+            fixtures,
+            deployment,
+        }
+    }
+
+    fn new() -> Self {
+        Self::of(Deployment::Cloud)
     }
 
     fn path(&self) -> &Path {
         self.dir.path()
+    }
+
+    fn issue_file(&self) -> &'static str {
+        self.deployment.issue_file()
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
@@ -42,13 +107,24 @@ impl Ws {
             .env("JIRED_FIXTURES", &self.fixtures)
             .env("JIRED_NO_KEYRING", "1")
             .env("JIRED_SECRET_KEY", "test-passphrase")
-            .env("JIRED_URL", "https://fixture.invalid")
-            .env("JIRED_EMAIL", "ilya@example.com")
             .env("JIRED_TOKEN", "fixture-token")
-            .env("JIRED_PROJECT", "PROJ")
-            .env_remove("JIRED_LOG")
-            .args(args)
-            .arg("--no-input");
+            .env("JIRED_PROJECT", self.deployment.project())
+            .env_remove("JIRED_LOG");
+
+        match self.deployment {
+            // Cloud authenticates as email + API token.
+            Deployment::Cloud => {
+                cmd.env("JIRED_URL", "https://fixture.invalid")
+                    .env("JIRED_EMAIL", "ilya@example.com");
+            }
+            // Data Center uses a bearer PAT and no email at all.
+            Deployment::DataCenter => {
+                cmd.env("JIRED_URL", "https://jira.corp.example/jira")
+                    .env("JIRED_AUTH", "pat")
+                    .env_remove("JIRED_EMAIL");
+            }
+        }
+        cmd.args(args).arg("--no-input");
         cmd
     }
 
@@ -124,10 +200,6 @@ impl Ws {
         }
         std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
     }
-}
-
-fn fixtures_src() -> PathBuf {
-    fixtures()
 }
 
 const ISSUE_FILE: &str = "PROJ-142. Fix login flow.md";
@@ -873,4 +945,221 @@ fn resume_with_nothing_pending_is_a_no_op() {
     ws.json(&["pull"]);
     let report = ws.json(&["push", "--resume"]);
     assert!(report["results"].as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Both deployments
+//
+// Cloud and Data Center differ in API version, rich-text format and user
+// identifiers. These run the same workflow against both so a change cannot
+// pass on one product while quietly breaking the other.
+// ---------------------------------------------------------------------------
+
+/// Run one scenario against each deployment, labelling any failure with which.
+fn for_each_deployment(scenario: impl Fn(&Ws)) {
+    for deployment in [Deployment::Cloud, Deployment::DataCenter] {
+        let ws = Ws::of(deployment);
+        ws.init();
+        ws.json(&["pull"]);
+        scenario(&ws);
+    }
+}
+
+#[test]
+fn init_detects_the_deployment_from_the_server_not_the_url() {
+    let cloud = Ws::of(Deployment::Cloud);
+    assert_eq!(cloud.init()["account"]["deployment"], "cloud");
+
+    let dc = Ws::of(Deployment::DataCenter);
+    let report = dc.init();
+    assert_eq!(report["account"]["deployment"], "datacenter");
+    assert_eq!(report["account"]["auth_kind"], "pat");
+    assert_eq!(report["workspace"]["project"], "DC");
+}
+
+#[test]
+fn data_center_wiki_markup_becomes_markdown() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws.read(ws.issue_file());
+
+    // Structure survives the wiki → Markdown conversion.
+    assert!(text.contains("### Steps"), "h3 heading:\n{text}");
+    assert!(text.contains("- Generate the replacement secret"));
+    assert!(
+        text.contains("```java"),
+        "fenced code with a language:\n{text}"
+    );
+    assert!(text.contains("| Environment | Owner |"), "table:\n{text}");
+    assert!(text.contains("@[jane](jane)"), "mention:\n{text}");
+
+    // Data Center identifies users by username, not an account id.
+    assert!(text.contains("assignee: '@[Ilya A](ilya)'"), "{text}");
+
+    // A `{panel}` macro has no Markdown form, so it is preserved read-only.
+    assert!(text.contains("lossy: true"));
+    assert!(text.contains("<!--jired:raw:"));
+    assert!(text.contains("No directory changes during the release window."));
+}
+
+#[test]
+fn data_center_custom_fields_are_mapped_by_name() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws.read(ws.issue_file());
+
+    // Ids differ per instance, so these are resolved through /field.
+    assert!(text.contains("story_points: 3"), "{text}");
+    assert!(text.contains("epic: DC-50"), "{text}");
+    // Data Center returns sprints as a stringified Java object.
+    assert!(text.contains("sprint: Ops Sprint 12"), "{text}");
+    // An unmapped custom field round-trips under its raw id.
+    assert!(text.contains("customfield_10300"), "{text}");
+}
+
+#[test]
+fn a_pull_is_a_no_op_on_both_deployments() {
+    for_each_deployment(|ws| {
+        let before = ws.read(ws.issue_file());
+        let report = ws.json(&["pull"]);
+        assert_eq!(
+            report["updated"].as_array().unwrap().len(),
+            0,
+            "{:?} rewrote an unchanged issue: {report}",
+            ws.deployment
+        );
+        assert_eq!(before, ws.read(ws.issue_file()));
+    });
+}
+
+#[test]
+fn a_field_edit_pushes_on_both_deployments() {
+    for_each_deployment(|ws| {
+        let file = ws.issue_file();
+        let text = ws
+            .read(file)
+            .replace("- security\n", "- security\n- audited\n");
+        let text = text.replace("- auth\n", "- auth\n- audited\n");
+        ws.write(file, &text);
+
+        let report = ws.json(&["push"]);
+        let result = &report["results"][0];
+        assert_eq!(result["ok"], true, "{:?}: {report}", ws.deployment);
+        assert_eq!(result["ops"][0]["kind"], "update_fields");
+
+        let status = ws.json(&["status"]);
+        assert!(
+            status["dirty"].as_array().unwrap().is_empty(),
+            "{:?} left the workspace dirty: {status}",
+            ws.deployment
+        );
+    });
+}
+
+#[test]
+fn an_untouched_lossy_region_survives_a_push_on_both_deployments() {
+    for_each_deployment(|ws| {
+        let file = ws.issue_file();
+        let line = ws.deployment.editable_line();
+        let text = ws
+            .read(file)
+            .replace(line, "Edited outside the read-only block.");
+        assert!(
+            !text.contains(line),
+            "{:?}: edit did not apply",
+            ws.deployment
+        );
+        ws.write(file, &text);
+
+        let journal = ws.path().join("calls.jsonl");
+        let out = ws
+            .cmd(&["push", "--json"])
+            .env("JIRED_FIXTURE_JOURNAL", &journal)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{:?}: {}",
+            ws.deployment,
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let calls: Vec<Value> = std::fs::read_to_string(&journal)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let description = calls
+            .iter()
+            .find_map(|c| {
+                c["body"]["fields"]["description"]
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                calls.iter().find_map(|c| {
+                    c["body"]["fields"]["description"]
+                        .as_object()
+                        .map(|o| serde_json::to_string(o).unwrap())
+                })
+            })
+            .unwrap_or_else(|| panic!("{:?}: no description was sent", ws.deployment));
+
+        match ws.deployment {
+            Deployment::Cloud => assert!(
+                description.contains("\"type\":\"panel\""),
+                "the panel node must be rebuilt verbatim: {description}"
+            ),
+            Deployment::DataCenter => assert!(
+                description.contains("{panel:title=Change freeze}")
+                    && description
+                        .contains("No directory changes during the release window.\n{panel}"),
+                "the panel macro must be rebuilt verbatim: {description}"
+            ),
+        }
+        assert!(description.contains("Edited outside the read-only block."));
+    });
+}
+
+#[test]
+fn editing_a_read_only_region_is_blocked_on_both_deployments() {
+    for_each_deployment(|ws| {
+        let file = ws.issue_file();
+        let needle = match ws.deployment {
+            Deployment::Cloud => "Do not deploy before the cert rotation.",
+            Deployment::DataCenter => "No directory changes during the release window.",
+        };
+        let text = ws.read(file).replace(needle, "Rewritten by hand.");
+        ws.write(file, &text);
+
+        let err = ws.json_err(&["push"], 6);
+        assert_eq!(err["kind"], "lossy", "{:?}", ws.deployment);
+        assert_eq!(err["details"]["issue"], ws.deployment.key());
+    });
+}
+
+#[test]
+fn a_conflict_aborts_the_pull_on_both_deployments() {
+    for_each_deployment(|ws| {
+        let file = ws.issue_file();
+        let text = ws
+            .read(file)
+            .replace("priority: High\n", "priority: Lowest\n")
+            .replace("priority: Medium\n", "priority: Lowest\n");
+        ws.write(file, &text);
+        let before = ws.read(file);
+
+        ws.mutate_remote(ws.deployment.key(), |issue| {
+            issue["fields"]["priority"] = serde_json::json!({ "name": "Highest" });
+            issue["fields"]["updated"] = "2026-08-20T09:00:00.000+0000".into();
+        });
+
+        let out = ws.cmd(&["pull", "--json"]).output().unwrap();
+        assert_eq!(out.status.code(), Some(5), "{:?}", ws.deployment);
+        let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(report["conflicts"][0]["key"], ws.deployment.key());
+        assert_eq!(before, ws.read(file), "an aborted pull must write nothing");
+    });
 }

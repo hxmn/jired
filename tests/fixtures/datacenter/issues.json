@@ -1,0 +1,101 @@
+[
+  {
+    "id": "20501",
+    "key": "DC-77",
+    "fields": {
+      "summary": "Rotate the LDAP bind credential",
+      "issuetype": { "name": "Task" },
+      "status": { "id": "3", "name": "In Progress" },
+      "priority": { "name": "High" },
+      "labels": ["security", "ldap"],
+      "components": [{ "name": "directory" }],
+      "assignee": { "name": "ilya", "key": "JIRAUSER10100", "displayName": "Ilya A" },
+      "reporter": { "name": "jane", "key": "JIRAUSER10101", "displayName": "Jane D" },
+      "created": "2026-07-30T08:15:00.000+0200",
+      "updated": "2026-08-14T16:42:00.000+0200",
+      "description": "The bind account expires soon. Coordinate with [~jane] before the window.\n\n{panel:title=Change freeze}\nNo directory changes during the release window.\n{panel}\n\nh3. Steps\n\n* Generate the replacement secret\n* Update the connector config\n\n{code:java}\nLdapContext ctx = new InitialLdapContext(env, null);\n{code}\n\n||Environment||Owner||\n|staging|platform|\n|production|sre|\n\nSee DC-78 for the rollback plan.",
+      "fixVersions": [{ "name": "2026.08" }],
+      "versions": [],
+      "customfield_10106": 3,
+      "customfield_10100": "DC-50",
+      "customfield_10104": [
+        "com.atlassian.greenhopper.service.sprint.Sprint@4d7f[id=88,rapidViewId=12,state=ACTIVE,name=Ops Sprint 12,startDate=2026-08-10T09:00:00.000+02:00,endDate=2026-08-24T09:00:00.000+02:00]"
+      ],
+      "customfield_10300": "2026-08-20 22:00 CEST",
+      "issuelinks": [
+        {
+          "type": { "outward": "relates to", "inward": "relates to" },
+          "outwardIssue": { "key": "DC-78" }
+        }
+      ],
+      "subtasks": [
+        {
+          "key": "DC-79",
+          "fields": {
+            "summary": "Update the connector config",
+            "status": { "name": "Open", "statusCategory": { "key": "new" } }
+          }
+        }
+      ],
+      "comment": {
+        "comments": [
+          {
+            "id": "40901",
+            "author": { "name": "jane", "displayName": "Jane D" },
+            "created": "2026-08-12T11:05:00.000+0200",
+            "updated": "2026-08-12T11:05:00.000+0200",
+            "body": "Confirmed with [~ilya] — the *staging* bind account is already rotated.\n\n{noformat}\nbind: cn=svc,ou=apps\n{noformat}"
+          }
+        ]
+      },
+      "attachment": [
+        {
+          "id": "60300",
+          "filename": "ldap-audit.log",
+          "size": 48210,
+          "mimeType": "text/plain",
+          "created": "2026-08-12T10:00:00.000+0200",
+          "author": { "displayName": "Jane D" },
+          "content": "https://jira.corp.example/secure/attachment/60300/ldap-audit.log"
+        }
+      ]
+    }
+  },
+  {
+    "id": "20502",
+    "key": "DC-78",
+    "fields": {
+      "summary": "Document the LDAP rollback plan",
+      "issuetype": { "name": "Task" },
+      "status": { "id": "1", "name": "Open" },
+      "priority": { "name": "Medium" },
+      "labels": [],
+      "components": [],
+      "created": "2026-07-31T09:00:00.000+0200",
+      "updated": "2026-08-09T12:00:00.000+0200",
+      "description": "bq. Rollback must be possible without a restart.\n\n# Restore the previous secret\n# Reload the connector\n\nSee [the runbook|https://wiki.corp.example/ldap] for detail.",
+      "subtasks": [],
+      "comment": { "comments": [] },
+      "attachment": []
+    }
+  },
+  {
+    "id": "20503",
+    "key": "DC-79",
+    "fields": {
+      "summary": "Update the connector config",
+      "issuetype": { "name": "Sub-task" },
+      "status": { "id": "1", "name": "Open" },
+      "priority": { "name": "Medium" },
+      "labels": [],
+      "components": [],
+      "created": "2026-08-01T09:00:00.000+0200",
+      "updated": "2026-08-05T09:30:00.000+0200",
+      "description": "Change the bind DN in {{connector.yaml}} and restart the pool.",
+      "parent": { "key": "DC-77" },
+      "subtasks": [],
+      "comment": { "comments": [] },
+      "attachment": []
+    }
+  }
+]

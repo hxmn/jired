@@ -8,6 +8,15 @@ description = "Offline-first CLI for working with Jira issues as Markdown files"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hxmn/jired"
 
+[[bin]]
+name = "jired"
+path = "src/main.rs"
+
+# Development tool: records fixtures from a live instance (M1.12).
+[[bin]]
+name = "jired-record"
+path = "src/bin/record.rs"
+
 [dependencies]
 async-trait = "0.1"
 clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }

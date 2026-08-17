@@ -12,6 +12,7 @@ pub mod http;
 pub mod model;
 pub mod normalize;
 pub mod rest;
+pub mod scrub;
 
 pub use client::{FieldSet, JiraApi, SearchPage, SearchQuery};
 pub use http::TlsOptions;

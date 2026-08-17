@@ -446,6 +446,52 @@ mod tests {
         assert_eq!(b64("a@b.c:tok"), "YUBiLmM6dG9r");
     }
 
+    /// The credential lives in a header; if that header were ever formatted
+    /// into a log or an error, the token would travel with it.
+    #[test]
+    fn the_authorization_header_never_formats_its_value() {
+        use secrecy::SecretString;
+
+        let conn = Connection {
+            base_url: "https://fixture.invalid".into(),
+            deployment: Deployment::Cloud,
+            auth_kind: AuthKind::ApiToken,
+            identity: Some("a@b.c".into()),
+            token: SecretString::from("leak-canary".to_string()),
+            tls: TlsOptions::default(),
+        };
+        let header = auth_header(&conn).unwrap();
+        assert!(header.is_sensitive());
+        assert!(
+            !format!("{header:?}").contains("leak-canary"),
+            "the header debug output exposed the credential"
+        );
+
+        // The encoded form does contain it, which is exactly why the header is
+        // marked sensitive rather than merely being handled carefully.
+        assert!(String::from_utf8_lossy(header.as_bytes()).starts_with("Basic "));
+    }
+
+    #[test]
+    fn a_bearer_token_is_used_for_personal_access_tokens() {
+        use secrecy::SecretString;
+
+        let conn = Connection {
+            base_url: "https://jira.corp.example".into(),
+            deployment: Deployment::DataCenter,
+            auth_kind: AuthKind::Pat,
+            identity: None,
+            token: SecretString::from("pat-value".to_string()),
+            tls: TlsOptions::default(),
+        };
+        let header = auth_header(&conn).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(header.as_bytes()),
+            "Bearer pat-value"
+        );
+        assert!(header.is_sensitive());
+    }
+
     #[test]
     fn only_throttling_and_gateway_failures_are_retried() {
         assert!(should_retry_status(StatusCode::TOO_MANY_REQUESTS));
