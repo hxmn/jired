@@ -171,3 +171,74 @@ fn walk(root: &Path) -> Vec<PathBuf> {
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
+
+/// Disabling certificate verification has to be conspicuous every time, not
+/// once at setup: a workspace configured with `--insecure` months ago is still
+/// insecure today.
+#[test]
+fn insecure_tls_warns_on_every_run() {
+    let dir = TempDir::new().unwrap();
+    let out = Command::cargo_bin("jired")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["status", "--insecure", "--no-input"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("TLS certificate verification is disabled"),
+        "expected a warning, got: {stderr}"
+    );
+    assert!(stderr.contains("--insecure"), "{stderr}");
+}
+
+/// The credential file must not be readable by anyone else, and jired must fix
+/// it rather than trusting whatever mode it finds.
+#[cfg(unix)]
+#[test]
+fn the_session_database_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let fixtures = dir.path().join(".fixtures");
+    std::fs::create_dir_all(&fixtures).unwrap();
+    for entry in std::fs::read_dir(repo().join("tests/fixtures/cloud"))
+        .unwrap()
+        .flatten()
+    {
+        std::fs::copy(entry.path(), fixtures.join(entry.file_name())).unwrap();
+    }
+
+    let run = |args: &[&str]| {
+        Command::cargo_bin("jired")
+            .unwrap()
+            .current_dir(dir.path())
+            .env("JIRED_FIXTURES", &fixtures)
+            .env("JIRED_NO_KEYRING", "1")
+            .env("JIRED_SECRET_KEY", "passphrase")
+            .env("JIRED_URL", "https://fixture.invalid")
+            .env("JIRED_EMAIL", "ilya@example.invalid")
+            .env("JIRED_TOKEN", "token")
+            .env("JIRED_PROJECT", "PROJ")
+            .args(args)
+            .args(["--json", "--no-input"])
+            .output()
+            .unwrap()
+    };
+    assert!(run(&["init", "--no-pull"]).status.success());
+
+    let session = dir.path().join(".jired/session.db");
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode(&session),
+        0o600,
+        "session.db must not be group readable"
+    );
+    assert_eq!(mode(&dir.path().join(".jired")), 0o700);
+
+    // A careless chmod is corrected on the next open, not tolerated.
+    std::fs::set_permissions(&session, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(run(&["whoami"]).status.success());
+    assert_eq!(mode(&session), 0o600, "a loosened mode must be repaired");
+}

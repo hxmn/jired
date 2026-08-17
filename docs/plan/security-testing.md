@@ -46,6 +46,29 @@
 - Weekly job re-verifies recorded fixtures against a live Cloud sandbox to catch
   API drift.
 
+## Measured behaviour
+
+`cargo test --test scale -- --ignored --nocapture`, 2000 synthetic issues, debug
+build on one core:
+
+| Operation | Time | Per issue |
+|---|---|---|
+| `pull` (cold) | 2.74 s | 1.4 ms |
+| `pull` (nothing changed) | 0.44 s | 0.2 ms |
+| `status` (clean) | 0.28 s | 0.1 ms |
+| `status` (10% dirty) | 0.30 s | 0.2 ms |
+| `diff` (clean) | 0.41 s | 0.2 ms |
+| `push --dry-run` (10% dirty) | 0.50 s | 0.3 ms |
+
+`state.db` + WAL: 4.1 MiB, about 2.1 KiB per issue — so a 10k-issue workspace is
+roughly 20 MiB and a cold pull around 15 s. Comfortably inside the plan's
+budget, which guessed 100–300 MiB.
+
+Caveat: these issues are synthetic and smaller than real ones. An instance with
+long ADF descriptions, many comments and heavy custom fields will store several
+times more per issue; the *shape* of the cost (linear, dominated by conversion
+and hashing) is what this measures.
+
 ## Top risks & mitigations
 
 1. **Conversion fidelity (ADF)** — raw-block invariant caps blast radius (worst case

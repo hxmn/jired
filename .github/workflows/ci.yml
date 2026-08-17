@@ -24,6 +24,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-targets
+      # The scale suite is ignored by default because it writes thousands of
+      # files; CI is exactly where that should still run.
+      - run: cargo test --test scale -- --ignored --nocapture
 
   lint:
     runs-on: ubuntu-latest
@@ -43,7 +46,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-deny --locked
-      - run: cargo deny check advisories licenses
+      - run: cargo deny check
 
   secret-scan:
     name: no secrets in output

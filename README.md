@@ -115,13 +115,14 @@ Run `jired config list --all` to see every setting, its value, and where it came
 from.
 
 Credentials go to the OS keychain. Headless environments set `JIRED_SECRET_KEY`
-to a passphrase and jired stores an encrypted blob instead; see
-[docs/plan/security-testing.md](docs/plan/security-testing.md) for the threat
-model.
+to a passphrase and jired stores an encrypted blob instead — see
+[docs/security.md](docs/security.md), which is explicit about what that does and
+does not protect against.
 
 ## Documentation
 
-The design and phased delivery plan live in [docs/plan/](docs/plan/README.md).
+- [docs/security.md](docs/security.md) — credential storage, threat model, TLS
+- [docs/plan/](docs/plan/README.md) — design and phased delivery plan
 
 ## License
 

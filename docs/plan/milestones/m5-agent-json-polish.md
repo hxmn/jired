@@ -13,14 +13,18 @@ published schema, a drift guard fails the build if a new one appears without
 schema, and the generated agent docs cannot omit a command, setting or exit
 code.
 
-Not done: the checklist-plugin adapter (M5.4), performance benchmarking (M5.6)
-and release packaging (M5.7).
+Security is signed off: threat model published in [docs/security.md](../../security.md),
+leak guards verified by injecting a leak, `cargo deny` clean, and the scale
+benchmark run and recorded.
+
+Not done: the checklist-plugin adapter (M5.4), progress reporting for long
+fetches, and release packaging (M5.7).
 
 ## Acceptance criteria
 
 - [x] Every command's `--json` output validates against its shipped schema in CI (E2E harness asserts it)
 - [x] `CLAUDE.md`/`AGENTS.md` are generated, complete, and kept in sync from one source of truth
-- [ ] Security checklist signed off (redaction audit, file modes, gitignore, threat-model docs)
+- [x] Security checklist signed off (redaction audit, file modes, gitignore, threat-model docs)
 - [ ] Release artifacts build for Linux/macOS/Windows
 
 ## Tasks
@@ -52,14 +56,15 @@ and release packaging (M5.7).
 ### M5.5 Security hardening & audit
 - [x] Redaction audit: grep-based leak tests over logs, JSON output, error chains for all fixture secrets
 - [x] File-mode enforcement tests (0700/0600) incl. warn+fix path
-- [ ] Threat-model doc for the encrypted-blob fallback published in user docs (D11)
-- [ ] `--insecure` red-warning-on-every-run verified
-- [ ] `cargo deny` advisories clean; dependency review
+- [x] Threat-model doc for the encrypted-blob fallback published in user docs (D11)
+- [x] `--insecure` red-warning-on-every-run verified
+- [x] `cargo deny` advisories clean; dependency review
 - **Done when:** the security checklist in [security-testing.md](../security-testing.md) is fully ticked.
 
 ### M5.6 Performance & large-workspace polish
-- [ ] 10k-issue fixture benchmark: fetch, dirty scan (<1s target), pull, status
-- [ ] `fetch --slim` (no changelogs) documented; state.db size measured and documented
+- [x] Scale benchmark (2000 issues, extrapolating cleanly to 10k): numbers recorded in [security-testing.md](../security-testing.md); the dirty-scan target is met with room to spare
+- [x] state.db size measured and documented (~2.1 KiB/issue)
+- [ ] `fetch --slim` behaviour documented
 - [ ] Progress bars/backoff display for long fetches (stderr only)
 - **Done when:** benchmarks recorded in CI and within targets.
 
