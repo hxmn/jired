@@ -316,6 +316,33 @@ impl StateStore {
         self.advance_base(&issue.key, description, md_hash, file_path)
     }
 
+    /// Register a locally created issue that has no server counterpart yet.
+    ///
+    /// It carries no snapshots at all: `push` recognises the `NEW-` prefix and
+    /// creates it rather than diffing it, and `rekey_issue` replaces the
+    /// temporary key once the server assigns a real one.
+    pub fn record_new_issue(&self, key: &str, project: &str, file_path: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO issue (key, id, file_path) VALUES (?1, '', ?2)
+             ON CONFLICT(key) DO UPDATE SET file_path = excluded.file_path",
+            params![key, file_path],
+        )?;
+        self.set_meta(&format!("new_issue_project:{key}"), project)
+    }
+
+    /// Project a locally created issue belongs to.
+    pub fn new_issue_project(&self, key: &str) -> Result<Option<String>> {
+        self.get_meta(&format!("new_issue_project:{key}"))
+    }
+
+    pub fn forget_new_issue_project(&self, key: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM workspace WHERE key = ?1",
+            [format!("new_issue_project:{key}")],
+        )?;
+        Ok(())
+    }
+
     pub fn issue(&self, key: &str) -> Result<Option<IssueRow>> {
         let mut stmt = self.conn.prepare(ISSUE_SELECT)?;
         let row = stmt

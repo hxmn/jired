@@ -176,7 +176,60 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         stale: Vec::new(),
     };
 
+    // Locally created issues go first: an existing issue may name one as its
+    // parent or epic, and that reference has to resolve to a real key.
+    let mut rekeyed: Vec<(String, String)> = Vec::new();
     for row in engine.state.issues()? {
+        if !row.key.starts_with("NEW-") {
+            continue;
+        }
+        if !wanted.is_empty() && !wanted.contains(&row.key) {
+            continue;
+        }
+        let Some(file) = files.get(&row.key) else {
+            continue;
+        };
+        match create_issue(
+            ctx,
+            &engine,
+            client.as_ref(),
+            &row.key,
+            &file.relative,
+            args,
+        ) {
+            Ok(result) => {
+                if let Some(new_key) = &result.new_key {
+                    rekeyed.push((row.key.clone(), new_key.clone()));
+                }
+                report.results.push(result);
+            }
+            Err(e) => report.results.push(IssueResult {
+                key: row.key.clone(),
+                ok: false,
+                new_key: None,
+                error: Some(e.message.clone()),
+                error_kind: Some(e.kind.as_str().to_string()),
+                ops: vec![],
+            }),
+        }
+    }
+
+    // Re-scan: creating an issue renames its file, so the old paths are stale.
+    let files = if rekeyed.is_empty() {
+        files
+    } else {
+        engine.projector.scan()?
+    };
+    for (from, to) in &rekeyed {
+        if let Some(pos) = wanted.iter().position(|k| k == from) {
+            wanted[pos] = to.clone();
+        }
+    }
+
+    for row in engine.state.issues()? {
+        if row.key.starts_with("NEW-") {
+            continue;
+        }
         if !wanted.is_empty() && !wanted.contains(&row.key) {
             continue;
         }
@@ -289,6 +342,127 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
 
     report.results.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(report)
+}
+
+/// Create a locally authored `NEW-*` issue on the server.
+///
+/// On success the temporary key is replaced everywhere — state rows, the file
+/// name and the attachment folder — so nothing keeps referring to a key that
+/// never existed on the server.
+fn create_issue(
+    ctx: &mut Context,
+    engine: &Engine,
+    client: &dyn JiraApi,
+    temp_key: &str,
+    file: &str,
+    args: &PushArgs,
+) -> Result<IssueResult> {
+    let doc = engine.projector.read(file)?;
+    let project = engine
+        .state
+        .new_issue_project(temp_key)?
+        .or_else(|| ctx.resolver.get_value("workspace.project").ok().flatten())
+        .ok_or_else(|| {
+            JiredError::missing_value(format!("{temp_key} has no project"))
+                .with_hint("set workspace.project, or recreate the issue with --project")
+        })?;
+
+    let markup = engine.markup();
+    let mut fields = serde_json::Map::new();
+    fields.insert("project".into(), json!({ "key": project }));
+    fields.insert("summary".into(), json!(doc.frontmatter.summary));
+    fields.insert(
+        "issuetype".into(),
+        json!({ "name": if doc.frontmatter.issue_type.is_empty() {
+            "Task".to_string()
+        } else {
+            doc.frontmatter.issue_type.clone()
+        }}),
+    );
+    if !doc.description.trim().is_empty() {
+        let rich = convert::from_markdown(&doc.description, markup, &[]);
+        fields.insert("description".into(), rich.to_field_value());
+    }
+    if !doc.frontmatter.labels.is_empty() {
+        fields.insert("labels".into(), json!(doc.frontmatter.labels));
+    }
+    if let Some(parent) = &doc.frontmatter.parent {
+        fields.insert("parent".into(), json!({ "key": parent }));
+    }
+    if let Some(priority) = &doc.frontmatter.priority {
+        fields.insert("priority".into(), json!({ "name": priority }));
+    }
+
+    let payload = Value::Object(fields);
+    let request = json!({"method": "POST", "path": "/issue", "body": {"fields": payload}});
+
+    if args.dry_run {
+        return Ok(IssueResult {
+            key: temp_key.to_string(),
+            ok: true,
+            new_key: None,
+            error: None,
+            error_kind: None,
+            ops: vec![OpReport {
+                kind: "create_issue",
+                status: "planned",
+                summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
+                request: Some(request),
+                error: None,
+            }],
+        });
+    }
+
+    let op_ids = engine
+        .state
+        .journal_ops(temp_key, &[("create_issue".into(), request.to_string())])?;
+
+    let (new_key, new_id) = match crate::api::block_on(client.create_issue(payload)) {
+        Ok(created) => created,
+        Err(e) => {
+            engine
+                .state
+                .mark_op(op_ids[0], "failed", Some(&e.message))?;
+            return Ok(IssueResult {
+                key: temp_key.to_string(),
+                ok: false,
+                new_key: None,
+                error: Some(e.message.clone()),
+                error_kind: Some(e.kind.as_str().to_string()),
+                ops: vec![OpReport {
+                    kind: "create_issue",
+                    status: "failed",
+                    summary: None,
+                    request: None,
+                    error: Some(e.message.clone()),
+                }],
+            });
+        }
+    };
+    engine.state.mark_op(op_ids[0], "done", None)?;
+
+    engine.state.rekey_issue(temp_key, &new_key, &new_id)?;
+    engine.state.forget_new_issue_project(temp_key)?;
+
+    let confirmed = crate::api::block_on(client.issue(&new_key))?;
+    let base_url = engine.base_url().to_string();
+    rewrite_after_push(engine, &confirmed, file, markup, &base_url)?;
+    engine.state.clear_ops(&new_key)?;
+
+    Ok(IssueResult {
+        key: temp_key.to_string(),
+        ok: true,
+        new_key: Some(new_key),
+        error: None,
+        error_kind: None,
+        ops: vec![OpReport {
+            kind: "create_issue",
+            status: "done",
+            summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
+            request: None,
+            error: None,
+        }],
+    })
 }
 
 /// Build the ordered operation list for one issue (decision D23).

@@ -349,6 +349,21 @@ pub fn split_leading_key(text: &str) -> (Option<String>, &str) {
     (None, text)
 }
 
+/// Prefix jired gives an issue that exists only locally (decision D14).
+pub const TEMP_KEY_PREFIX: &str = "NEW-";
+
+/// `NEW-5e0227` — a locally created issue that has no server key yet.
+///
+/// These are not valid Jira keys (the suffix is hex, not decimal), so anything
+/// that recognises keys has to know about them explicitly or the file is
+/// invisible to the workspace scan.
+pub fn is_temp_key(s: &str) -> bool {
+    match s.strip_prefix(TEMP_KEY_PREFIX) {
+        Some(suffix) => !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_hexdigit()),
+        None => false,
+    }
+}
+
 pub fn is_issue_key(s: &str) -> bool {
     let Some((project, number)) = s.split_once('-') else {
         return false;
@@ -585,6 +600,18 @@ mod tests {
         // A correctly placed one is not reported.
         let good = s.replace("## Attachments\n\n### [new]", "## Attachments");
         assert!(misplaced_comment_headings(&good).is_empty());
+    }
+
+    #[test]
+    fn temporary_key_recognition() {
+        assert!(is_temp_key("NEW-5e0227"));
+        assert!(is_temp_key("NEW-000000"));
+        assert!(!is_temp_key("NEW-"));
+        assert!(!is_temp_key("NEW-zzz"));
+        assert!(!is_temp_key("PROJ-1"));
+        // A temporary key is deliberately not a valid Jira key, so that no
+        // code path can mistake one for something the server knows about.
+        assert!(!is_issue_key("NEW-5e0227"));
     }
 
     #[test]

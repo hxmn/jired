@@ -1163,3 +1163,224 @@ fn a_conflict_aborts_the_pull_on_both_deployments() {
         assert_eq!(before, ws.read(file), "an aborted pull must write nothing");
     });
 }
+
+// ---------------------------------------------------------------------------
+// Issue lifecycle: comment, transition, assign, create [M3]
+//
+// These commands stage their change in the working copy rather than talking to
+// the server directly, so `status` and `diff` see them and `push` remains the
+// single mutation point. `--push` runs that same path immediately.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn comment_stages_a_new_comment_that_push_then_creates() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["comment", "PROJ-142", "-m", "Rotated the cert."]);
+    assert_eq!(report["key"], "PROJ-142");
+    assert_eq!(report["pushed"], false);
+
+    let file = ws.read(ISSUE_FILE);
+    assert!(file.contains("### [new]"), "{file}");
+    assert!(file.contains("Rotated the cert."));
+
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::from("comments")));
+
+    let push = ws.json(&["push"]);
+    let ops = push["results"][0]["ops"].as_array().unwrap();
+    assert!(ops
+        .iter()
+        .any(|o| o["kind"] == "create_comment" && o["status"] == "done"));
+
+    let after = ws.read(ISSUE_FILE);
+    assert!(
+        !after.contains("### [new]"),
+        "the placeholder must be replaced"
+    );
+    assert!(after.contains("Rotated the cert."));
+}
+
+#[test]
+fn comment_with_push_sends_immediately() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["comment", "PROJ-142", "-m", "Sent now.", "--push"]);
+    assert_eq!(report["pushed"], true);
+    assert_eq!(report["push"]["results"][0]["ok"], true);
+
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn commenting_on_an_unknown_issue_is_a_usage_error() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let err = ws.json_err(&["comment", "PROJ-999", "-m", "x"], 2);
+    assert_eq!(err["kind"], "usage");
+    assert_eq!(err["details"]["issue"], "PROJ-999");
+}
+
+#[test]
+fn transition_lists_what_the_workflow_allows() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["transition", "PROJ-142", "--list"]);
+    let names: Vec<&str> = report["transitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["to_status"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"In Review"), "{names:?}");
+    assert!(names.contains(&"Done"));
+}
+
+#[test]
+fn transition_stages_a_status_change_and_push_applies_it() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["transition", "PROJ-142", "--to", "In Review"]);
+    assert_eq!(report["to"], "In Review");
+    assert_eq!(report["transition_id"], "31");
+    assert!(ws.read(ISSUE_FILE).contains("status: In Review"));
+
+    let status = ws.json(&["status"]);
+    let staged = &status["staged_transitions"][0];
+    assert_eq!(staged["key"], "PROJ-142");
+    assert_eq!(staged["to"], "In Review");
+    assert_eq!(staged["from"], "In Progress");
+
+    let push = ws.json(&["push"]);
+    let ops = push["results"][0]["ops"].as_array().unwrap();
+    assert!(ops
+        .iter()
+        .any(|o| o["kind"] == "transition" && o["status"] == "done"));
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn an_impossible_transition_is_refused_with_the_available_ones() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["transition", "PROJ-142", "--to", "Teleported"], 2);
+    assert_eq!(err["kind"], "usage");
+    let available = err["details"]["available"].as_array().unwrap();
+    assert!(available.contains(&Value::from("Done")), "{available:?}");
+    // Nothing was staged.
+    assert!(ws.read(ISSUE_FILE).contains("status: In Progress"));
+}
+
+#[test]
+fn a_transition_needing_fields_says_which_ones() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["transition", "PROJ-142", "--to", "Closed"], 2);
+    assert_eq!(
+        err["details"]["required"].as_array().unwrap(),
+        &vec![Value::from("resolution")]
+    );
+    assert!(err["hint"]
+        .as_str()
+        .unwrap()
+        .contains("--field resolution="));
+}
+
+#[test]
+fn assign_me_uses_the_authenticated_account() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["assign", "PROJ-142", "--me"]);
+    assert_eq!(report["assignee"], "@[Ilya A](5b10a2ilya)");
+    assert!(ws.read(ISSUE_FILE).contains("5b10a2ilya"));
+}
+
+#[test]
+fn assign_none_clears_the_field_and_pushes_a_null() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    ws.json(&["assign", "PROJ-142", "--none"]);
+    assert!(!ws.read(ISSUE_FILE).contains("assignee:"));
+
+    let push = ws.json(&["push", "--dry-run"]);
+    let body = &push["results"][0]["ops"][0]["request"]["body"]["fields"];
+    assert!(body.get("assignee").is_some());
+    assert_eq!(body["assignee"], Value::Null);
+}
+
+#[test]
+fn create_makes_a_local_issue_that_push_turns_into_a_real_one() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&[
+        "create",
+        "--summary",
+        "Audit the SSO config",
+        "--type",
+        "Task",
+        "-d",
+        "Check every tenant.",
+    ]);
+    let temp_key = report["key"].as_str().unwrap().to_string();
+    assert!(temp_key.starts_with("NEW-"), "{temp_key}");
+    assert!(ws.path().join(report["file"].as_str().unwrap()).is_file());
+
+    let status = ws.json(&["status"]);
+    assert_eq!(status["new_issues"][0]["key"], temp_key);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = &dry["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "create_issue");
+    assert_eq!(op["request"]["body"]["fields"]["project"]["key"], "PROJ");
+    assert_eq!(
+        op["request"]["body"]["fields"]["summary"],
+        "Audit the SSO config"
+    );
+
+    let push = ws.json(&["push"]);
+    let result = &push["results"][0];
+    assert_eq!(result["key"], temp_key);
+    assert_eq!(result["ok"], true);
+    let new_key = result["new_key"].as_str().expect("a real key was assigned");
+    assert!(new_key.starts_with("PROJ-"), "{new_key}");
+
+    // The temporary key is gone from the workspace and from state.
+    assert!(!ws.path().join(report["file"].as_str().unwrap()).exists());
+    let status = ws.json(&["status"]);
+    assert!(status["new_issues"].as_array().unwrap().is_empty());
+    assert!(status["dirty"].as_array().unwrap().is_empty());
+
+    let created = ws.read(&format!("{new_key}. Audit the SSO config.md"));
+    assert!(created.contains(&format!("key: {new_key}")));
+    assert!(created.contains("Check every tenant."));
+}
+
+#[test]
+fn create_requires_a_summary() {
+    let ws = Ws::new();
+    ws.init();
+    let err = ws.json_err(&["create"], 7);
+    assert_eq!(err["kind"], "missing_value");
+}

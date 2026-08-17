@@ -81,10 +81,14 @@ pub fn attachment_dir(key: &str, summary: &str) -> String {
 }
 
 /// Recover the issue key from a filename, ignoring the cosmetic summary.
+///
+/// Accepts locally created `NEW-*` keys too: their files are ordinary members
+/// of the workspace until a push gives them a real key.
 pub fn key_from_file_name(name: &str) -> Option<String> {
     let stem = name.strip_suffix(".md").unwrap_or(name);
     let candidate = stem.split(['.', ' ']).next()?;
-    crate::doc::is_issue_key(candidate).then(|| candidate.to_string())
+    (crate::doc::is_issue_key(candidate) || crate::doc::is_temp_key(candidate))
+        .then(|| candidate.to_string())
 }
 
 /// Grouping folders are visible and fixed, so they can never collide with the
@@ -195,6 +199,18 @@ mod tests {
         );
         assert_eq!(key_from_file_name("notes.md"), None);
         assert_eq!(key_from_file_name("README.md"), None);
+    }
+
+    #[test]
+    fn a_locally_created_issue_is_found_by_its_temporary_key() {
+        assert_eq!(
+            key_from_file_name("NEW-5e0227. Audit the SSO config.md").as_deref(),
+            Some("NEW-5e0227")
+        );
+        assert_eq!(
+            file_name("NEW-5e0227", "Audit the SSO config"),
+            "NEW-5e0227. Audit the SSO config.md"
+        );
     }
 
     #[test]
