@@ -131,6 +131,7 @@ enum Action {
     CreateComment(RichText),
     UpdateComment { id: String, body: RichText },
     DeleteComment { id: String },
+    UploadAttachment { filename: String, bytes: Vec<u8> },
 }
 
 pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
@@ -140,6 +141,10 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     let fields = engine.field_map()?;
     let base_url = engine.base_url().to_string();
     let files = engine.projector.scan()?;
+    let max_upload = ctx
+        .resolver
+        .get_u64("attachments.max_upload")?
+        .unwrap_or(50 * 1024 * 1024);
     let mut wanted: Vec<String> = args.issues.iter().map(|k| k.to_uppercase()).collect();
 
     // `--resume` narrows the run to issues an interrupted push left unfinished.
@@ -239,7 +244,13 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         let Some(hash) = engine.projector.hash_of(&file.relative) else {
             continue;
         };
-        if hash == base.md_hash {
+        // A staged attachment does not change the `.md` file, so the hash alone
+        // would make the issue look clean and the upload would never be sent.
+        let attachment_dir = engine.projector.attachment_dir(&file.relative);
+        let has_uploads =
+            !crate::sync::attachments::pending_uploads(&engine.state, &row.key, &attachment_dir)?
+                .is_empty();
+        if hash == base.md_hash && !has_uploads {
             continue;
         }
 
@@ -285,7 +296,16 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             ));
         }
 
-        let ops = plan(&base_doc, &working, markup, &raw, &engine, args)?;
+        let ops = plan(
+            &base_doc,
+            &working,
+            markup,
+            &raw,
+            &engine,
+            args,
+            &attachment_dir,
+            max_upload,
+        )?;
         if ops.is_empty() {
             continue;
         }
@@ -466,6 +486,7 @@ fn create_issue(
 }
 
 /// Build the ordered operation list for one issue (decision D23).
+#[allow(clippy::too_many_arguments)]
 fn plan(
     base: &IssueDoc,
     working: &IssueDoc,
@@ -473,6 +494,8 @@ fn plan(
     raw: &[crate::convert::ast::RawBlock],
     engine: &Engine,
     args: &PushArgs,
+    attachment_dir: &std::path::Path,
+    max_upload: u64,
 ) -> Result<Vec<Op>> {
     let mut ops = Vec::new();
     let mut fields = serde_json::Map::new();
@@ -625,6 +648,37 @@ fn plan(
                 });
             }
         }
+    }
+
+    // Files the user dropped into the attachment folder. Planned last so an
+    // upload cannot be what fails an otherwise-good field edit.
+    for path in crate::sync::attachments::pending_uploads(
+        &engine.state,
+        &base.frontmatter.key,
+        attachment_dir,
+    )? {
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let bytes = crate::sync::attachments::check_upload_size(&path, max_upload)?;
+        ops.push(Op {
+            kind: "upload_attachment",
+            summary: format!(
+                "{filename} ({})",
+                crate::sync::render::human_size(bytes.len() as u64)
+            ),
+            request: json!({
+                "method": "POST",
+                "path": "/issue/{key}/attachments",
+                "body": {"filename": filename, "size": bytes.len()}
+            }),
+            action: Action::UploadAttachment {
+                filename: filename.clone(),
+                bytes,
+            },
+        });
     }
 
     for c in &base.comments {
@@ -818,6 +872,10 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                 client.update_comment(key, id, body).await.map(|_| ())
             }
             Action::DeleteComment { id } => client.delete_comment(key, id).await,
+            Action::UploadAttachment { filename, bytes } => client
+                .upload_attachment(key, filename, bytes.clone())
+                .await
+                .map(|_| ()),
         }
     })
 }

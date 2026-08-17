@@ -485,7 +485,7 @@ impl JiraApi for FixtureClient {
             &format!("/issue/{key}/attachments"),
             json!({"filename": filename, "size": bytes.len()}),
         )?;
-        Ok(RemoteAttachment {
+        let attachment = RemoteAttachment {
             id: self.next_id(),
             filename: filename.to_string(),
             size: bytes.len() as u64,
@@ -497,7 +497,31 @@ impl JiraApi for FixtureClient {
             created: Some(chrono::Utc::now()),
             author: Some("Fixture User".into()),
             content_url: format!("fixture://{key}/{filename}"),
-        })
+        };
+
+        // A real server lists the file on the issue from now on. Without this
+        // the next read still shows it missing, and jired would keep offering
+        // to upload it.
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            if let Some(issue) = issues.get_mut(key) {
+                let entry = json!({
+                    "id": attachment.id,
+                    "filename": attachment.filename,
+                    "size": attachment.size,
+                    "mimeType": attachment.mime,
+                    "created": attachment.created.map(|c| c.to_rfc3339()),
+                    "author": {"displayName": "Fixture User"},
+                    "content": attachment.content_url,
+                });
+                match issue["fields"]["attachment"].as_array_mut() {
+                    Some(list) => list.push(entry),
+                    None => issue["fields"]["attachment"] = json!([entry]),
+                }
+            }
+        }
+        self.bump_updated(key);
+        Ok(attachment)
     }
 
     async fn download_attachment(&self, attachment: &RemoteAttachment) -> Result<Vec<u8>> {

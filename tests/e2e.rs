@@ -47,6 +47,25 @@ impl Deployment {
         }
     }
 
+    /// Attachment contents the fixture server should serve, and their sizes.
+    ///
+    /// The sizes match the metadata in `issues.json`, because the download path
+    /// verifies that what arrived is what was advertised.
+    fn attachment_bodies(self) -> &'static [(&'static str, usize)] {
+        match self {
+            Deployment::Cloud => &[("login-trace.har", 2_200_000)],
+            Deployment::DataCenter => &[("ldap-audit.log", 48_210)],
+        }
+    }
+
+    /// The one attachment each fixture issue carries.
+    fn attachment(self) -> &'static str {
+        match self {
+            Deployment::Cloud => "login-trace.har",
+            Deployment::DataCenter => "ldap-audit.log",
+        }
+    }
+
     /// A line of the description that no lossy region covers, safe to edit.
     fn editable_line(self) -> &'static str {
         match self {
@@ -81,6 +100,15 @@ impl Ws {
             .flatten()
         {
             std::fs::copy(entry.path(), fixtures.join(entry.file_name())).unwrap();
+        }
+
+        // Attachment bodies are generated rather than committed: they are large
+        // and carry no information beyond their size, which is exactly what the
+        // download path verifies.
+        let bodies = fixtures.join("attachments");
+        std::fs::create_dir_all(&bodies).unwrap();
+        for (name, size) in deployment.attachment_bodies() {
+            std::fs::write(bodies.join(name), vec![b'x'; *size]).unwrap();
         }
         Self {
             dir,
@@ -1383,4 +1411,169 @@ fn create_requires_a_summary() {
     ws.init();
     let err = ws.json_err(&["create"], 7);
     assert_eq!(err["kind"], "missing_value");
+}
+
+// ---------------------------------------------------------------------------
+// Attachments [M3.3]
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_large_attachment_becomes_a_stub_until_asked_for() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let folder = ws.path().join(".PROJ-142. Fix login flow");
+    let name = ws.deployment.attachment();
+    let stub = folder.join(format!("{name}.jiredstub"));
+
+    assert!(stub.is_file(), "a 2.1 MiB file must not download eagerly");
+    assert!(!folder.join(name).exists());
+
+    // The stub says what the file is, so the folder still tells the truth.
+    let meta: Value = serde_json::from_str(&std::fs::read_to_string(&stub).unwrap()).unwrap();
+    assert_eq!(meta["filename"], name);
+    assert_eq!(meta["size"], 2_200_000u64);
+    assert!(meta["note"].as_str().unwrap().contains("attachments pull"));
+
+    let listed = ws.json(&["attachments", "list"]);
+    let entry = &listed["attachments"][0];
+    assert_eq!(entry["filename"], name);
+    assert_eq!(entry["downloaded"], false);
+}
+
+#[test]
+fn attachments_pull_replaces_the_stub_with_real_content() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let folder = ws.path().join(".PROJ-142. Fix login flow");
+    let name = ws.deployment.attachment();
+
+    let report = ws.json(&["attachments", "pull"]);
+    assert_eq!(report["downloaded"][0]["filename"], name);
+
+    assert!(folder.join(name).is_file());
+    assert_eq!(
+        std::fs::metadata(folder.join(name)).unwrap().len(),
+        2_200_000
+    );
+    assert!(
+        !folder.join(format!("{name}.jiredstub")).exists(),
+        "the stub must go once the content is there"
+    );
+    assert_eq!(
+        ws.json(&["attachments", "list"])["attachments"][0]["downloaded"],
+        true
+    );
+}
+
+#[test]
+fn attachments_pull_honours_max_size() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["attachments", "pull", "--max-size", "1024"]);
+    assert!(report["downloaded"].as_array().unwrap().is_empty());
+    assert_eq!(report["skipped"][0]["filename"], ws.deployment.attachment());
+}
+
+#[test]
+fn a_small_attachment_is_downloaded_eagerly_on_pull() {
+    // Data Center's fixture attachment is small enough for the default
+    // threshold, so it arrives without being asked for.
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let folder = ws.path().join(".DC-77. Rotate the LDAP bind credential");
+    assert!(
+        folder.join("ldap-audit.log").is_file(),
+        "a 47 KiB file is under the default auto-download threshold"
+    );
+    assert!(!folder.join("ldap-audit.log.jiredstub").exists());
+}
+
+#[test]
+fn attach_stages_a_file_that_push_uploads() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let source = ws.path().join("evidence.txt");
+    std::fs::write(&source, b"captured during the incident").unwrap();
+
+    let report = ws.json(&["attach", "PROJ-142", source.to_str().unwrap()]);
+    assert_eq!(report["staged"][0], "evidence.txt");
+    assert!(ws
+        .path()
+        .join(".PROJ-142. Fix login flow/evidence.txt")
+        .is_file());
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let ops = dry["results"][0]["ops"].as_array().unwrap();
+    let upload = ops
+        .iter()
+        .find(|o| o["kind"] == "upload_attachment")
+        .expect("an upload was planned");
+    assert_eq!(upload["request"]["body"]["filename"], "evidence.txt");
+
+    let push = ws.json(&["push"]);
+    let ops = push["results"][0]["ops"].as_array().unwrap();
+    assert!(ops
+        .iter()
+        .any(|o| o["kind"] == "upload_attachment" && o["status"] == "done"));
+}
+
+#[test]
+fn an_oversized_attachment_is_refused_before_anything_is_copied() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let source = ws.path().join("huge.bin");
+    std::fs::write(&source, vec![0u8; 4096]).unwrap();
+
+    let out = ws
+        .cmd(&["attach", "PROJ-142", source.to_str().unwrap(), "--json"])
+        .env("JIRED_ATTACH_MAX_UPLOAD", "1024")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["details"]["size"], 4096);
+    assert_eq!(err["details"]["limit"], 1024);
+    assert!(
+        !ws.path()
+            .join(".PROJ-142. Fix login flow/huge.bin")
+            .exists(),
+        "nothing should have been copied"
+    );
+}
+
+#[test]
+fn a_staged_attachment_makes_the_issue_dirty() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+
+    let source = ws.path().join("note.txt");
+    std::fs::write(&source, b"evidence").unwrap();
+    ws.json(&["attach", "PROJ-142", source.to_str().unwrap()]);
+
+    // The `.md` file is untouched, so only the folder scan can reveal this.
+    let status = ws.json(&["status"]);
+    let dirty = &status["dirty"][0];
+    assert_eq!(dirty["key"], "PROJ-142");
+    assert!(dirty["fields"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::from("attachments")));
+
+    ws.json(&["push"]);
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
 }

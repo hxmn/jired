@@ -226,7 +226,13 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
         let Some(hash) = engine.projector.hash_of(&file.relative) else {
             continue;
         };
-        if hash == base.md_hash {
+        let staged_uploads = !crate::sync::attachments::pending_uploads(
+            &engine.state,
+            &row.key,
+            &engine.projector.attachment_dir(&file.relative),
+        )?
+        .is_empty();
+        if hash == base.md_hash && !staged_uploads {
             continue;
         }
 
@@ -268,6 +274,10 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
                 to: working.frontmatter.status.clone(),
                 origin: "frontmatter",
             });
+        }
+
+        if staged_uploads {
+            fields.push("attachments".into());
         }
 
         let raw = engine.state.raw_blocks(&row.key, "description")?;

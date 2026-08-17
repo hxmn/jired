@@ -14,7 +14,7 @@ use crate::json::Out;
 use crate::store::state::IssueRow;
 use crate::sync::merge::{self, Decision};
 use crate::sync::render::{render_issue, RenderContext};
-use crate::sync::{fetch, Engine};
+use crate::sync::{attachments, fetch, Engine};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -243,6 +243,7 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
         return Ok(report);
     }
 
+    let mut attachment_folders: Vec<(String, String)> = Vec::new();
     for mut write in planned {
         // The hash in the frontmatter must describe the file that contains it,
         // so it is written in two passes: render, hash, rewrite.
@@ -253,6 +254,7 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
         let outcome = engine
             .projector
             .write(&write.doc, write.previous.as_deref())?;
+        attachment_folders.push((write.key.clone(), outcome.relative.clone()));
         engine
             .state
             .replace_raw_blocks(&write.key, "description", &write.description_raw)?;
@@ -283,6 +285,26 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
         match write.kind {
             ChangeKind::Created => report.created.push(change),
             ChangeKind::Updated => report.updated.push(change),
+        }
+    }
+
+    // Attachment content is fetched only when the network is already in play,
+    // so a `--no-fetch` pull stays offline.
+    if !args.no_fetch && !attachment_folders.is_empty() {
+        let auto_max = ctx
+            .resolver
+            .get_u64("attachments.auto_download_max")?
+            .unwrap_or(256 * 1024);
+        let client = engine.client(ctx)?;
+        for (key, file) in &attachment_folders {
+            let dir = engine.projector.attachment_dir(file);
+            // A missing attachment must not fail a pull that otherwise
+            // succeeded; the stub still records what the issue has.
+            if let Err(e) =
+                attachments::sync_folder(&engine.state, client.as_ref(), key, &dir, auto_max)
+            {
+                ctx.out.warn(format!("{key}: {}", e.message));
+            }
         }
     }
 

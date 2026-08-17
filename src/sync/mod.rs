@@ -1,5 +1,6 @@
 //! Sync engine: fetch, merge, diff, push [M1.8, M2].
 
+pub mod attachments;
 pub mod diff;
 pub mod fetch;
 pub mod merge;
