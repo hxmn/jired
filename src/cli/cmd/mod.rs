@@ -1,0 +1,25 @@
+//! Command handlers. One module per top-level command.
+
+pub mod agent_docs;
+pub mod assign;
+pub mod attach;
+pub mod clean;
+pub mod comment;
+pub mod completion;
+pub mod config;
+pub mod create;
+pub mod diff;
+pub mod fetch;
+pub mod init;
+pub mod list;
+pub mod log;
+pub mod open;
+pub mod prompt;
+pub mod pull;
+pub mod push;
+pub mod resolve;
+pub mod schema;
+pub mod search;
+pub mod status;
+pub mod transition;
+pub mod whoami;

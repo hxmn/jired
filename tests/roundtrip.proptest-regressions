@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 04edb74f516405c280b4e33cb942c36b94e6fde5bedd82b10ff25028fe27e727 # shrinks to doc = Document { blocks: [Paragraph([Strong([Link { text: [Text("A")], href: "https://aa.example/" }])])] }
+cc eafa84a61267f5b5a60cf046d508824e099f137e893aca0ab70ea0d0e807afd5 # shrinks to doc = Document { blocks: [BlockQuote([Heading { level: 1, content: [Link { text: [Text("PROJ-1")], href: "https://aa.example/" }] }])] }
+cc f03d95a510b7af9137b7198866025cb95213388fe76f2631ca798aa27c8650a7 # shrinks to items = [TaskItem { checked: false, content: [Text("0")], id: None }], t = Table { header: Some([[Paragraph([Text("a")])]]), rows: [[[Paragraph([Link { text: [Text("PROJ-1")], href: "https://aa.example/" }])]]] }
+cc 67b3daa3fa97e495af0533dd13a72c45fa780a0cca9e15754d09e229ae6c700a # shrinks to doc = Document { blocks: [Paragraph([Emphasis([Link { text: [Text("| ~ 0")], href: "https://aa.example/" }])])] }
+cc dbac10c380ad126ecb12f9abc611a07b81a4727290d850c627b41902176a4515 # shrinks to doc = Document { blocks: [Paragraph([Text("|")])] }

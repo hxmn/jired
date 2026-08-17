@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/error/1",
+  "title": "jired error",
+  "description": "Structured error written to stderr when --json is active.",
+  "type": "object",
+  "required": ["schema", "code", "kind", "message", "details"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "jired/error/1" },
+    "code": {
+      "type": "integer",
+      "description": "Process exit code",
+      "enum": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "generic",
+        "usage",
+        "auth",
+        "network",
+        "conflict",
+        "lossy",
+        "missing_value",
+        "locked",
+        "corrupt_state",
+        "unsupported_server"
+      ]
+    },
+    "message": { "type": "string" },
+    "details": { "type": "object" },
+    "hint": { "type": "string" }
+  }
+}

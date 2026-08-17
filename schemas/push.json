@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/push/1",
+  "title": "jired push result",
+  "type": "object",
+  "required": ["schema", "dry_run", "results"],
+  "properties": {
+    "schema": { "const": "jired/push/1" },
+    "dry_run": { "type": "boolean" },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "ok", "ops"],
+        "properties": {
+          "key": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "new_key": {
+            "type": ["string", "null"],
+            "description": "Real key assigned to a locally created NEW-* issue"
+          },
+          "error": { "type": ["string", "null"] },
+          "error_kind": { "type": ["string", "null"] },
+          "ops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["kind", "status"],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "create_issue",
+                    "update_fields",
+                    "update_description",
+                    "transition",
+                    "create_comment",
+                    "update_comment",
+                    "delete_comment",
+                    "upload_attachment",
+                    "rename_file"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["planned", "done", "failed", "skipped"]
+                },
+                "summary": { "type": ["string", "null"] },
+                "request": {
+                  "type": ["object", "null"],
+                  "description": "Method, path and body preview, present in --dry-run"
+                },
+                "error": { "type": ["string", "null"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stale": {
+      "type": "array",
+      "description": "Issues refused because the server changed since base",
+      "items": { "type": "string" }
+    }
+  }
+}

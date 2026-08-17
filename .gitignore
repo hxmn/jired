@@ -1,0 +1,6 @@
+/target/
+
+# BEGIN jired
+# jired machine state: credentials, sync database, logs.
+/.jired/
+# END jired

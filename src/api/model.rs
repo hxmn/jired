@@ -1,0 +1,345 @@
+//! Deployment-neutral shapes the sync engine works with.
+//!
+//! Every timestamp is normalized to UTC on ingest (decision D22) so diffs are
+//! stable regardless of the server's timezone.
+
+use crate::api::Markup;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Myself {
+    pub account_id: String,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub time_zone: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerInfo {
+    pub deployment: Option<crate::api::Deployment>,
+    pub version: Option<String>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub project_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Board {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub board_type: String,
+    #[serde(default)]
+    pub project_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Sprint {
+    pub id: String,
+    pub name: String,
+    /// `active`, `future`, or `closed`.
+    pub state: String,
+    #[serde(default)]
+    pub board_id: Option<String>,
+    #[serde(default)]
+    pub start_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub end_date: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardColumn {
+    pub name: String,
+    /// Status ids mapped onto this column.
+    pub status_ids: Vec<String>,
+}
+
+/// A user reference. Cloud identifies by `accountId`, Data Center by `name`;
+/// both land here so mention rendering has one shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserRef {
+    pub id: String,
+    pub display_name: String,
+}
+
+/// Rich text in whichever markup the server uses.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RichText {
+    Adf(serde_json::Value),
+    Wiki(String),
+    Empty,
+}
+
+impl RichText {
+    pub fn markup(&self) -> Option<Markup> {
+        match self {
+            RichText::Adf(_) => Some(Markup::Adf),
+            RichText::Wiki(_) => Some(Markup::Wiki),
+            RichText::Empty => None,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            RichText::Empty => true,
+            RichText::Wiki(s) => s.trim().is_empty(),
+            RichText::Adf(v) => v
+                .get("content")
+                .and_then(|c| c.as_array())
+                .is_none_or(|a| a.is_empty()),
+        }
+    }
+
+    /// Serialized form stored in `state.db` and compared for change detection.
+    pub fn to_storage(&self) -> String {
+        match self {
+            RichText::Adf(v) => v.to_string(),
+            RichText::Wiki(s) => s.clone(),
+            RichText::Empty => String::new(),
+        }
+    }
+
+    pub fn from_storage(markup: Markup, raw: &str) -> Self {
+        if raw.is_empty() {
+            return RichText::Empty;
+        }
+        match markup {
+            Markup::Adf => serde_json::from_str(raw)
+                .map(RichText::Adf)
+                .unwrap_or(RichText::Empty),
+            Markup::Wiki => RichText::Wiki(raw.to_string()),
+        }
+    }
+
+    /// The value to send in a field payload for this markup.
+    pub fn to_field_value(&self) -> serde_json::Value {
+        match self {
+            RichText::Adf(v) => v.clone(),
+            RichText::Wiki(s) => serde_json::Value::String(s.clone()),
+            RichText::Empty => serde_json::Value::Null,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IssueLink {
+    /// Outward or inward description, e.g. `blocks` / `is blocked by`.
+    pub link_type: String,
+    pub other_key: String,
+}
+
+/// Normalized issue fields. `raw` on [`RemoteIssue`] remains the source of
+/// truth for anything not modelled here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct IssueFields {
+    pub summary: String,
+    pub issue_type: String,
+    pub status: String,
+    pub status_id: Option<String>,
+    pub priority: Option<String>,
+    pub labels: Vec<String>,
+    pub components: Vec<String>,
+    pub assignee: Option<UserRef>,
+    pub reporter: Option<UserRef>,
+    pub created: Option<DateTime<Utc>>,
+    pub updated: Option<DateTime<Utc>>,
+    pub sprint: Option<String>,
+    pub parent: Option<String>,
+    pub epic: Option<String>,
+    pub fix_versions: Vec<String>,
+    pub affects_versions: Vec<String>,
+    pub links: Vec<IssueLink>,
+    pub story_points: Option<f64>,
+    pub subtasks: Vec<SubtaskRef>,
+    /// Custom fields with no well-known mapping, keyed by field id.
+    pub custom: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubtaskRef {
+    pub key: String,
+    pub summary: String,
+    pub status: String,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteIssue {
+    pub key: String,
+    pub id: String,
+    pub updated: DateTime<Utc>,
+    pub description: RichText,
+    pub fields: IssueFields,
+    pub comments: Vec<RemoteComment>,
+    pub attachments: Vec<RemoteAttachment>,
+    /// The untouched server payload, kept so unmodelled data round-trips.
+    pub raw: serde_json::Value,
+}
+
+impl RemoteIssue {
+    pub fn summary(&self) -> &str {
+        &self.fields.summary
+    }
+    pub fn status(&self) -> &str {
+        &self.fields.status
+    }
+    pub fn assignee_name(&self) -> Option<&str> {
+        self.fields
+            .assignee
+            .as_ref()
+            .map(|u| u.display_name.as_str())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteComment {
+    pub id: String,
+    pub author: Option<UserRef>,
+    pub created: Option<DateTime<Utc>>,
+    pub updated: Option<DateTime<Utc>>,
+    pub body: RichText,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteAttachment {
+    pub id: String,
+    pub filename: String,
+    pub size: u64,
+    pub mime: Option<String>,
+    pub created: Option<DateTime<Utc>>,
+    pub author: Option<String>,
+    pub content_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transition {
+    pub id: String,
+    pub name: String,
+    pub to_status: String,
+    pub to_status_id: Option<String>,
+    /// Field ids the transition screen requires.
+    pub required_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldMeta {
+    pub id: String,
+    pub name: String,
+    pub custom: bool,
+    #[serde(default)]
+    pub schema_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangelogEntry {
+    pub id: String,
+    pub author: Option<String>,
+    pub created: Option<DateTime<Utc>>,
+    pub items: Vec<ChangelogItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangelogItem {
+    pub field: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+/// Parse a Jira timestamp into UTC.
+///
+/// Jira Cloud emits ISO-8601 with an offset; Data Center emits the same shape
+/// but in server-local time, and some proxies drop the colon from the offset.
+pub fn parse_timestamp(s: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.3f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S%.3f%z",
+    ] {
+        if let Ok(dt) = DateTime::parse_from_str(s, fmt) {
+            return Some(dt.with_timezone(&Utc));
+        }
+    }
+    // Date-only values appear in duedate and custom date fields.
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc());
+    }
+    None
+}
+
+/// Serialize a timestamp the way jired writes it everywhere.
+pub fn format_timestamp(dt: &DateTime<Utc>) -> String {
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Format a JQL timestamp literal in the shape Jira's parser accepts.
+pub fn jql_timestamp(dt: &DateTime<Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamps_normalize_to_utc() {
+        let cloud = parse_timestamp("2026-08-16T14:03:00.000+0200").unwrap();
+        assert_eq!(format_timestamp(&cloud), "2026-08-16T12:03:00Z");
+
+        let rfc = parse_timestamp("2026-08-16T14:03:00+02:00").unwrap();
+        assert_eq!(cloud, rfc);
+
+        let zulu = parse_timestamp("2026-08-16T12:03:00Z").unwrap();
+        assert_eq!(cloud, zulu);
+
+        assert!(parse_timestamp("not a date").is_none());
+    }
+
+    #[test]
+    fn date_only_values_parse_as_midnight_utc() {
+        let d = parse_timestamp("2026-08-16").unwrap();
+        assert_eq!(format_timestamp(&d), "2026-08-16T00:00:00Z");
+    }
+
+    #[test]
+    fn jql_literal_has_minute_precision() {
+        let dt = parse_timestamp("2026-08-16T12:03:45Z").unwrap();
+        assert_eq!(jql_timestamp(&dt), "2026-08-16 12:03");
+    }
+
+    #[test]
+    fn rich_text_storage_round_trips() {
+        let adf = RichText::Adf(serde_json::json!({"type":"doc","content":[]}));
+        let back = RichText::from_storage(Markup::Adf, &adf.to_storage());
+        assert_eq!(adf, back);
+
+        let wiki = RichText::Wiki("h1. Title".into());
+        assert_eq!(
+            RichText::from_storage(Markup::Wiki, &wiki.to_storage()),
+            wiki
+        );
+
+        assert_eq!(RichText::from_storage(Markup::Adf, ""), RichText::Empty);
+    }
+
+    #[test]
+    fn emptiness_is_markup_aware() {
+        assert!(RichText::Empty.is_empty());
+        assert!(RichText::Wiki("   ".into()).is_empty());
+        assert!(RichText::Adf(serde_json::json!({"type":"doc","content":[]})).is_empty());
+        assert!(
+            !RichText::Adf(serde_json::json!({"type":"doc","content":[{"type":"paragraph"}]}))
+                .is_empty()
+        );
+    }
+}

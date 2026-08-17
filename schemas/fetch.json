@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/fetch/1",
+  "title": "jired fetch result",
+  "type": "object",
+  "required": ["schema", "fetched", "changed", "deleted", "keys"],
+  "properties": {
+    "schema": { "const": "jired/fetch/1" },
+    "jql": { "type": ["string", "null"] },
+    "fetched": { "type": "integer", "minimum": 0 },
+    "changed": { "type": "integer", "minimum": 0 },
+    "deleted": { "type": "integer", "minimum": 0 },
+    "incremental": { "type": "boolean" },
+    "since": { "type": ["string", "null"] },
+    "keys": {
+      "type": "array",
+      "description": "Issue keys whose remote snapshot changed, sorted",
+      "items": { "type": "string" }
+    },
+    "fetched_at": { "type": "string", "format": "date-time" }
+  }
+}

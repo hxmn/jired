@@ -1,0 +1,78 @@
+[package]
+name = "jired"
+version = "0.1.0"
+edition = "2021"
+# std file locking (`File::try_lock`) stabilized in 1.89.
+rust-version = "1.89"
+description = "Offline-first CLI for working with Jira issues as Markdown files"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hxmn/jired"
+
+[dependencies]
+async-trait = "0.1"
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4.6"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "fs", "time", "sync"] }
+# `rustls-no-provider` keeps the aws-lc-rs C toolchain out of the build; the
+# ring provider is installed explicitly in `api::http`.
+reqwest = { version = "0.13", default-features = false, features = [
+    "json", "rustls-no-provider", "multipart", "stream", "gzip", "system-proxy",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
+toml_edit = { version = "0.25", features = ["serde"] }
+# Default features drag in comrak's own CLI and the syntect/onig syntax
+# highlighter, neither of which jired uses.
+comrak = { version = "0.54", default-features = false }
+keyring = { version = "4.1", features = [
+    "apple-native-keyring-store",
+    "windows-native-keyring-store",
+    "zbus-secret-service-keyring-store",
+] }
+similar = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+secrecy = "0.10"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+chacha20poly1305 = "0.10"
+scrypt = "0.11"
+mime_guess = "2"
+open = "5"
+futures = "0.3"
+indicatif = "0.18"
+crossterm = "0.29"
+ratatui = "0.30"
+rand = "0.9"
+urlencoding = "2"
+dirs = "6"
+walkdir = "2"
+unicode-segmentation = "1"
+is-terminal = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest = "1"
+insta = { version = "1", features = ["json", "yaml", "filters"] }
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+jsonschema = "0.49"
+
+[profile.dev]
+# Debug info dominates artifact size here and jired debugs fine without it.
+debug = 0
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[lints.rust]
+unsafe_code = "warn"

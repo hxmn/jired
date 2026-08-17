@@ -1,0 +1,4 @@
+[
+  { "id": "10000", "key": "PROJ", "name": "Platform", "project_type": "software" },
+  { "id": "10001", "key": "OPS", "name": "Operations", "project_type": "software" }
+]

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/diff/1",
+  "title": "jired diff result",
+  "type": "object",
+  "required": ["schema", "mode", "issues"],
+  "properties": {
+    "schema": { "const": "jired/diff/1" },
+    "mode": {
+      "type": "string",
+      "enum": ["working-base", "base-remote", "working-remote"]
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "fields", "sections"],
+        "properties": {
+          "key": { "type": "string" },
+          "file": { "type": ["string", "null"] },
+          "status": {
+            "type": "string",
+            "enum": ["modified", "added", "deleted"]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["field", "from", "to"],
+              "properties": {
+                "field": { "type": "string" },
+                "from": {},
+                "to": {}
+              }
+            }
+          },
+          "sections": {
+            "type": "array",
+            "description": "Unified diffs of body sections",
+            "items": {
+              "type": "object",
+              "required": ["section", "unified"],
+              "properties": {
+                "section": { "type": "string" },
+                "unified": { "type": "string" },
+                "added": { "type": "integer" },
+                "removed": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stat": {
+      "type": "object",
+      "properties": {
+        "issues": { "type": "integer" },
+        "fields": { "type": "integer" },
+        "added": { "type": "integer" },
+        "removed": { "type": "integer" }
+      }
+    }
+  }
+}

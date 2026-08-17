@@ -1,0 +1,301 @@
+//! YAML frontmatter of an issue file [M1.11, M2.1].
+//!
+//! The schema is a published contract (`schemas/frontmatter.json`) that agents
+//! validate against, so field names and their editability are fixed here and
+//! nowhere else.
+
+use crate::error::{JiredError, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// Fields a user may change; a push turns a difference into an API call.
+pub const EDITABLE: &[&str] = &[
+    "type",
+    "status",
+    "priority",
+    "summary",
+    "labels",
+    "components",
+    "assignee",
+    "sprint",
+    "parent",
+    "epic",
+    "fix_versions",
+    "affects_versions",
+    "links",
+    "story_points",
+    "custom",
+];
+
+/// Fields that only report server state. Local edits are dropped with a
+/// warning on the next write.
+pub const READ_ONLY: &[&str] = &["reporter", "created", "updated", "url", "jired"];
+
+/// Fields that identify the issue. Changing one is an error, not a warning:
+/// jired would otherwise write one issue's content over another's.
+pub const IDENTITY: &[&str] = &["key", "id"];
+
+pub fn is_editable(field: &str) -> bool {
+    EDITABLE.contains(&field)
+}
+
+pub fn is_identity(field: &str) -> bool {
+    IDENTITY.contains(&field)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Frontmatter {
+    pub key: String,
+    pub id: String,
+    #[serde(rename = "type", default)]
+    pub issue_type: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub components: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epic: Option<String>,
+    #[serde(default)]
+    pub fix_versions: Vec<String>,
+    #[serde(default)]
+    pub affects_versions: Vec<String>,
+    /// Typed links as single-entry maps: `- blocks: PROJ-150`.
+    #[serde(default)]
+    pub links: Vec<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_points: Option<f64>,
+    /// Custom fields with no well-known mapping, kept so they round-trip.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom: BTreeMap<String, serde_json::Value>,
+    pub jired: SyncMeta,
+    /// Anything a user or a future jired added; preserved verbatim.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SyncMeta {
+    #[serde(default)]
+    pub base_updated: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_version: Option<i64>,
+    #[serde(default)]
+    pub content_hash: String,
+    #[serde(default)]
+    pub lossy: bool,
+}
+
+impl Frontmatter {
+    pub fn parse(yaml: &str) -> Result<Self> {
+        let fm: Frontmatter = serde_yaml_ng::from_str(yaml).map_err(|e| {
+            JiredError::generic(format!("cannot read the frontmatter: {e}"))
+                .with_hint("the YAML header must contain at least `key` and `id`")
+        })?;
+        if fm.key.is_empty() {
+            return Err(JiredError::generic("the frontmatter has no `key`"));
+        }
+        Ok(fm)
+    }
+
+    pub fn to_yaml(&self) -> Result<String> {
+        Ok(serde_yaml_ng::to_string(self)?)
+    }
+
+    /// Typed links flattened to a comparable form.
+    pub fn link_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = self
+            .links
+            .iter()
+            .flat_map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    pub fn set_links(&mut self, pairs: &[(String, String)]) {
+        self.links = pairs
+            .iter()
+            .map(|(t, k)| BTreeMap::from([(t.clone(), k.clone())]))
+            .collect();
+    }
+
+    /// Value of a field by its frontmatter name, for generic comparison.
+    pub fn field(&self, name: &str) -> Option<serde_json::Value> {
+        let v = match name {
+            "type" => serde_json::json!(self.issue_type),
+            "status" => serde_json::json!(self.status),
+            "priority" => serde_json::json!(self.priority),
+            "summary" => serde_json::json!(self.summary),
+            "labels" => serde_json::json!(self.labels),
+            "components" => serde_json::json!(self.components),
+            "assignee" => serde_json::json!(self.assignee),
+            "reporter" => serde_json::json!(self.reporter),
+            "sprint" => serde_json::json!(self.sprint),
+            "parent" => serde_json::json!(self.parent),
+            "epic" => serde_json::json!(self.epic),
+            "fix_versions" => serde_json::json!(self.fix_versions),
+            "affects_versions" => serde_json::json!(self.affects_versions),
+            "links" => serde_json::json!(self.link_pairs()),
+            "story_points" => serde_json::json!(self.story_points),
+            "custom" => serde_json::json!(self.custom),
+            _ => return None,
+        };
+        Some(v)
+    }
+}
+
+/// Render a mention the way the file format spells it: `@[Name](id)`.
+pub fn format_user(user: Option<&crate::api::UserRef>) -> Option<String> {
+    user.map(|u| format!("@[{}]({})", u.display_name, u.id))
+}
+
+/// Recover the account id from `@[Name](id)`; a bare string is taken as an id.
+pub fn parse_user(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(rest) = value.strip_prefix("@[") {
+        if let Some(close) = rest.find("](") {
+            let id = &rest[close + 2..];
+            return Some(id.trim_end_matches(')').to_string());
+        }
+    }
+    Some(value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = r#"
+key: PROJ-142
+id: "10023"
+type: Story
+status: In Progress
+priority: High
+summary: Fix login flow
+labels:
+  - auth
+  - backend
+components: [web]
+assignee: "@[Ilya A](5b10a2)"
+reporter: "@[Jane D](5b1af9)"
+created: 2026-08-01T09:12:00Z
+updated: 2026-08-16T14:03:00Z
+sprint: Sprint 42
+parent: PROJ-100
+epic: PROJ-90
+fix_versions: ["2.4.0"]
+affects_versions: []
+links:
+  - blocks: PROJ-150
+  - relates to: PROJ-99
+url: https://x.atlassian.net/browse/PROJ-142
+story_points: 5
+custom:
+  customfield_10456:
+    value: Platform
+jired:
+  base_updated: 2026-08-16T14:03:00Z
+  base_version: 7
+  content_hash: "sha256:9f2c"
+  lossy: false
+"#;
+
+    #[test]
+    fn parses_the_documented_shape() {
+        let fm = Frontmatter::parse(SAMPLE).unwrap();
+        assert_eq!(fm.key, "PROJ-142");
+        assert_eq!(fm.id, "10023");
+        assert_eq!(fm.issue_type, "Story");
+        assert_eq!(fm.labels, ["auth", "backend"]);
+        assert_eq!(fm.story_points, Some(5.0));
+        assert_eq!(
+            fm.link_pairs(),
+            vec![
+                ("blocks".to_string(), "PROJ-150".to_string()),
+                ("relates to".to_string(), "PROJ-99".to_string())
+            ]
+        );
+        assert_eq!(fm.jired.base_version, Some(7));
+        assert!(!fm.jired.lossy);
+        assert_eq!(
+            fm.custom.get("customfield_10456"),
+            Some(&serde_json::json!({"value": "Platform"}))
+        );
+    }
+
+    #[test]
+    fn round_trips_through_yaml() {
+        let fm = Frontmatter::parse(SAMPLE).unwrap();
+        let back = Frontmatter::parse(&fm.to_yaml().unwrap()).unwrap();
+        assert_eq!(fm, back);
+    }
+
+    #[test]
+    fn unknown_keys_survive_a_round_trip() {
+        let yaml = format!("{SAMPLE}\nmy_extension: keep-me\n");
+        let fm = Frontmatter::parse(&yaml).unwrap();
+        assert_eq!(
+            fm.extra.get("my_extension"),
+            Some(&serde_json::json!("keep-me"))
+        );
+        assert!(fm.to_yaml().unwrap().contains("keep-me"));
+    }
+
+    #[test]
+    fn frontmatter_without_a_key_is_rejected() {
+        let err = Frontmatter::parse("id: \"1\"\njired: {}\n").unwrap_err();
+        assert_eq!(err.exit_code().as_i32(), 1);
+    }
+
+    #[test]
+    fn editability_classes_are_disjoint_and_complete() {
+        for f in EDITABLE {
+            assert!(!READ_ONLY.contains(f) && !IDENTITY.contains(f), "{f}");
+        }
+        for f in READ_ONLY {
+            assert!(!IDENTITY.contains(f), "{f}");
+        }
+        // Every editable field must be readable generically for merging.
+        let fm = Frontmatter::parse(SAMPLE).unwrap();
+        for f in EDITABLE {
+            assert!(fm.field(f).is_some(), "{f} is not comparable");
+        }
+    }
+
+    #[test]
+    fn mention_syntax_round_trips() {
+        let user = crate::api::UserRef {
+            id: "5b10a2".into(),
+            display_name: "Ilya A".into(),
+        };
+        let text = format_user(Some(&user)).unwrap();
+        assert_eq!(text, "@[Ilya A](5b10a2)");
+        assert_eq!(parse_user(&text).as_deref(), Some("5b10a2"));
+        // A hand-typed bare id must keep working.
+        assert_eq!(parse_user("5b10a2").as_deref(), Some("5b10a2"));
+        assert_eq!(parse_user("  "), None);
+    }
+}

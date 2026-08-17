@@ -1,0 +1,60 @@
+//! `jired whoami` [M1.13] — who the stored credentials authenticate as.
+
+use crate::cli::context::Context;
+use crate::cli::GlobalArgs;
+use crate::error::{ExitCode, Result};
+use crate::json::Out;
+use clap::Args;
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct WhoamiArgs {
+    /// Ask the server instead of reporting the cached identity
+    #[arg(long)]
+    pub refresh: bool,
+}
+
+#[derive(serde::Serialize)]
+pub struct WhoamiReport {
+    pub base_url: String,
+    pub deployment: String,
+    pub auth_kind: String,
+    pub identity: Option<String>,
+    pub display_name: Option<String>,
+    pub account_id: Option<String>,
+    pub secret_storage: String,
+}
+
+pub fn run(g: &GlobalArgs, args: &WhoamiArgs, out: Out) -> Result<ExitCode> {
+    let mut ctx = Context::open(g, out)?;
+    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
+    let account = session.require_account()?;
+
+    let (display_name, account_id) = if args.refresh {
+        let client = crate::api::build_client(&mut ctx, &account)?;
+        let me = crate::api::block_on(client.myself())?;
+        session.record_verification(account.id, &me)?;
+        (me.display_name, Some(me.account_id))
+    } else {
+        (account.display_name.clone(), account.account_id.clone())
+    };
+
+    let report = WhoamiReport {
+        base_url: account.base_url.clone(),
+        deployment: account.deployment.as_str().to_string(),
+        auth_kind: account.auth_kind.as_str().to_string(),
+        identity: account.identity.clone(),
+        display_name,
+        account_id,
+        secret_storage: account.secret_storage().to_string(),
+    };
+
+    out.say(format!(
+        "{} <{}> on {} ({})",
+        report.display_name.as_deref().unwrap_or("?"),
+        report.identity.as_deref().unwrap_or("?"),
+        report.base_url,
+        report.deployment
+    ));
+    out.emit("whoami", &report);
+    Ok(ExitCode::Success)
+}

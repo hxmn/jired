@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/pull/1",
+  "title": "jired pull result",
+  "type": "object",
+  "required": ["schema", "created", "updated", "deleted", "conflicts", "unchanged"],
+  "properties": {
+    "schema": { "const": "jired/pull/1" },
+    "strategy": { "type": "string", "enum": ["abort", "merge", "ours", "theirs"] },
+    "fetched": { "type": ["object", "null"] },
+    "created": { "$ref": "#/$defs/changeList" },
+    "updated": { "$ref": "#/$defs/changeList" },
+    "deleted": { "$ref": "#/$defs/changeList" },
+    "renamed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "from", "to"],
+        "properties": {
+          "key": { "type": "string" },
+          "from": { "type": "string" },
+          "to": { "type": "string" }
+        }
+      }
+    },
+    "unchanged": { "type": "integer", "minimum": 0 },
+    "conflicts": {
+      "type": "array",
+      "description": "Non-empty means nothing was written unless strategy is merge",
+      "items": {
+        "type": "object",
+        "required": ["key", "fields"],
+        "properties": {
+          "key": { "type": "string" },
+          "file": { "type": ["string", "null"] },
+          "fields": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "changeList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key"],
+        "properties": {
+          "key": { "type": "string" },
+          "file": { "type": ["string", "null"] },
+          "fields": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}
