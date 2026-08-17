@@ -19,6 +19,15 @@ pub struct StatusReport {
     pub conflicts: Vec<crate::store::state::ConflictRow>,
     pub staged_transitions: Vec<StagedTransition>,
     pub pending_ops: Vec<crate::store::state::PendingOp>,
+    pub warnings: Vec<Warning>,
+}
+
+/// Something in a file that will be ignored unless the user fixes it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Warning {
+    pub key: String,
+    pub file: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,6 +160,9 @@ impl StatusReport {
                 ));
             }
         }
+        for w in &self.warnings {
+            out.warn(format!("{}: {}", w.file, w.message));
+        }
         if self.is_clean() {
             out.say("\nnothing to push, no conflicts");
         }
@@ -175,6 +187,7 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
     let mut new_issues = Vec::new();
     let mut behind = Vec::new();
     let mut staged = Vec::new();
+    let mut warnings = Vec::new();
 
     for row in &rows {
         if row.key.starts_with("NEW-") {
@@ -198,6 +211,18 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
         let (Some(base), Some(file)) = (&row.base, files.get(&row.key)) else {
             continue;
         };
+        if let Ok(text) = engine.projector.read_raw(&file.relative) {
+            for heading in crate::doc::misplaced_comment_headings(&text) {
+                warnings.push(Warning {
+                    key: row.key.clone(),
+                    file: file.relative.clone(),
+                    message: format!(
+                        "`{heading}` is not under `## Comments`, so it will be ignored on push"
+                    ),
+                });
+            }
+        }
+
         let Some(hash) = engine.projector.hash_of(&file.relative) else {
             continue;
         };
@@ -277,6 +302,7 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
         conflicts: engine.state.conflicts()?,
         staged_transitions: staged,
         pending_ops: engine.state.pending_ops()?,
+        warnings,
     })
 }
 
@@ -323,6 +349,7 @@ mod tests {
             conflicts: vec![],
             staged_transitions: vec![],
             pending_ops: vec![],
+            warnings: vec![],
         };
         // Being behind the server is not "unclean": a pull fixes it and there
         // is nothing of the user's to lose.

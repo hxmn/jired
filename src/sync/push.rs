@@ -190,6 +190,15 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             continue;
         }
 
+        for heading in
+            crate::doc::misplaced_comment_headings(&engine.projector.read_raw(&file.relative)?)
+        {
+            ctx.out.warn(format!(
+                "{}: `{heading}` is not under `## Comments` and will not be pushed",
+                file.relative
+            ));
+        }
+
         let working = engine.projector.read(&file.relative)?;
         let base_issue = crate::api::normalize::issue_from_json(&base.raw, markup, &fields)?;
         let base_doc = render_issue(

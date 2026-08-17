@@ -9,3 +9,4 @@ cc eafa84a61267f5b5a60cf046d508824e099f137e893aca0ab70ea0d0e807afd5 # shrinks to
 cc f03d95a510b7af9137b7198866025cb95213388fe76f2631ca798aa27c8650a7 # shrinks to items = [TaskItem { checked: false, content: [Text("0")], id: None }], t = Table { header: Some([[Paragraph([Text("a")])]]), rows: [[[Paragraph([Link { text: [Text("PROJ-1")], href: "https://aa.example/" }])]]] }
 cc 67b3daa3fa97e495af0533dd13a72c45fa780a0cca9e15754d09e229ae6c700a # shrinks to doc = Document { blocks: [Paragraph([Emphasis([Link { text: [Text("| ~ 0")], href: "https://aa.example/" }])])] }
 cc dbac10c380ad126ecb12f9abc611a07b81a4727290d850c627b41902176a4515 # shrinks to doc = Document { blocks: [Paragraph([Text("|")])] }
+cc 014ce04cd8e9a19d790f54a163cf7a55c659a43eec50509fa7662f5f9105f1ce # shrinks to doc = Document { blocks: [OrderedList { start: 1, items: [ListItem { content: [Paragraph([Strong([Link { text: [Text("~ *")], href: "https://aa.example/" }])])] }] }] }

@@ -3,32 +3,88 @@
   "$id": "jired/status/1",
   "title": "jired status result",
   "type": "object",
-  "required": ["schema", "workspace", "dirty", "new_issues", "conflicts", "pending_ops"],
+  "required": [
+    "schema",
+    "workspace",
+    "dirty",
+    "new_issues",
+    "conflicts",
+    "pending_ops"
+  ],
   "properties": {
-    "schema": { "const": "jired/status/1" },
+    "schema": {
+      "const": "jired/status/1"
+    },
     "workspace": {
       "type": "object",
-      "required": ["root"],
+      "required": [
+        "root"
+      ],
       "properties": {
-        "root": { "type": "string" },
-        "project": { "type": ["string", "null"] },
-        "base_url": { "type": ["string", "null"] },
-        "deployment": { "type": ["string", "null"] },
-        "issues": { "type": "integer" },
-        "last_fetch_at": { "type": ["string", "null"], "format": "date-time" },
-        "last_fetch_age_seconds": { "type": ["integer", "null"] }
+        "root": {
+          "type": "string"
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deployment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issues": {
+          "type": "integer"
+        },
+        "last_fetch_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "last_fetch_age_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
       }
     },
     "dirty": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "file", "fields"],
+        "required": [
+          "key",
+          "file",
+          "fields"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "file": { "type": "string" },
-          "fields": { "type": "array", "items": { "type": "string" } },
-          "lossy_touched": { "type": "boolean" }
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lossy_touched": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -36,28 +92,54 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "file"],
+        "required": [
+          "key",
+          "file"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "file": { "type": "string" },
-          "summary": { "type": ["string", "null"] }
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       }
     },
     "behind": {
       "type": "array",
       "description": "Issues whose fetched remote snapshot is ahead of base",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "conflicts": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "field"],
+        "required": [
+          "key",
+          "field"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "field": { "type": "string" },
-          "resolved": { "type": ["string", "null"] }
+          "key": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       }
     },
@@ -65,12 +147,31 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "to"],
+        "required": [
+          "key",
+          "to"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "from": { "type": ["string", "null"] },
-          "to": { "type": "string" },
-          "origin": { "type": "string", "enum": ["frontmatter", "board-move", "checklist"] }
+          "key": {
+            "type": "string"
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "frontmatter",
+              "board-move",
+              "checklist"
+            ]
+          }
         }
       }
     },
@@ -78,12 +179,55 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "kind", "status"],
+        "required": [
+          "key",
+          "kind",
+          "status"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "kind": { "type": "string" },
-          "status": { "type": "string", "enum": ["pending", "done", "failed"] },
-          "error": { "type": ["string", "null"] }
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "done",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Content that will be ignored unless the file is corrected",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "message"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
         }
       }
     }

@@ -608,10 +608,11 @@ fn unescape(text: &str) -> String {
 /// `[~user]`, `[text|href]`, `[href]` — the three bracket forms we understand.
 fn parse_bracket(content: &str, store: &mut RawStore) -> Inline {
     if let Some(user) = content.strip_prefix('~') {
-        let user = user.trim();
+        // Wiki markup has nowhere to put a display name, so the id is both.
+        let user = unescape(user.trim());
         return Inline::Mention {
-            id: user.to_string(),
-            display: user.to_string(),
+            id: user.clone(),
+            display: user,
         };
     }
     match split_unescaped(content) {
@@ -841,6 +842,13 @@ fn escape_text(text: &str) -> String {
     out
 }
 
+fn is_representable_user(user: &str) -> bool {
+    !user.is_empty()
+        && !user.chars().any(|c| {
+            c.is_whitespace() || matches!(c, '[' | ']' | '|' | '*' | '_' | '-' | '{' | '}' | '\\')
+        })
+}
+
 fn push_mark(out: &mut String, delimiter: char, content: &[Inline], store: &RawStore) {
     let inner = render_inlines(content, store);
     if inner.is_empty() {
@@ -883,7 +891,12 @@ fn render_inlines(inlines: &[Inline], store: &RawStore) -> String {
             }
             Inline::Link { text, href } => {
                 let label = render_inlines(text, store);
-                let label = escape_in_brackets(&label);
+                let mut label = escape_in_brackets(&label);
+                // `[~name]` is mention syntax, so a label starting with `~`
+                // has to be escaped or the link comes back as a mention.
+                if label.starts_with('~') {
+                    label.insert(0, '\\');
+                }
                 if href.is_empty() {
                     // `[]` and `[label]` with no target are not links in wiki
                     // markup; emitting them would re-parse as plain text and
@@ -897,6 +910,15 @@ fn render_inlines(inlines: &[Inline], store: &RawStore) -> String {
             }
             Inline::Mention { id, display } => {
                 let user = if id.is_empty() { display } else { id };
+                // `[~name]` has no way to quote markup characters: a `*` in the
+                // name would close the surrounding mark before the bracket ends.
+                // Real Jira usernames never contain them, so an unrepresentable
+                // one degrades to text rather than corrupting the line.
+                if !is_representable_user(user) {
+                    out.push_str(&escape_text(&format!("@{user}")));
+                    continue;
+                }
+                let user = &escape_in_brackets(user);
                 out.push_str(&format!("[~{user}]"));
             }
             Inline::IssueKey(k) => out.push_str(k),
@@ -986,6 +1008,34 @@ mod escaping_tests {
             );
             assert_eq!(ast_of(&rendered), doc);
         }
+    }
+
+    /// Found by the property suite: these labels collide with other syntax.
+    #[test]
+    fn link_labels_that_look_like_other_syntax_still_round_trip() {
+        for label in ["~", "~user", "a | b", "a ] b"] {
+            let doc = Document::new(vec![Block::Paragraph(vec![Inline::Link {
+                text: vec![Inline::Text(label.into())],
+                href: "https://x.example/".into(),
+            }])]);
+            let store = RawStore::new();
+            let text = from_ast(&doc, &store);
+            assert_eq!(ast_of(&text), doc, "label {label:?} rendered as {text:?}");
+        }
+    }
+
+    /// A username containing markup cannot be spelled as `[~name]` at all.
+    #[test]
+    fn an_unrepresentable_mention_degrades_to_text() {
+        let doc = Document::new(vec![Block::Paragraph(vec![Inline::Mention {
+            id: "a|b".into(),
+            display: "a|b".into(),
+        }])]);
+        let store = RawStore::new();
+        let text = from_ast(&doc, &store);
+        assert_eq!(text, "@a|b");
+        // And that form is stable rather than flipping back and forth.
+        assert_eq!(ast_of(&text), ast_of(&from_ast(&ast_of(&text), &store)));
     }
 
     #[test]

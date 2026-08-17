@@ -197,6 +197,32 @@ impl IssueDoc {
     }
 }
 
+/// Comment headings that sit outside `## Comments` and will therefore be
+/// ignored on push.
+///
+/// Appending `### [new]` to the end of the file is a natural thing for an agent
+/// to do, and it lands in `## Attachments` instead of `## Comments`. Silently
+/// dropping the comment is the worst outcome, so callers surface this.
+pub fn misplaced_comment_headings(text: &str) -> Vec<String> {
+    let Ok((_, body)) = split_frontmatter(text) else {
+        return Vec::new();
+    };
+    let mut section = String::new();
+    let mut out = Vec::new();
+    for line in ScanLines::new(&body) {
+        match line {
+            Scanned::Heading { level: 2, text, .. } => section = text.to_string(),
+            Scanned::Heading { level: 3, text, .. }
+                if section != SECTION_COMMENTS && text.trim_start().starts_with('[') =>
+            {
+                out.push(format!("### {text}"));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Split `---` delimited frontmatter from the body.
 pub fn split_frontmatter(text: &str) -> Result<(String, String)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -546,6 +572,19 @@ mod tests {
         let err = IssueDoc::parse(&s).unwrap_err();
         assert!(err.message.contains("[id]"), "{}", err.message);
         assert!(err.hint.is_some());
+    }
+
+    #[test]
+    fn a_comment_heading_outside_the_comments_section_is_reported() {
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Comments\n\n### [c-1] A — t\n\nbody\n\n");
+        s.push_str("## Attachments\n\n### [new]\n\nappended in the wrong place\n");
+
+        assert_eq!(misplaced_comment_headings(&s), vec!["### [new]"]);
+
+        // A correctly placed one is not reported.
+        let good = s.replace("## Attachments\n\n### [new]", "## Attachments");
+        assert!(misplaced_comment_headings(&good).is_empty());
     }
 
     #[test]
