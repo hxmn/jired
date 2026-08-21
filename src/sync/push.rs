@@ -35,7 +35,40 @@ pub struct IssueResult {
     pub new_key: Option<String>,
     pub error: Option<String>,
     pub error_kind: Option<String>,
+    /// What to do about `error`; dropping it left the user with a bare failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     pub ops: Vec<OpReport>,
+}
+
+impl IssueResult {
+    /// A failure for one issue, carrying everything the error knew.
+    ///
+    /// Built rather than propagated: one issue that cannot be pushed must not
+    /// discard the report of the issues that already went out.
+    fn failed(key: &str, e: &JiredError) -> Self {
+        Self {
+            key: key.to_string(),
+            ok: false,
+            new_key: None,
+            error: Some(e.message.clone()),
+            error_kind: Some(e.kind.as_str().to_string()),
+            hint: e.hint.clone(),
+            ops: vec![],
+        }
+    }
+
+    fn ok(key: &str, ops: Vec<OpReport>) -> Self {
+        Self {
+            key: key.to_string(),
+            ok: true,
+            new_key: None,
+            error: None,
+            error_kind: None,
+            hint: None,
+            ops,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,51 +85,95 @@ impl PushReport {
         if !self.stale.is_empty() {
             return ExitCode::Conflict;
         }
-        if self.results.iter().any(|r| !r.ok) {
-            return ExitCode::Generic;
+        let kinds: std::collections::BTreeSet<&str> = self
+            .results
+            .iter()
+            .filter(|r| !r.ok)
+            .filter_map(|r| r.error_kind.as_deref())
+            .collect();
+        match kinds.len() {
+            0 => ExitCode::Success,
+            // One kind of failure gets its own exit code: an auth problem and a
+            // lossy block are different situations, and collapsing both to 1
+            // defeats the exit-code contract agents rely on.
+            1 => match *kinds.iter().next().expect("checked") {
+                "auth" => ExitCode::Auth,
+                "network" => ExitCode::Network,
+                "lossy" => ExitCode::LossyBlocked,
+                "usage" => ExitCode::Usage,
+                "conflict" => ExitCode::Conflict,
+                "locked" => ExitCode::Locked,
+                "corrupt_state" => ExitCode::CorruptState,
+                "unsupported_server" => ExitCode::UnsupportedServer,
+                "missing_value" => ExitCode::MissingValue,
+                _ => ExitCode::Generic,
+            },
+            // Mixed causes have no single right code.
+            _ => ExitCode::Generic,
         }
-        ExitCode::Success
     }
 
-    pub fn render(&self, out: Out) {
-        if self.results.is_empty() {
-            out.say("nothing to push");
-            for w in &self.warnings {
-                out.warn(w);
-            }
-            return;
-        }
+    /// The lines `--dry-run` and the pre-push confirmation share.
+    pub fn plan_lines(&self, include_requests: bool) -> Vec<String> {
+        use crate::style::{self, CYAN, DIM, GREEN, RED};
+        let mut lines = Vec::new();
         for r in &self.results {
             let head = match (&r.new_key, r.ok) {
                 (Some(k), _) => format!("{} → {k}", r.key),
                 (None, true) => r.key.clone(),
                 (None, false) => format!("{} (failed)", r.key),
             };
-            out.say(format!("── {head}"));
+            lines.push(format!("── {}", style::out(CYAN, head)));
             for op in &r.ops {
-                out.say(format!(
+                let mark = match op.status {
+                    "planned" => String::new(),
+                    "done" => style::out(GREEN, "  ✓"),
+                    "skipped" => style::out(DIM, "  (skipped)"),
+                    _ => style::out(RED, "  ✗"),
+                };
+                lines.push(format!(
                     "   {:<20} {}{}",
                     op.kind,
                     op.summary.as_deref().unwrap_or(""),
-                    match op.status {
-                        "planned" => "",
-                        "done" => "  ✓",
-                        "skipped" => "  (skipped)",
-                        _ => "  ✗",
-                    }
+                    mark
                 ));
-                if self.dry_run {
+                if include_requests {
                     if let Some(req) = &op.request {
-                        out.say(format!("     {}", compact(req)));
+                        lines.push(format!("     {}", style::out(DIM, compact(req))));
                     }
                 }
                 if let Some(e) = &op.error {
-                    out.say(format!("     error: {e}"));
+                    lines.push(format!("     {} {e}", style::out(RED, "error:")));
                 }
             }
             if let Some(e) = &r.error {
-                out.say(format!("   error: {e}"));
+                lines.push(format!("   {} {e}", style::out(RED, "error:")));
             }
+            // The hint is the actionable half of a failure; the report used to
+            // keep only the message and throw this away.
+            if let Some(h) = &r.hint {
+                lines.push(format!("   {} {h}", style::out(DIM, "hint:")));
+            }
+        }
+        lines
+    }
+
+    /// Total operations across every issue, for the confirmation prompt.
+    pub fn op_count(&self) -> usize {
+        self.results.iter().map(|r| r.ops.len()).sum()
+    }
+
+    pub fn render(&self, out: Out) {
+        if self.results.is_empty() {
+            out.say("nothing to push");
+            out.hint("use \"jired status\" to see what jired thinks has changed");
+            for w in &self.warnings {
+                out.warn(w);
+            }
+            return;
+        }
+        for line in self.plan_lines(self.dry_run) {
+            out.say(line);
         }
         if !self.stale.is_empty() {
             out.say(format!(
@@ -104,21 +181,38 @@ impl PushReport {
                 self.stale.len(),
                 self.stale.join(", ")
             ));
-            out.say("run `jired pull` first, or push with --force to overwrite");
+            out.hint("use \"jired pull\" first, or \"jired push --force\" to overwrite");
         }
         for w in &self.warnings {
             out.warn(w);
         }
         if self.dry_run {
             out.say("\ndry run — nothing was sent");
+            return;
+        }
+
+        // A count is the one thing a partial failure has to say plainly.
+        let failed = self.results.iter().filter(|r| !r.ok).count();
+        let total = self.results.len();
+        out.say(match failed {
+            0 => format!("\npushed {total} issue(s)"),
+            n if n == total => format!("\n{n} issue(s) failed, none pushed"),
+            n => format!("\npushed {} of {total} issue(s), {n} failed", total - n),
+        });
+        if failed > 0 {
+            out.hint("fix the causes above, then \"jired push --resume\"");
         }
     }
 }
 
+/// Truncate a request body for display.
+///
+/// Counting characters rather than bytes: a summary with an accent in it is the
+/// common case, and `&s[..240]` would panic on the byte boundary.
 fn compact(v: &Value) -> String {
     let s = v.to_string();
-    if s.len() > 240 {
-        format!("{}…", &s[..240])
+    if s.chars().count() > 240 {
+        format!("{}…", s.chars().take(240).collect::<String>())
     } else {
         s
     }
@@ -249,14 +343,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 }
                 report.results.push(result);
             }
-            Err(e) => report.results.push(IssueResult {
-                key: row.key.clone(),
-                ok: false,
-                new_key: None,
-                error: Some(e.message.clone()),
-                error_kind: Some(e.kind.as_str().to_string()),
-                ops: vec![],
-            }),
+            Err(e) => report.results.push(IssueResult::failed(&row.key, &e)),
         }
     }
 
@@ -303,80 +390,99 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             continue;
         }
 
-        for heading in
-            crate::doc::misplaced_comment_headings(&engine.projector.read_raw(&file.relative)?)
-        {
-            ctx.out.warn(format!(
-                "{}: `{heading}` is not under `## Comments` and will not be pushed",
-                file.relative
-            ));
+        match engine.projector.read_raw(&file.relative) {
+            Ok(text) => {
+                for heading in crate::doc::misplaced_comment_headings(&text) {
+                    ctx.out.warn(format!(
+                        "{}: `{heading}` is not under `## Comments` and will not be pushed",
+                        file.relative
+                    ));
+                }
+            }
+            Err(e) => {
+                report.results.push(IssueResult::failed(&row.key, &e));
+                continue;
+            }
         }
 
-        let working = engine.projector.read(&file.relative)?;
-        let base_issue = crate::api::normalize::issue_from_json(&base.raw, markup, &fields)?;
-        let base_doc = render_issue(
-            &base_issue,
-            &RenderContext {
+        // Everything from here to the API call can fail for *this* issue. Each
+        // failure becomes a result and the loop goes on: `commands.md` promises
+        // that one bad issue does not stop the others, and a `?` here would
+        // throw away the report of everything already pushed.
+        // Everything from here to the API call can fail for *this* issue. Each
+        // failure becomes a result and the loop goes on: `commands.md` promises
+        // that one bad issue does not stop the others, and a `?` here would
+        // throw away the report of everything already pushed.
+        let prepared = (|| -> Result<Vec<Op>> {
+            let working = engine.projector.read(&file.relative)?;
+            let base_issue = crate::api::normalize::issue_from_json(&base.raw, markup, &fields)?;
+            let base_doc = render_issue(
+                &base_issue,
+                &RenderContext {
+                    markup,
+                    base_url: &base_url,
+                    ignored_custom: &fields.ignored,
+                },
+            )?
+            .doc;
+
+            // A read-only region that was edited must stop this issue before any
+            // call is made, or the original markup would be silently discarded.
+            let raw = engine.state.raw_blocks(&row.key, "description")?;
+            let edited = convert::edited_regions(&working.description, &raw);
+            if !edited.is_empty() && !args.allow_lossy {
+                let labels: Vec<&str> = raw
+                    .iter()
+                    .filter(|b| edited.contains(&b.id))
+                    .map(|b| b.label.as_str())
+                    .collect();
+                return Err(JiredError::lossy(format!(
+                    "{}: a read-only region was edited and cannot be converted back",
+                    row.key
+                ))
+                .with_detail("issue", row.key.clone())
+                .with_detail("regions", json!(edited))
+                .with_detail("node_types", json!(labels))
+                .with_hint(
+                    "restore the region, or pass --allow-lossy to replace it with plain Markdown",
+                ));
+            }
+
+            plan(
+                &base_doc,
+                &working,
+                &base.raw,
+                &field_meta,
+                &fields.ignored,
+                fields.story_points.as_deref(),
+                &sprints,
                 markup,
-                base_url: &base_url,
-                ignored_custom: &fields.ignored,
-            },
-        )?
-        .doc;
+                &raw,
+                &engine,
+                args,
+                &attachment_dir,
+                max_upload,
+                done_transition.as_deref(),
+                moved.map(String::as_str),
+                &mut report.warnings,
+            )
+        })();
 
-        // A read-only region that was edited must stop this issue before any
-        // call is made, or the original markup would be silently discarded.
-        let raw = engine.state.raw_blocks(&row.key, "description")?;
-        let edited = convert::edited_regions(&working.description, &raw);
-        if !edited.is_empty() && !args.allow_lossy {
-            let labels: Vec<&str> = raw
-                .iter()
-                .filter(|b| edited.contains(&b.id))
-                .map(|b| b.label.as_str())
-                .collect();
-            return Err(JiredError::lossy(format!(
-                "{}: a read-only region was edited and cannot be converted back",
-                row.key
-            ))
-            .with_detail("issue", row.key.clone())
-            .with_detail("regions", json!(edited))
-            .with_detail("node_types", json!(labels))
-            .with_hint(
-                "restore the region, or pass --allow-lossy to replace it with plain Markdown",
-            ));
-        }
-
-        let ops = plan(
-            &base_doc,
-            &working,
-            &base.raw,
-            &field_meta,
-            &fields.ignored,
-            fields.story_points.as_deref(),
-            &sprints,
-            markup,
-            &raw,
-            &engine,
-            args,
-            &attachment_dir,
-            max_upload,
-            done_transition.as_deref(),
-            moved.map(String::as_str),
-            &mut report.warnings,
-        )?;
+        let ops = match prepared {
+            Ok(ops) => ops,
+            Err(e) => {
+                report.results.push(IssueResult::failed(&row.key, &e));
+                continue;
+            }
+        };
         if ops.is_empty() {
             continue;
         }
 
         if args.dry_run {
-            report.results.push(IssueResult {
-                key: row.key.clone(),
-                ok: true,
-                new_key: None,
-                error: None,
-                error_kind: None,
-                ops: ops
-                    .iter()
+            report.results.push(IssueResult::ok(
+                &row.key,
+                ops.iter()
                     .map(|o| OpReport {
                         kind: o.kind,
                         status: "planned",
@@ -385,7 +491,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                         error: None,
                     })
                     .collect(),
-            });
+            ));
             continue;
         }
 
@@ -407,14 +513,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 }
                 report.results.push(result);
             }
-            Err(e) => report.results.push(IssueResult {
-                key: row.key.clone(),
-                ok: false,
-                new_key: None,
-                error: Some(e.message.clone()),
-                error_kind: Some(e.kind.as_str().to_string()),
-                ops: vec![],
-            }),
+            Err(e) => report.results.push(IssueResult::failed(&row.key, &e)),
         }
     }
 
@@ -494,6 +593,7 @@ fn create_issue(
             new_key: None,
             error: None,
             error_kind: None,
+            hint: None,
             ops: vec![OpReport {
                 kind: "create_issue",
                 status: "planned",
@@ -520,6 +620,7 @@ fn create_issue(
                 new_key: None,
                 error: Some(e.message.clone()),
                 error_kind: Some(e.kind.as_str().to_string()),
+                hint: e.hint.clone(),
                 ops: vec![OpReport {
                     kind: "create_issue",
                     status: "failed",
@@ -567,6 +668,7 @@ fn create_issue(
         new_key: Some(new_key),
         error: None,
         error_kind: None,
+        hint: None,
         ops: vec![OpReport {
             kind: "create_issue",
             status: "done",
@@ -998,11 +1100,15 @@ fn plan(
         if !args.allow_comment_delete {
             // Silently deleting on the server is the one mistake that cannot be
             // undone from the working copy, so it needs an explicit opt-in.
-            tracing::warn!(
-                "{}: comment c-{id} was removed from the file; pass \
-                 --allow-comment-delete to delete it on the server",
+            //
+            // Reported as a push warning rather than a log line: at the default
+            // verbosity `tracing::warn!` is easy to miss, and the JSON report
+            // never carried it at all.
+            warnings.push(format!(
+                "{}: comment c-{id} was removed from the file but left on the \
+                 server; pass --allow-comment-delete to delete it too",
                 base.frontmatter.key
-            );
+            ));
             continue;
         }
         ops.push(Op {
@@ -1053,6 +1159,9 @@ fn execute(
                     crate::api::model::format_timestamp(base_updated)
                 )),
                 error_kind: Some("conflict".into()),
+                hint: Some(
+                    "run `jired pull` to take the server's changes, or `jired push --force`".into(),
+                ),
                 ops: ops
                     .iter()
                     .map(|o| OpReport {
@@ -1116,6 +1225,7 @@ fn execute(
             new_key: None,
             error: Some(e.message.clone()),
             error_kind: Some(e.kind.as_str().to_string()),
+            hint: e.hint.clone(),
             ops: reports,
         });
     }
@@ -1131,6 +1241,7 @@ fn execute(
         new_key: None,
         error: None,
         error_kind: None,
+        hint: None,
         ops: reports,
     })
 }
@@ -1299,18 +1410,42 @@ mod tests {
 
         let failed = PushReport {
             dry_run: false,
-            results: vec![IssueResult {
-                key: "PROJ-1".into(),
-                ok: false,
-                new_key: None,
-                error: Some("boom".into()),
-                error_kind: Some("generic".into()),
-                ops: vec![],
-            }],
+            results: vec![IssueResult::failed("PROJ-1", &JiredError::generic("boom"))],
             stale: vec![],
             warnings: vec![],
         };
         assert_eq!(failed.exit_code(), ExitCode::Generic);
+
+        // A single kind of failure keeps its own exit code, so a script can
+        // tell "the token expired" from "the conversion was lossy".
+        let auth = PushReport {
+            dry_run: false,
+            results: vec![IssueResult::failed("PROJ-1", &JiredError::auth("no"))],
+            stale: vec![],
+            warnings: vec![],
+        };
+        assert_eq!(auth.exit_code(), ExitCode::Auth);
+
+        // Mixed causes have no single right answer, so they stay generic.
+        let mixed = PushReport {
+            dry_run: false,
+            results: vec![
+                IssueResult::failed("PROJ-1", &JiredError::auth("no")),
+                IssueResult::failed("PROJ-2", &JiredError::lossy("no")),
+            ],
+            stale: vec![],
+            warnings: vec![],
+        };
+        assert_eq!(mixed.exit_code(), ExitCode::Generic);
+    }
+
+    /// A summary with an accent used to panic the whole command: `&s[..240]`
+    /// slices bytes, and 240 need not be a character boundary.
+    #[test]
+    fn compact_never_splits_a_multibyte_character() {
+        let long: String = "é".repeat(400);
+        let text = compact(&json!({ "summary": long }));
+        assert!(text.ends_with('…'));
     }
 
     #[test]

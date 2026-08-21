@@ -78,6 +78,9 @@ pub struct Ui {
     interactive: bool,
     decorate: bool,
     color: bool,
+    /// `--yes`: confirmations are answered for us. Questions with real content
+    /// (which project? which token?) still get asked.
+    assume_yes: bool,
 }
 
 const RESET: &str = "\x1b[0m";
@@ -90,16 +93,21 @@ const CYAN: &str = "\x1b[36m";
 
 impl Ui {
     pub fn new(interactive: bool, decorate: bool) -> Self {
-        use is_terminal::IsTerminal;
-        let color = decorate
-            && std::io::stderr().is_terminal()
-            && std::env::var_os("NO_COLOR").is_none()
-            && std::env::var("TERM").as_deref() != Ok("dumb");
+        // Colour is a per-stream decision made once at startup; this asks the
+        // same authority the reports do, so `--color` governs the wizard too.
+        let color = decorate && crate::style::stderr_color();
         Self {
             interactive,
             decorate,
             color,
+            assume_yes: false,
         }
+    }
+
+    /// Answer every yes/no question with yes, for `--yes`.
+    pub fn assume_yes(mut self, yes: bool) -> Self {
+        self.assume_yes = yes;
+        self
     }
 
     pub fn interactive(&self) -> bool {
@@ -264,28 +272,44 @@ impl Ui {
     }
 
     /// Ask a yes/no question with an explicit default.
+    ///
+    /// An unrecognized answer re-asks rather than silently taking the default:
+    /// somebody who typed "maybe" has not agreed to anything.
     pub fn confirm(&self, question: &str, default_yes: bool) -> Result<bool> {
+        if self.assume_yes {
+            return Ok(true);
+        }
+        self.confirm_deliberate(question, default_yes)
+    }
+
+    /// A confirmation `--yes` does not answer, for decisions that need a person.
+    pub fn confirm_deliberate(&self, question: &str, default_yes: bool) -> Result<bool> {
         if !self.interactive {
             return Ok(default_yes);
         }
         let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
         self.emit("");
-        let mut err = std::io::stderr();
-        write!(
-            err,
-            "{} {} {} ",
-            self.paint(CYAN, ">"),
-            question,
-            self.paint(DIM, hint)
-        )?;
-        err.flush()?;
-        let mut buf = String::new();
-        std::io::stdin().lock().read_line(&mut buf)?;
-        Ok(match buf.trim().to_ascii_lowercase().as_str() {
-            "y" | "yes" => true,
-            "n" | "no" => false,
-            _ => default_yes,
-        })
+        loop {
+            let mut err = std::io::stderr();
+            write!(
+                err,
+                "{} {} {} ",
+                self.paint(CYAN, ">"),
+                question,
+                self.paint(DIM, hint)
+            )?;
+            err.flush()?;
+            let mut buf = String::new();
+            if std::io::stdin().lock().read_line(&mut buf)? == 0 {
+                return Ok(default_yes);
+            }
+            match buf.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" => return Ok(true),
+                "n" | "no" => return Ok(false),
+                "" => return Ok(default_yes),
+                _ => self.emit(format!("  {}", self.paint(DIM, "please answer y or n"))),
+            }
+        }
     }
 
     /// Offer a short numbered menu and return the chosen index.

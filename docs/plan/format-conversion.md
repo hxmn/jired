@@ -29,7 +29,7 @@
 Login fails when SSO is enabled. See PROJ-99 for background.
 
 <!--jired:raw:r1a2b3-->
-> ⚠️ **[jired: Jira panel (warning) — read-only. Edit in Jira or delete whole block with --allow-lossy]**
+> ⚠️ **[jired: Jira panel (warning) — read-only]**
 > Do not deploy before the cert rotation.
 <!--/jired:raw:r1a2b3-->
 
@@ -84,7 +84,13 @@ issue links.
 Any node with no faithful Markdown form (panel, expand, media, layout, macro,
 unknown) is stored **verbatim** in `state.db.raw_block` and rendered between
 `<!--jired:raw:ID-->` … `<!--/jired:raw:ID-->` markers containing an approximate,
-read-only rendering.
+read-only rendering. The rendering opens with a label naming the node and its
+read-only status — `**[jired: Jira panel (warning) — read-only]**`,
+`**[jired: media login-trace.png — read-only]**`, `**[jired: <type> — read-only]**`
+for anything unrecognised (`src/convert/adf.rs`); wiki markup uses the same shape
+with the panel's own title, `**[jired: Jira panel "Warning" — read-only]**`
+(`src/convert/wiki.rs`). What to do about it belongs in the error message, not in
+every block.
 
 - On push, the region is reassembled **from `raw_block.node_json`, never from the
   file text** — an untouched region pushes back byte-identical *by construction*.

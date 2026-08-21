@@ -64,7 +64,7 @@ pub fn run_with(
     }
 
     // Boards and sprints drive the grouping folders; caching them here is what
-    // lets `clean --regroup` rebuild without a network round trip.
+    // lets `doctor --regroup` rebuild without a network round trip.
     if let Some(project) = ctx.resolver.get_quiet("workspace.project")? {
         if let Err(e) = cache_agile(engine, client, &project) {
             tracing::debug!("agile metadata unavailable: {}", e.message);
@@ -78,8 +78,11 @@ pub fn run_with(
     let jql = build_jql(ctx, args, since.as_ref())?;
     tracing::debug!(%jql, "searching");
 
-    let scope_is_whole_project = args.issues.is_empty() && args.jql.is_none();
+    let scope_is_whole_project = args.wanted_issues().is_empty() && args.jql.is_none();
 
+    // A first fetch of a few hundred issues is several round trips; without
+    // this it looks like a hang.
+    let progress = crate::sync::progress::Progress::spinner(ctx.out, "searching");
     let issues = crate::api::block_on(search_all(
         client,
         SearchQuery {
@@ -90,20 +93,22 @@ pub fn run_with(
             expand_changelog: false,
         },
         |page| {
-            tracing::debug!(
-                "page: {} of {} issues",
-                page.start_at + page.issues.len(),
-                page.total
-            );
+            let seen = page.start_at + page.issues.len();
+            tracing::debug!("page: {} of {} issues", seen, page.total);
+            progress.set_message(format!("fetched {seen} of {} issue(s)", page.total));
         },
     ))?;
+    progress.finish();
 
+    let storing = crate::sync::progress::Progress::bar(ctx.out, issues.len(), "storing");
     let mut changed_keys = Vec::new();
     for issue in &issues {
         if engine.state.upsert_remote(issue)? {
             changed_keys.push(issue.key.clone());
         }
+        storing.inc();
     }
+    storing.finish();
     changed_keys.sort();
 
     // Only a full-scope fetch can tell "gone" from "outside this query".
@@ -176,14 +181,9 @@ pub fn build_jql(
 ) -> Result<String> {
     let mut clauses: Vec<String> = Vec::new();
 
-    if !args.issues.is_empty() {
-        let keys: Vec<String> = args
-            .issues
-            .iter()
-            .map(|k| crate::project::naming::key_from_input(k))
-            .filter(|k| !k.is_empty())
-            .collect();
-        clauses.push(format!("key in ({})", keys.join(", ")));
+    let named = args.wanted_issues();
+    if !named.is_empty() {
+        clauses.push(format!("key in ({})", named.join(", ")));
     } else if let Some(jql) = &args.jql {
         clauses.push(format!("({jql})"));
     } else {

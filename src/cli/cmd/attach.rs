@@ -11,13 +11,17 @@ use std::path::PathBuf;
 
 #[derive(Args, Debug, Clone)]
 pub struct AttachArgs {
+    /// Issue to attach to: a key, or the path to its file
     pub issue: String,
     /// Files to stage for upload
-    #[arg(required = true)]
+    #[arg(required = true, value_hint = clap::ValueHint::FilePath)]
     pub files: Vec<PathBuf>,
     /// Upload immediately instead of leaving the files staged
     #[arg(long)]
     pub push: bool,
+    /// With --push, show the API call without sending it
+    #[arg(long, requires = "push")]
+    pub dry_run: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -30,15 +34,18 @@ pub enum AttachmentsCmd {
 
 #[derive(Args, Debug, Clone)]
 pub struct AttachmentsPullArgs {
-    /// Issues to download for (default: all)
+    /// Issues to download for: keys or file paths (default: all)
+    #[arg(value_delimiter = ',')]
     pub issues: Vec<String>,
-    /// Skip attachments larger than this many bytes
+    /// Skip attachments larger than this many bytes (default: no limit)
     #[arg(long)]
     pub max_size: Option<u64>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct AttachmentsListArgs {
+    /// Issues to list for: keys or file paths (default: all)
+    #[arg(value_delimiter = ',')]
     pub issues: Vec<String>,
 }
 
@@ -80,7 +87,9 @@ pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
     }
 
     let pushed = if args.push {
-        Some(crate::cli::cmd::edit::push_one(&mut ctx, &key)?)
+        let report = crate::cli::cmd::edit::push_one(&mut ctx, &key, args.dry_run)?;
+        crate::cli::cmd::edit::report_push(&report, out);
+        Some(report)
     } else {
         out.say("run `jired push` to upload");
         None
@@ -162,6 +171,9 @@ fn pull(g: &GlobalArgs, args: &AttachmentsPullArgs, out: Out) -> Result<ExitCode
         .iter()
         .map(|k| crate::project::naming::key_from_input(k))
         .collect();
+    // No ceiling by default. `attachments.auto_download_max` governs what a
+    // *pull* grabs eagerly; asking for attachments by name is an explicit
+    // request, and silently skipping the big ones is the opposite of the answer.
     let max = args.max_size.unwrap_or(u64::MAX);
 
     let mut downloaded = Vec::new();

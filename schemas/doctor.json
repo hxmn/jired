@@ -61,6 +61,10 @@
                 }
               }
             }
+          },
+          "regrouped": {
+            "type": "object",
+            "description": "What a --regroup rebuild produced; present only on the `groups` check"
           }
         }
       }

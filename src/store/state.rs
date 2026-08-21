@@ -328,7 +328,9 @@ impl StateStore {
         if changed == 0 {
             return Err(JiredError::corrupt(format!(
                 "cannot advance base for unknown issue {key}"
-            )));
+            ))
+            .with_detail("issue", key)
+            .with_hint(crate::store::recovery_hint("state.db")));
         }
         self.conn.execute(
             "UPDATE comment SET base_body = remote_body, base_updated = remote_updated
@@ -923,6 +925,70 @@ impl StateStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// Remember an issue's transitions so `jired transition` still knows the
+    /// workflow when the network is unreachable.
+    pub fn cache_transitions(
+        &self,
+        issue_key: &str,
+        transitions: &[crate::api::Transition],
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM transition_cache WHERE issue_key = ?1",
+            [issue_key],
+        )?;
+        let now = crate::api::model::format_timestamp(&chrono::Utc::now());
+        for t in transitions {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO transition_cache
+                 (issue_key, tid, name, to_status, required_fields, fetched_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    issue_key,
+                    t.id,
+                    t.name,
+                    t.to_status,
+                    serde_json::to_string(&t.required_fields)?,
+                    now,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The last known transitions for an issue, and when they were fetched.
+    pub fn cached_transitions(
+        &self,
+        issue_key: &str,
+    ) -> Result<Option<(Vec<crate::api::Transition>, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT tid, name, to_status, required_fields, fetched_at
+             FROM transition_cache WHERE issue_key = ?1 ORDER BY tid",
+        )?;
+        let rows = stmt.query_map([issue_key], |r| {
+            let required: String = r.get(3).unwrap_or_default();
+            Ok((
+                crate::api::Transition {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    to_status: r.get(2)?,
+                    to_status_id: None,
+                    required_fields: serde_json::from_str(&required).unwrap_or_default(),
+                },
+                r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            ))
+        })?;
+        let collected: Vec<(crate::api::Transition, String)> =
+            rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        if collected.is_empty() {
+            return Ok(None);
+        }
+        let fetched = collected[0].1.clone();
+        Ok(Some((
+            collected.into_iter().map(|(t, _)| t).collect(),
+            fetched,
+        )))
+    }
+
     pub fn clear_conflicts(&self, issue_key: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM conflict WHERE issue_key = ?1", [issue_key])?;
@@ -947,6 +1013,9 @@ const ISSUE_SELECT_ALL: &str = "SELECT key, id, base_raw, base_updated, base_des
      FROM issue";
 
 fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
+    // Read first: a message about a corrupt row is close to useless without the
+    // key of the row it is about.
+    let key: String = r.get(0)?;
     let base_raw: Option<String> = r.get(2)?;
     let base_updated: Option<String> = r.get(3)?;
     let remote_raw: Option<String> = r.get(6)?;
@@ -956,7 +1025,11 @@ fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
         (Some(raw), Some(updated)) => Some(BaseSnapshot {
             raw: serde_json::from_str(&raw)?,
             updated: parse_timestamp(&updated).ok_or_else(|| {
-                JiredError::corrupt("state.db holds an unparseable base timestamp")
+                JiredError::corrupt(format!(
+                    "{key}: state.db holds an unparseable base timestamp"
+                ))
+                .with_detail("issue", key.clone())
+                .with_hint(crate::store::recovery_hint("state.db"))
             })?,
             description: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
             md_hash: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
@@ -967,7 +1040,11 @@ fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
         (Some(raw), Some(updated)) => Some(RemoteSnapshot {
             raw: serde_json::from_str(&raw)?,
             updated: parse_timestamp(&updated).ok_or_else(|| {
-                JiredError::corrupt("state.db holds an unparseable remote timestamp")
+                JiredError::corrupt(format!(
+                    "{key}: state.db holds an unparseable remote timestamp"
+                ))
+                .with_detail("issue", key.clone())
+                .with_hint(crate::store::recovery_hint("state.db"))
             })?,
             fetched_at: r
                 .get::<_, Option<String>>(8)?
@@ -978,7 +1055,7 @@ fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
     };
 
     Ok(IssueRow {
-        key: r.get(0)?,
+        key,
         id: r.get(1)?,
         base,
         remote,

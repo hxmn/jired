@@ -41,6 +41,8 @@ pub fn migrate(conn: &Connection, name: &str, migrations: &[Migration]) -> Resul
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(m.sql).map_err(|e| {
             JiredError::corrupt(format!("migrating {name} to schema {}: {e}", m.version))
+                .with_detail("database", name)
+                .with_hint(recovery_hint(name))
         })?;
         // PRAGMA cannot be parameterized.
         tx.pragma_update(None, "user_version", m.version)?;
@@ -53,14 +55,33 @@ pub fn migrate(conn: &Connection, name: &str, migrations: &[Migration]) -> Resul
 /// Open a database with the pragmas every jired store wants.
 pub fn open_db(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(crate::error::io_ctx("create", parent))?;
     }
-    let conn = Connection::open(path)
-        .map_err(|e| JiredError::corrupt(format!("cannot open {}: {e}", path.display())))?;
+    // Failing to *open* a file is almost never corruption — it is a permission
+    // or a path — and telling someone their state is corrupt sends them to
+    // delete a database that is fine.
+    let conn = Connection::open(path).map_err(|e| {
+        JiredError::generic(format!("cannot open {}: {e}", path.display()))
+            .with_detail("path", path.display().to_string())
+            .with_hint("check that .jired/ exists and is writable by you")
+    })?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", true)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(conn)
+}
+
+/// How to recover a given database.
+///
+/// The distinction matters more than anything else in the message: `state.db` is
+/// a cache and deleting it is safe (decision D17); `session.db` holds the
+/// credential and deleting it means authenticating again.
+pub fn recovery_hint(name: &str) -> &'static str {
+    if name.contains("state") {
+        "delete .jired/state.db and run `jired fetch` to rebuild it"
+    } else {
+        "run `jired init --force` to authenticate again"
+    }
 }
 
 pub fn now_rfc3339() -> String {

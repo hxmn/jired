@@ -230,6 +230,33 @@
           }
         }
       }
+    },
+    "unchanged": {
+      "type": "array",
+      "description": "Issues with no local changes; present only under --all",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "status",
+          "summary"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

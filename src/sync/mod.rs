@@ -5,6 +5,7 @@ pub mod diff;
 pub mod fetch;
 pub mod group;
 pub mod merge;
+pub mod progress;
 pub mod pull;
 pub mod push;
 pub mod render;

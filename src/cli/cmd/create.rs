@@ -31,18 +31,24 @@ pub struct CreateArgs {
     /// Template file under .jired/templates
     #[arg(long)]
     pub template: Option<String>,
-    /// Issue summary
+    /// Issue summary (asked for when omitted at a terminal)
     #[arg(long, short = 's')]
     pub summary: Option<String>,
     /// Parent issue key for a subtask
     #[arg(long)]
     pub parent: Option<String>,
-    /// Description body
+    /// Description body (opens $EDITOR when omitted at a terminal)
     #[arg(long, short = 'd')]
     pub description: Option<String>,
     /// Fill in the form even when the flags would have been enough
     #[arg(long, short = 'i')]
     pub interactive: bool,
+    /// Create it on the server now instead of leaving it staged
+    #[arg(long)]
+    pub push: bool,
+    /// With --push, show the API call without sending it
+    #[arg(long, requires = "push")]
+    pub dry_run: bool,
 }
 
 pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
@@ -74,21 +80,49 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
         .state
         .record_new_issue(&key, &draft.project, &outcome.relative)?;
 
-    out.say(format!(
-        "created {key} in {} — run `jired push` to create it on the server",
-        outcome.relative
-    ));
+    let pushed = if args.push {
+        let report = crate::cli::cmd::edit::push_one(&mut ctx, &key, args.dry_run)?;
+        crate::cli::cmd::edit::report_push(&report, out);
+        Some(report)
+    } else {
+        None
+    };
+
+    let created_as = pushed
+        .as_ref()
+        .and_then(|r| r.results.first())
+        .and_then(|r| r.new_key.clone());
+    match (&pushed, &created_as) {
+        (Some(r), _) if r.dry_run => {}
+        (Some(_), Some(real)) => out.say(format!("created {real}")),
+        (Some(_), None) => out.say(format!(
+            "{key} is staged in {}, but the push failed — \
+             fix the cause and run `jired push`",
+            outcome.relative
+        )),
+        (None, _) => out.say(format!(
+            "created {key} in {} — run `jired push` to create it on the server",
+            outcome.relative
+        )),
+    }
+
     out.emit(
         "create",
         &serde_json::json!({
             "key": key,
+            "new_key": created_as,
             "file": outcome.relative,
             "project": draft.project,
             "type": draft.issue_type,
             "summary": draft.summary,
+            "pushed": pushed.is_some(),
+            "push": pushed,
         }),
     );
-    Ok(ExitCode::Success)
+    Ok(match pushed {
+        Some(report) => report.exit_code(),
+        None => ExitCode::Success,
+    })
 }
 
 /// Everything already decided before anyone is asked anything: the flags, and
@@ -220,7 +254,12 @@ fn new_key(engine: &Engine) -> Result<String> {
             return Ok(candidate);
         }
     }
-    Err(JiredError::generic("cannot find an unused temporary key"))
+    // Every candidate `NEW-xxxxxx` collided, which after this many tries means
+    // something is wrong with the workspace rather than with luck.
+    Err(
+        JiredError::generic("cannot allocate a temporary key for the new issue")
+            .with_hint("run `jired push` to send the issues already staged, then try again"),
+    )
 }
 
 fn template(ctx: &Context, args: &CreateArgs) -> Result<IssueDoc> {

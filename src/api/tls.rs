@@ -74,15 +74,22 @@ pub fn inspect(host: &str, port: u16) -> Result<ServerCert> {
         .with_custom_certificate_verifier(Arc::new(AcceptAnything(provider)))
         .with_no_client_auth();
 
-    let name = rustls::pki_types::ServerName::try_from(host.to_string())
-        .map_err(|_| JiredError::network(format!("`{host}` is not a valid hostname")))?;
-    let mut conn = rustls::ClientConnection::new(Arc::new(config), name)
-        .map_err(|e| JiredError::network(format!("cannot start a TLS handshake: {e}")))?;
+    let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|_| {
+        JiredError::network(format!("`{host}` is not a valid hostname"))
+            .with_hint("server.url should look like https://acme.atlassian.net")
+    })?;
+    let mut conn = rustls::ClientConnection::new(Arc::new(config), name).map_err(|e| {
+        JiredError::network(format!("cannot start a TLS handshake: {e}"))
+            .with_hint("this is a local TLS setup problem, not the server's")
+    })?;
 
     let mut sock = connect(host, port)?;
     while conn.is_handshaking() {
         conn.complete_io(&mut sock).map_err(|e| {
-            JiredError::network(format!("TLS handshake with {host}:{port} failed: {e}"))
+            JiredError::network(format!("TLS handshake with {host}:{port} failed: {e}")).with_hint(
+                "for a private CA pass --ca-cert <bundle.pem>; `jired init` also \
+                     offers to pin the certificate it sees",
+            )
         })?;
     }
     let chain: Vec<Vec<u8>> = conn
@@ -95,9 +102,10 @@ pub fn inspect(host: &str, port: u16) -> Result<ServerCert> {
     let _ = conn.complete_io(&mut sock);
     let _ = sock.flush();
 
-    let leaf = chain
-        .first()
-        .ok_or_else(|| JiredError::network(format!("{host}:{port} sent no certificate")))?;
+    let leaf = chain.first().ok_or_else(|| {
+        JiredError::network(format!("{host}:{port} sent no certificate"))
+            .with_hint("is this really an HTTPS port?")
+    })?;
     // Pin the root of what was offered: trusting the CA keeps working when the
     // leaf is rotated, which for an internal instance is a matter of months.
     let anchor = chain.last().expect("chain is non-empty");
@@ -107,9 +115,10 @@ pub fn inspect(host: &str, port: u16) -> Result<ServerCert> {
 fn connect(host: &str, port: u16) -> Result<TcpStream> {
     use std::net::ToSocketAddrs;
     let mut last: Option<String> = None;
-    let addrs = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| JiredError::network(format!("cannot resolve {host}: {e}")))?;
+    let addrs = (host, port).to_socket_addrs().map_err(|e| {
+        JiredError::network(format!("cannot resolve {host}: {e}"))
+            .with_hint("check server.url, and any VPN or proxy this host needs")
+    })?;
     for addr in addrs {
         match TcpStream::connect_timeout(&addr, Duration::from_secs(15)) {
             Ok(s) => {

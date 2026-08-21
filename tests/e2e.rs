@@ -175,6 +175,31 @@ impl Ws {
         })
     }
 
+    /// Run a command expecting a specific exit code, returning the JSON result
+    /// document from stdout.
+    ///
+    /// For the outcomes a command reports rather than errors on: a push where
+    /// one issue failed still produces a full report, and the exit code names
+    /// the kind of failure.
+    fn json_code(&self, args: &[&str], code: i32) -> Value {
+        let out = self.cmd(args).arg("--json").output().expect("run");
+        assert_eq!(
+            out.status.code(),
+            Some(code),
+            "`jired {}` exit code\nstdout: {}\nstderr: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "stdout of `jired {}` is not JSON: {e}\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stdout)
+            )
+        })
+    }
+
     /// Run a command expecting a specific exit code, returning the JSON error.
     fn json_err(&self, args: &[&str], code: i32) -> Value {
         let out = self.cmd(args).arg("--json").output().expect("run");
@@ -776,11 +801,15 @@ fn editing_a_read_only_region_blocks_the_push_with_exit_6() {
     );
     ws.write(ISSUE_FILE, &text);
 
-    let err = ws.json_err(&["push"], 6);
-    assert_eq!(err["kind"], "lossy");
-    assert_eq!(err["details"]["issue"], "PROJ-142");
-    assert!(err["details"]["regions"].as_array().unwrap().len() == 1);
-    assert!(err["hint"].as_str().unwrap().contains("--allow-lossy"));
+    // The block is reported per issue, not as a whole-run error: another issue
+    // in the same push is unaffected and must still go out. The exit code stays
+    // 6 because that is the only kind of failure in the run.
+    let report = ws.json_code(&["push"], 6);
+    let failed = &report["results"][0];
+    assert_eq!(failed["key"], "PROJ-142");
+    assert_eq!(failed["ok"], false);
+    assert_eq!(failed["error_kind"], "lossy");
+    assert!(failed["hint"].as_str().unwrap().contains("--allow-lossy"));
 }
 
 #[test]
@@ -1363,9 +1392,10 @@ fn editing_a_read_only_region_is_blocked_on_both_deployments() {
         let text = ws.read(file).replace(needle, "Rewritten by hand.");
         ws.write(file, &text);
 
-        let err = ws.json_err(&["push"], 6);
-        assert_eq!(err["kind"], "lossy", "{:?}", ws.deployment);
-        assert_eq!(err["details"]["issue"], ws.deployment.key());
+        let report = ws.json_code(&["push"], 6);
+        let failed = &report["results"][0];
+        assert_eq!(failed["error_kind"], "lossy", "{:?}", ws.deployment);
+        assert_eq!(failed["key"], ws.deployment.key());
     });
 }
 
@@ -2260,7 +2290,7 @@ fn an_issue_in_several_sprints_keeps_all_of_them() {
     assert!(ws.path().join("sprints/Sprint 42").is_dir());
     assert!(!ws.path().join("sprints/Sprint 41").exists());
     ws.json(&["config", "set", "sprints.include_closed", "true"]);
-    ws.json(&["clean", "--regroup"]);
+    ws.json(&["doctor", "--regroup"]);
     assert!(
         ws.path()
             .join("sprints/Sprint 41")
@@ -3119,10 +3149,20 @@ fn section<'a>(text: &'a str, heading: &str) -> &'a str {
 // Grouping folders [M4.2, M4.3, M4.4, M4.5]
 //
 // These are views over state.db, never the source of truth, which is what lets
-// `clean --regroup` throw them away and rebuild.
+// `doctor --regroup` throws them away and rebuilds.
 // ---------------------------------------------------------------------------
 
 /// Resolve a link of whichever kind this platform produced.
+/// The grouping check inside a `jired doctor` report.
+fn groups_check(report: &Value) -> &Value {
+    report["checks"]
+        .as_array()
+        .expect("doctor reports a list of checks")
+        .iter()
+        .find(|c| c["name"] == "groups")
+        .expect("a --regroup run includes the groups check")
+}
+
 fn resolves_to_issue(link: &Path, key: &str) -> bool {
     match std::fs::read_to_string(link) {
         // A symlink or hard link reads as the issue itself.
@@ -3210,7 +3250,7 @@ fn grouping_folders_are_never_mistaken_for_issues() {
 }
 
 #[test]
-fn clean_regroup_rebuilds_everything_from_the_database() {
+fn doctor_regroup_rebuilds_everything_from_the_database() {
     let ws = Ws::new();
     ws.init();
     ws.json(&["pull"]);
@@ -3226,8 +3266,13 @@ fn clean_regroup_rebuilds_everything_from_the_database() {
     }
     assert!(!ws.path().join("sprints").exists());
 
-    let report = ws.json(&["clean", "--regroup"]);
-    assert!(report["regrouped"]["links"].as_u64().unwrap() > 0);
+    let report = ws.json(&["doctor", "--regroup"]);
+    assert!(
+        groups_check(&report)["regrouped"]["links"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     assert!(
         std::fs::symlink_metadata(&sprint).is_ok(),
         "regroup must restore the link"
@@ -3246,7 +3291,7 @@ fn regroup_clears_a_stale_group_rather_than_leaving_it() {
     std::fs::create_dir_all(&stale).unwrap();
     std::fs::write(stale.join("PROJ-0142. Fix login flow.md"), "stale").unwrap();
 
-    ws.json(&["clean", "--regroup"]);
+    ws.json(&["doctor", "--regroup"]);
     assert!(
         !stale.exists(),
         "a group nothing belongs to must not survive a rebuild"
@@ -3264,8 +3309,8 @@ fn stub_mode_produces_followable_files_where_links_are_unavailable() {
     ws.json(&["pull"]);
     ws.json(&["config", "set", "links.mode", "stub"]);
 
-    let report = ws.json(&["clean", "--regroup"]);
-    assert_eq!(report["regrouped"]["kind"], "stub");
+    let report = ws.json(&["doctor", "--regroup"]);
+    assert_eq!(groups_check(&report)["regrouped"]["kind"], "stub");
 
     let stub = ws
         .path()
@@ -3393,4 +3438,202 @@ fn a_card_dropped_somewhere_that_is_not_a_column_says_so() {
         .unwrap_or_default();
     assert!(warning.contains("PROJ-142"), "{status}");
     assert!(warning.contains("not a column"), "{warning}");
+}
+
+// ---------------------------------------------------------------------------
+// usability contracts
+// ---------------------------------------------------------------------------
+
+/// Issues are files, so a path has to work wherever a key does — that is what
+/// makes shell completion, `xargs` and editor integration possible.
+#[test]
+fn an_issue_can_be_named_by_its_file_as_well_as_its_key() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let by_path = ws.json(&["comment", ISSUE_FILE, "-m", "from a path"]);
+    assert_eq!(by_path["key"], "PROJ-142");
+
+    let nested = format!("./sprints/Sprint 42/{ISSUE_FILE}");
+    let by_nested_path = ws.json(&["log", &nested]);
+    assert_eq!(by_nested_path["key"], "PROJ-142");
+}
+
+/// `jired pull PROJ-1` used to fail while `jired push PROJ-1` worked.
+#[test]
+fn pull_and_fetch_take_issues_positionally() {
+    let ws = Ws::new();
+    ws.init();
+    let report = ws.json(&["pull", "PROJ-142"]);
+    assert_eq!(report["schema"], "jired/pull/1");
+    assert!(ws.path().join(ISSUE_FILE).exists());
+}
+
+/// A preview that writes nothing is the only safe way to inspect what a pull
+/// would do to a working copy that has edits in it.
+#[test]
+fn pull_dry_run_writes_nothing() {
+    let ws = Ws::new();
+    ws.init();
+
+    let report = ws.json(&["pull", "--dry-run"]);
+    assert_eq!(report["dry_run"], true);
+    assert!(!report["created"].as_array().unwrap().is_empty());
+    assert!(
+        !ws.path().join(ISSUE_FILE).exists(),
+        "a dry run must not write files"
+    );
+
+    // And the real pull still does the work afterwards.
+    ws.json(&["pull"]);
+    assert!(ws.path().join(ISSUE_FILE).exists());
+}
+
+/// `--all` was declared, parsed, and silently ignored.
+#[test]
+fn status_all_lists_unchanged_issues() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let plain = ws.json(&["status"]);
+    assert!(plain.get("unchanged").is_none() || plain["unchanged"].as_array().unwrap().is_empty());
+
+    let all = ws.json(&["status", "--all"]);
+    let unchanged = all["unchanged"].as_array().expect("--all lists unchanged");
+    assert!(!unchanged.is_empty(), "{all}");
+    assert!(unchanged.iter().any(|u| u["key"] == "PROJ-142"), "{all}");
+}
+
+/// Config has to work before `init`, or the documented way to choose a
+/// credential store for a machine cannot be followed.
+#[test]
+fn config_works_before_a_workspace_exists() {
+    let dir = TempDir::new().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+
+    let out = Command::cargo_bin("jired")
+        .unwrap()
+        .current_dir(dir.path())
+        .env("XDG_CONFIG_HOME", &home)
+        .args(["config", "set", "creds.storage", "user_config", "--global"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let path = Command::cargo_bin("jired")
+        .unwrap()
+        .current_dir(dir.path())
+        .env("XDG_CONFIG_HOME", &home)
+        .args(["config", "path", "--global"])
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&path.stdout);
+    assert!(shown.contains("config.toml"), "{shown}");
+}
+
+/// A bad value used to be accepted and only surface at the next command that
+/// happened to read it.
+#[test]
+fn config_set_rejects_a_value_the_setting_cannot_take() {
+    let ws = Ws::new();
+    ws.init();
+
+    let err = ws.json_err(&["config", "set", "attachments.max_upload", "lots"], 2);
+    assert_eq!(err["kind"], "usage");
+    assert_eq!(err["details"]["key"], "attachments.max_upload");
+
+    // A mistyped key is caught by clap itself now that the key list is a value
+    // parser, which also means it is offered by shell completion.
+    let out = ws.cmd(&["config", "get", "server.urls"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("server.url"), "{stderr}");
+}
+
+/// Piping into `head` and quitting early must not look like a crash.
+#[test]
+fn a_closed_pipe_is_not_an_error() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // `sh -c '… | head -1'` is the real shape of the problem: head exits after
+    // one line and the writer gets EPIPE on the next println.
+    let shell = format!(
+        "'{}' status --all --no-input | head -1",
+        assert_cmd::cargo::cargo_bin("jired").display()
+    );
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&shell)
+        .current_dir(ws.path())
+        .env("JIRED_FIXTURES", &ws.fixtures)
+        .env("JIRED_NO_KEYRING", "1")
+        .env("JIRED_SECRET_KEY", "test-passphrase")
+        .env("JIRED_TOKEN", "fixture-token")
+        .env("JIRED_PROJECT", "PROJ")
+        .env("JIRED_URL", "https://fixture.invalid")
+        .env("JIRED_EMAIL", "ilya@example.com")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("panicked") && !stderr.contains("failed printing to stdout"),
+        "a closed pipe must not panic: {stderr}"
+    );
+}
+
+/// The connection flags were global and silently ignored everywhere but init,
+/// which reads like switching servers when it does nothing of the kind.
+#[test]
+fn connection_flags_are_rejected_outside_init() {
+    let ws = Ws::new();
+    ws.init();
+
+    let out = ws
+        .cmd(&["status", "--url", "https://elsewhere.invalid"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--url"), "{stderr}");
+}
+
+/// One issue that cannot be pushed must not hide the ones that went out.
+#[test]
+fn a_lossy_block_does_not_discard_the_rest_of_the_push() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // PROJ-142 has a read-only region; edit it, and edit a *different* issue in
+    // a way that pushes cleanly.
+    let text = ws.read(ISSUE_FILE).replace(
+        "Do not deploy before the cert rotation.",
+        "Do not deploy before the cert rotation. EDITED.",
+    );
+    ws.write(ISSUE_FILE, &text);
+    ws.json(&["comment", "PROJ-143", "-m", "this one is fine"]);
+
+    let report = ws.json_code(&["push"], 6);
+    let results = report["results"].as_array().unwrap();
+    assert!(
+        results
+            .iter()
+            .any(|r| r["key"] == "PROJ-143" && r["ok"] == true),
+        "the clean issue must still be pushed: {report}"
+    );
+    assert!(
+        results
+            .iter()
+            .any(|r| r["key"] == "PROJ-142" && r["error_kind"] == "lossy"),
+        "{report}"
+    );
 }

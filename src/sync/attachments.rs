@@ -52,12 +52,13 @@ pub fn sync_folder(
     issue_key: &str,
     dir: &Path,
     auto_download_max: u64,
+    warnings: &mut Vec<String>,
 ) -> Result<usize> {
     let attachments = state.attachments(issue_key)?;
     if attachments.is_empty() {
         return Ok(0);
     }
-    std::fs::create_dir_all(dir)?;
+    std::fs::create_dir_all(dir).map_err(crate::error::io_ctx("create", dir))?;
 
     let mut downloaded = 0;
     for a in &attachments {
@@ -74,10 +75,13 @@ pub fn sync_folder(
                     downloaded += 1;
                     continue;
                 }
-                // A failed download must not lose the record of the file.
-                Err(e) => {
-                    tracing::warn!("{issue_key}: cannot download {}: {}", a.filename, e.message)
-                }
+                // A failed download must not lose the record of the file — and
+                // must not be a log line either: the user asked for this
+                // attachment and needs to know it is not there.
+                Err(e) => warnings.push(format!(
+                    "{issue_key}: cannot download {}: {}",
+                    a.filename, e.message
+                )),
             }
         }
         if !stub.exists() {
@@ -101,13 +105,15 @@ pub fn download_one(
     let bytes = crate::api::block_on(client.download_attachment(attachment))?;
     if attachment.size > 0 && bytes.len() as u64 != attachment.size {
         return Err(JiredError::network(format!(
-            "{}: expected {} bytes but received {}",
+            "{}: the download was truncated (expected {} bytes, got {})",
             attachment.filename,
             attachment.size,
             bytes.len()
-        )));
+        ))
+        .with_detail("filename", attachment.filename.clone())
+        .with_hint("re-run `jired attachments pull` — a truncated download is usually transient"));
     }
-    std::fs::create_dir_all(dir)?;
+    std::fs::create_dir_all(dir).map_err(crate::error::io_ctx("create", dir))?;
     std::fs::write(dir.join(&attachment.filename), &bytes)?;
     state.mark_attachment_downloaded(issue_key, &attachment.id, &sha256(&bytes))?;
     Ok(())

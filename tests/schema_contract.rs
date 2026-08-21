@@ -187,7 +187,9 @@ fn command_output_matches_its_published_schema() {
         vec!["push", "--dry-run"],
         vec!["resolve", "--list"],
         vec!["clean", "--dry-run"],
-        vec!["clean", "--regroup"],
+        // Rebuilding the grouping folders belongs to `doctor`, which owns every
+        // other repair; `clean --regroup` used to shadow clean's own purpose.
+        vec!["doctor", "--regroup"],
         vec!["agent-docs"],
     ];
 

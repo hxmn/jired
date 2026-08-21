@@ -13,6 +13,7 @@
 //! | [`api`] | Jira REST abstraction over Cloud and Data Center |
 //! | [`convert`] | rich text: ADF/wiki ⇄ `JiredAst` ⇄ Markdown |
 //! | [`doc`] | issue file format: frontmatter and sections |
+//! | [`style`] | terminal colour, decided once per stream |
 //! | [`sync`] | fetch/pull/push engine and three-way merge |
 //! | [`project`] | filesystem projector: names, files, links |
 //! | [`tui`] | full-screen interactive screens |
@@ -27,6 +28,7 @@ pub mod error;
 pub mod json;
 pub mod project;
 pub mod store;
+pub mod style;
 pub mod sync;
 pub mod tui;
 pub mod workspace;

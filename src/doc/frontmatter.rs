@@ -114,11 +114,22 @@ pub struct SyncMeta {
 impl Frontmatter {
     pub fn parse(yaml: &str) -> Result<Self> {
         let fm: Frontmatter = serde_yaml_ng::from_str(yaml).map_err(|e| {
-            JiredError::generic(format!("cannot read the frontmatter: {e}"))
-                .with_hint("the YAML header must contain at least `key` and `id`")
+            // serde_yaml reports the line and column within the header, which is
+            // the difference between "somewhere in this file" and a cursor
+            // position; keep it, and say the offset is into the header.
+            let mut err = JiredError::usage(format!("the YAML header is not valid: {e}"))
+                .with_hint("the header must contain at least `key` and `id`");
+            if let Some(loc) = e.location() {
+                err = err
+                    .with_detail("line", loc.line())
+                    .with_detail("column", loc.column());
+            }
+            err
         })?;
         if fm.key.is_empty() {
-            return Err(JiredError::generic("the frontmatter has no `key`"));
+            return Err(JiredError::usage("the frontmatter has no `key`").with_hint(
+                "every issue file needs `key: PROJ-142`; `jired pull --force` restores it",
+            ));
         }
         Ok(fm)
     }
@@ -326,10 +337,21 @@ jired:
         assert!(fm.to_yaml().unwrap().contains("keep-me"));
     }
 
+    /// A file in this state was hand-edited, which makes it a usage error
+    /// (exit 2) rather than an unexplained internal failure (exit 1).
     #[test]
     fn frontmatter_without_a_key_is_rejected() {
         let err = Frontmatter::parse("id: \"1\"\njired: {}\n").unwrap_err();
-        assert_eq!(err.exit_code().as_i32(), 1);
+        assert_eq!(err.exit_code().as_i32(), 2);
+        assert!(err.hint.is_some(), "the user needs to know what to add");
+    }
+
+    /// A YAML mistake should point at the line it is on.
+    #[test]
+    fn a_broken_header_reports_where() {
+        let err = Frontmatter::parse("key: PROJ-1\nlabels: [unclosed\n").unwrap_err();
+        assert_eq!(err.exit_code().as_i32(), 2);
+        assert!(err.details.get("line").is_some(), "{:?}", err.details);
     }
 
     #[test]

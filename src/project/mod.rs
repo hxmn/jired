@@ -102,21 +102,25 @@ impl Projector {
 
     pub fn read(&self, relative: &str) -> Result<IssueDoc> {
         let path = self.path_of(relative);
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| JiredError::generic(format!("cannot read {}: {e}", path.display())))?;
+        let text = std::fs::read_to_string(&path).map_err(crate::error::io_ctx("read", &path))?;
         IssueDoc::parse(&text).map_err(|e| {
             // Name the file: a parse error is almost always one bad edit, and
-            // the underlying message does not say which file it was in.
-            JiredError::generic(format!("{}: {}", relative, e.message)).with_hint(
-                e.hint
-                    .clone()
-                    .unwrap_or_else(|| "run `jired pull --force` to restore the file".into()),
-            )
+            // the underlying message does not say which file it was in. The
+            // kind is preserved so a hand-edit stays a usage error.
+            JiredError::new(e.kind, format!("{}: {}", relative, e.message))
+                .with_details(e.details.clone())
+                .with_detail("file", relative)
+                .with_hint(
+                    e.hint
+                        .clone()
+                        .unwrap_or_else(|| "run `jired pull --force` to restore the file".into()),
+                )
         })
     }
 
     pub fn read_raw(&self, relative: &str) -> Result<String> {
-        Ok(std::fs::read_to_string(self.path_of(relative))?)
+        let path = self.path_of(relative);
+        std::fs::read_to_string(&path).map_err(crate::error::io_ctx("read", &path))
     }
 
     /// Write an issue file, renaming from `previous` when the summary changed.
@@ -141,8 +145,9 @@ impl Projector {
             .map(|existing| existing == text)
             .unwrap_or(false);
         if !unchanged {
-            std::fs::create_dir_all(&self.root)?;
-            std::fs::write(&path, &text)?;
+            std::fs::create_dir_all(&self.root)
+                .map_err(crate::error::io_ctx("create", &self.root))?;
+            std::fs::write(&path, &text).map_err(crate::error::io_ctx("write", &path))?;
         }
 
         Ok(WriteOutcome {

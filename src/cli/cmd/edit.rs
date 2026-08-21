@@ -104,7 +104,7 @@ pub fn run(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
     }
 
     let pushed = if args.push && !changed.is_empty() {
-        Some(push_one(&mut ctx, &key)?)
+        Some(push_one(&mut ctx, &key, false)?)
     } else {
         None
     };
@@ -273,28 +273,98 @@ pub fn edit_issue(
 }
 
 /// Push just this issue, reusing the normal push path.
-pub fn push_one(ctx: &mut Context, key: &str) -> Result<PushReport> {
+pub fn push_one(ctx: &mut Context, key: &str, dry_run: bool) -> Result<PushReport> {
     let args = PushArgs {
         issues: vec![crate::project::naming::key_from_input(key)],
+        dry_run,
         ..Default::default()
     };
     crate::sync::push::run(ctx, &args)
 }
 
-/// Read a value from stdin when the flag was omitted, so `-m` can be piped.
+/// Report the outcome of an inline `--push`.
+///
+/// Without this the user is told only that "the push failed": the report holds
+/// the server's actual complaint, and printing it is the difference between a
+/// dead end and something they can act on.
+pub fn report_push(report: &PushReport, out: Out) {
+    if report.dry_run || report.results.iter().any(|r| !r.ok) || !report.stale.is_empty() {
+        report.render(out);
+    }
+}
+
+/// Where a body comes from: the flag, a pipe, or the user's editor.
 pub fn message_or_stdin(message: &Option<String>, what: &str) -> Result<String> {
     if let Some(m) = message {
         return Ok(m.clone());
     }
-    if crate::cli::context::is_interactive() {
-        return Err(JiredError::missing_value(format!("no {what} given"))
-            .with_hint("pass -m \"text\", or pipe the text on stdin"));
+    if !crate::cli::context::is_interactive() {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+        if buf.trim().is_empty() {
+            return Err(JiredError::missing_value(format!("no {what} given"))
+                .with_hint("pass -m \"text\", or pipe the text on stdin"));
+        }
+        return Ok(buf.trim_end().to_string());
     }
-    let mut buf = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
-    if buf.trim().is_empty() {
-        return Err(JiredError::missing_value(format!("no {what} given"))
-            .with_hint("pass -m \"text\", or pipe the text on stdin"));
+    edit_in_editor(what, "")
+}
+
+/// Open `$VISUAL`/`$EDITOR` on a scratch file and return what was written.
+///
+/// git's convention throughout: comment lines are stripped, and an empty result
+/// means "I changed my mind", which is an abort rather than an empty comment.
+pub fn edit_in_editor(what: &str, initial: &str) -> Result<String> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .map_err(|_| {
+            JiredError::missing_value(format!("no {what} given"))
+                .with_hint("pass -m \"text\", pipe it on stdin, or set $EDITOR")
+        })?;
+
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!(
+        "jired-{}-{}.md",
+        what.replace(' ', "-"),
+        std::process::id()
+    ));
+    let template = format!(
+        "{initial}\n\n\
+         # Write the {what} above. Lines starting with `#` are ignored.\n\
+         # Saving an empty file aborts.\n"
+    );
+    std::fs::write(&path, template).map_err(crate::error::io_ctx("write", &path))?;
+
+    // The editor owns the terminal while it runs; anything jired printed to
+    // stdout stays put because the editor draws on the tty directly.
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$1\"",))
+        .arg("sh")
+        .arg(&path)
+        .status()
+        .map_err(|e| {
+            JiredError::generic(format!("cannot run $EDITOR ({editor})")).with_source(e)
+        })?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&path);
+        return Err(JiredError::generic(format!(
+            "$EDITOR ({editor}) exited with an error"
+        )));
     }
-    Ok(buf.trim_end().to_string())
+
+    let text = std::fs::read_to_string(&path).map_err(crate::error::io_ctx("read", &path))?;
+    let _ = std::fs::remove_file(&path);
+
+    let body: String = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if body.trim().is_empty() {
+        return Err(JiredError::missing_value(format!(
+            "empty {what} — nothing was staged"
+        )));
+    }
+    Ok(body.trim_end().to_string())
 }

@@ -34,6 +34,10 @@
           },
           "env": {
             "type": "string"
+          },
+          "file": {
+            "type": "string",
+            "description": "Config file the value came from, when it came from one"
           }
         },
         "required": [
@@ -41,6 +45,25 @@
           "source",
           "env"
         ]
+      }
+    },
+    "env_only": {
+      "type": "array",
+      "description": "Environment variables that change behaviour but are not settings",
+      "items": {
+        "type": "object",
+        "required": [
+          "env",
+          "doc"
+        ],
+        "properties": {
+          "env": {
+            "type": "string"
+          },
+          "doc": {
+            "type": "string"
+          }
+        }
       }
     }
   }

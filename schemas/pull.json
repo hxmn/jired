@@ -92,6 +92,17 @@
           }
         }
       }
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "True when the run planned the writes but made none (--dry-run)"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Problems that did not fail the pull: a missing attachment, a grouping folder that could not be rebuilt"
     }
   },
   "$defs": {

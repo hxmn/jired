@@ -1,10 +1,14 @@
 //! Grouping folders [M4.2, M4.3, M4.4].
 //!
 //! `by-parent/`, `sprints/` and `boards/` are views, never the source of truth:
-//! every one of them is rebuilt from `state.db`, so `clean --regroup` can throw
+//! every one of them is rebuilt from `state.db`, so `doctor --regroup` can throw
 //! the lot away and get it back. Nothing reads an issue *through* a grouping
 //! folder — the workspace scan only looks at the top level — which is what
 //! keeps a link from ever being mistaken for a second copy of an issue.
+//!
+//! The one exception is deliberate: a file moved between `boards/<board>/<col>/`
+//! folders is read as a staged transition (decision D4), because dragging a card
+//! is what someone means by it.
 
 use crate::error::Result;
 use crate::project::links::{self, LinkKind, LinkMode};

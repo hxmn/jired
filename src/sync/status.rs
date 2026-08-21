@@ -20,6 +20,17 @@ pub struct StatusReport {
     pub staged_transitions: Vec<StagedTransition>,
     pub pending_ops: Vec<crate::store::state::PendingOp>,
     pub warnings: Vec<Warning>,
+    /// Issues with no local changes; only collected under `--all`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unchanged: Vec<UnchangedIssue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnchangedIssue {
+    pub key: String,
+    pub file: String,
+    pub status: String,
+    pub summary: String,
 }
 
 /// Something in a file that will be ignored unless the user fixes it.
@@ -66,6 +77,8 @@ pub struct StagedTransition {
 
 impl StatusReport {
     pub fn render(&self, out: Out) {
+        use crate::style::{self, BOLD, CYAN, DIM, RED, YELLOW};
+
         out.say(format!(
             "workspace {} ({} issues){}",
             self.workspace.root,
@@ -80,40 +93,73 @@ impl StatusReport {
             &self.workspace.last_fetch_at,
             self.workspace.last_fetch_age_seconds,
         ) {
-            (Some(at), Some(age)) => out.say(format!("last fetch {at} ({})", humanize_age(age))),
-            _ => out.say("never fetched — run `jired fetch`"),
-        }
-
-        if !self.new_issues.is_empty() {
-            out.say(format!("\n{} new local issue(s):", self.new_issues.len()));
-            for n in &self.new_issues {
-                out.say(format!("  {}  {}", n.key, n.file));
+            (Some(at), Some(age)) => out.say(style::out(
+                DIM,
+                format!("last fetch {at} ({})", humanize_age(age)),
+            )),
+            _ => {
+                out.say("never fetched");
+                out.hint("use \"jired pull\" to fetch and write issue files");
             }
         }
+
+        // One width for every key column, computed from the data: a fixed 14
+        // wraps as soon as a project key is long.
+        let width = self.key_width();
+
+        if !self.new_issues.is_empty() {
+            out.say(format!(
+                "\n{}",
+                style::out(
+                    BOLD,
+                    format!("{} new local issue(s):", self.new_issues.len())
+                )
+            ));
+            for n in &self.new_issues {
+                // Padded before painting: escape codes count towards a format
+                // width and would knock every following column out of line.
+                out.say(format!(
+                    "  {}  {}",
+                    style::out(CYAN, format!("{:<width$}", n.key)),
+                    n.file
+                ));
+            }
+            out.hint("use \"jired push\" to create them in Jira");
+        }
         if !self.dirty.is_empty() {
-            out.say(format!("\n{} issue(s) with local edits:", self.dirty.len()));
+            out.say(format!(
+                "\n{}",
+                style::out(
+                    BOLD,
+                    format!("{} issue(s) with local edits:", self.dirty.len())
+                )
+            ));
             for d in &self.dirty {
                 out.say(format!(
-                    "  {:<14} [{}]{}",
-                    d.key,
+                    "  {} [{}]{}",
+                    style::out(CYAN, format!("{:<width$}", d.key)),
                     d.fields.join(", "),
                     if d.lossy_touched {
-                        "  (read-only region edited)"
+                        style::out(YELLOW, "  (read-only region edited)")
                     } else {
-                        ""
+                        String::new()
                     }
                 ));
             }
+            out.hint("use \"jired diff\" to review, \"jired push\" to send");
         }
         if !self.staged_transitions.is_empty() {
             out.say(format!(
-                "\n{} staged transition(s):",
-                self.staged_transitions.len()
+                "\n{}",
+                style::out(
+                    BOLD,
+                    format!("{} staged transition(s):", self.staged_transitions.len())
+                )
             ));
             for t in &self.staged_transitions {
                 out.say(format!(
-                    "  {:<14} {} → {} ({})",
-                    t.key,
+                    "  {} {} → {} ({})",
+                    style::out(CYAN, format!("{:<width$}", t.key)),
                     t.from.as_deref().unwrap_or("?"),
                     t.to,
                     t.origin
@@ -122,16 +168,29 @@ impl StatusReport {
         }
         if !self.behind.is_empty() {
             out.say(format!(
-                "\n{} issue(s) changed on the server since the last pull:",
-                self.behind.len()
+                "\n{}",
+                style::out(
+                    BOLD,
+                    format!(
+                        "{} issue(s) changed on the server since the last pull:",
+                        self.behind.len()
+                    )
+                )
             ));
             out.say(format!("  {}", self.behind.join(", ")));
+            out.hint("use \"jired pull\" to update them");
         }
         if !self.conflicts.is_empty() {
-            out.say(format!("\n{} recorded conflict(s):", self.conflicts.len()));
+            out.say(format!(
+                "\n{}",
+                style::out(
+                    RED,
+                    format!("{} recorded conflict(s):", self.conflicts.len())
+                )
+            ));
             for c in &self.conflicts {
                 out.say(format!(
-                    "  {:<14} {}{}",
+                    "  {:<width$} {}{}",
                     c.issue_key,
                     c.field,
                     c.resolved
@@ -140,16 +199,19 @@ impl StatusReport {
                         .unwrap_or_default()
                 ));
             }
-            out.say("resolve with `jired resolve`");
+            out.hint("use \"jired resolve --ours|--theirs\", or edit and \"jired resolve --done\"");
         }
         if !self.pending_ops.is_empty() {
             out.say(format!(
-                "\n{} unfinished push operation(s) — run `jired push --resume`:",
-                self.pending_ops.len()
+                "\n{}",
+                style::out(
+                    YELLOW,
+                    format!("{} unfinished push operation(s):", self.pending_ops.len())
+                )
             ));
             for op in &self.pending_ops {
                 out.say(format!(
-                    "  {:<14} {} ({}){}",
+                    "  {:<width$} {} ({}){}",
                     op.issue_key,
                     op.kind,
                     op.status,
@@ -159,13 +221,47 @@ impl StatusReport {
                         .unwrap_or_default()
                 ));
             }
+            out.hint("use \"jired push --resume\" to finish them");
+        }
+        if !self.unchanged.is_empty() {
+            out.say(format!(
+                "\n{}",
+                style::out(
+                    BOLD,
+                    format!("{} unchanged issue(s):", self.unchanged.len())
+                )
+            ));
+            for u in &self.unchanged {
+                out.say(format!(
+                    "  {:<width$} {:<12} {}",
+                    u.key, u.status, u.summary
+                ));
+            }
         }
         for w in &self.warnings {
             out.warn(format!("{}: {}", w.file, w.message));
         }
         if self.is_clean() {
             out.say("\nnothing to push, no conflicts");
+            if self.behind.is_empty() && self.workspace.last_fetch_at.is_some() {
+                out.hint("use \"jired pull\" to check the server for changes");
+            }
         }
+    }
+
+    fn key_width(&self) -> usize {
+        let widest = self
+            .new_issues
+            .iter()
+            .map(|n| n.key.len())
+            .chain(self.dirty.iter().map(|d| d.key.len()))
+            .chain(self.staged_transitions.iter().map(|t| t.key.len()))
+            .chain(self.conflicts.iter().map(|c| c.issue_key.len()))
+            .chain(self.pending_ops.iter().map(|o| o.issue_key.len()))
+            .chain(self.unchanged.iter().map(|u| u.key.len()))
+            .max()
+            .unwrap_or(10);
+        widest.clamp(8, 30)
     }
 
     pub fn is_clean(&self) -> bool {
@@ -177,7 +273,7 @@ impl StatusReport {
     }
 }
 
-pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
+pub fn run(ctx: &mut Context, args: &StatusArgs) -> Result<StatusReport> {
     let engine = Engine::open(ctx)?;
     let files = engine.projector.scan()?;
     let field_map = engine.field_map()?;
@@ -188,6 +284,7 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
     let mut behind = Vec::new();
     let mut staged = Vec::new();
     let mut warnings = Vec::new();
+    let mut unchanged = Vec::new();
 
     for row in &rows {
         if row.key.starts_with("NEW-") {
@@ -233,6 +330,16 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
         )?
         .is_empty();
         if hash == base.md_hash && !staged_uploads {
+            if args.all {
+                if let Ok(doc) = engine.projector.read(&file.relative) {
+                    unchanged.push(UnchangedIssue {
+                        key: row.key.clone(),
+                        file: file.relative.clone(),
+                        status: doc.frontmatter.status.clone(),
+                        summary: doc.frontmatter.summary.clone(),
+                    });
+                }
+            }
             continue;
         }
 
@@ -341,11 +448,23 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
         staged_transitions: staged,
         pending_ops: engine.state.pending_ops()?,
         warnings,
+        unchanged,
     })
 }
 
 fn out_warn(ctx: &Context, message: &str) {
     ctx.out.warn(message);
+}
+
+/// Issues whose working copy differs from the last sync.
+///
+/// Used by the commands that are about to overwrite files, so they can name what
+/// would be lost before asking.
+pub fn dirty_keys(ctx: &mut Context) -> Result<Vec<String>> {
+    let report = run(ctx, &StatusArgs::default())?;
+    let mut keys: Vec<String> = report.dirty.into_iter().map(|d| d.key).collect();
+    keys.sort();
+    Ok(keys)
 }
 
 pub fn humanize_age(seconds: i64) -> String {
@@ -388,6 +507,7 @@ mod tests {
             staged_transitions: vec![],
             pending_ops: vec![],
             warnings: vec![],
+            unchanged: vec![],
         };
         // Being behind the server is not "unclean": a pull fixes it and there
         // is nothing of the user's to lose.

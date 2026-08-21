@@ -29,6 +29,19 @@
     },
     "summary": {
       "type": "string"
+    },
+    "new_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Real key the server assigned, when --push created it immediately"
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "description": "The push report, when --push was given"
     }
   }
 }

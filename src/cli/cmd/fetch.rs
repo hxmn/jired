@@ -8,6 +8,13 @@ use clap::Args;
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct FetchArgs {
+    /// Fetch only these issues: keys or file paths
+    ///
+    /// The same positional form `push`, `diff` and `resolve` take, so
+    /// `jired pull PROJ-1` works like `jired push PROJ-1`.
+    #[arg(value_name = "ISSUES", value_delimiter = ',')]
+    pub positional_issues: Vec<String>,
+
     /// Restrict the fetch to issues matching this JQL
     #[arg(long, value_name = "JQL")]
     pub jql: Option<String>,
@@ -20,7 +27,7 @@ pub struct FetchArgs {
     #[arg(long, value_name = "BOARD")]
     pub board: Option<String>,
 
-    /// Fetch only these issues
+    /// Fetch only these issues (same as the positional form)
     #[arg(long, value_name = "KEYS", value_delimiter = ',')]
     pub issues: Vec<String>,
 
@@ -35,6 +42,22 @@ pub struct FetchArgs {
     /// Skip changelogs to keep the state database small
     #[arg(long)]
     pub slim: bool,
+}
+
+impl FetchArgs {
+    /// Every issue named, from either spelling, resolved to keys.
+    pub fn wanted_issues(&self) -> Vec<String> {
+        let mut all: Vec<String> = self
+            .positional_issues
+            .iter()
+            .chain(self.issues.iter())
+            .map(|r| crate::project::naming::key_from_input(r))
+            .filter(|k| !k.is_empty())
+            .collect();
+        all.sort();
+        all.dedup();
+        all
+    }
 }
 
 pub fn run(g: &GlobalArgs, args: &FetchArgs, out: Out) -> Result<ExitCode> {

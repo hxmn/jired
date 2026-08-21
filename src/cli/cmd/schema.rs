@@ -7,7 +7,13 @@ use clap::Args;
 #[derive(Args, Debug)]
 pub struct SchemaArgs {
     /// Schema to print (omit to list all)
+    #[arg(value_parser = name_parser())]
     pub name: Option<String>,
+}
+
+/// Every schema name, so `--help` and shell completion list them.
+fn name_parser() -> clap::builder::PossibleValuesParser {
+    clap::builder::PossibleValuesParser::new(SCHEMAS.iter().map(|(n, _)| *n))
 }
 
 /// Embedded schema documents, keyed by their `jired/<name>/1` tag.
@@ -84,7 +90,7 @@ pub fn run(args: &SchemaArgs, out: Out) -> Result<ExitCode> {
                             .join(", ")
                     ))
             })?;
-            println!("{text}");
+            out.say(text);
         }
         None => {
             if out.json {
@@ -101,10 +107,17 @@ pub fn run(args: &SchemaArgs, out: Out) -> Result<ExitCode> {
                     "schema": "jired/schemas/1",
                     "schemas": all,
                 });
-                println!("{}", serde_json::to_string_pretty(&doc)?);
+                // Printed directly: this *is* the result document, and `emit`
+                // would wrap it in a second envelope.
+                let mut stdout = std::io::stdout().lock();
+                let _ = std::io::Write::write_all(
+                    &mut stdout,
+                    serde_json::to_string_pretty(&doc)?.as_bytes(),
+                );
+                let _ = std::io::Write::write_all(&mut stdout, b"\n");
             } else {
                 for (name, _) in SCHEMAS {
-                    println!("{name}");
+                    out.say(name);
                 }
             }
         }

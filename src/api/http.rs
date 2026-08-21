@@ -308,24 +308,69 @@ impl HttpClient {
     ) -> JiredError {
         let body = resp.text().await.unwrap_or_default();
         let detail = extract_error_messages(&body);
-        let message = match detail {
-            Some(d) => format!("{method} {path} failed with {status}: {d}"),
-            None => format!("{method} {path} failed with {status}"),
+
+        // The REST path is jired's business, not the user's. What they need is
+        // what jired was trying to do and what the server said back; the path
+        // stays in `details`, which `-v` prints.
+        let subject = describe_target(path);
+        let message = match (&subject, &detail) {
+            (Some(s), Some(d)) => format!("{s}: {d} (HTTP {})", status.as_u16()),
+            (Some(s), None) => format!("{s}: the server refused with HTTP {}", status.as_u16()),
+            (None, Some(d)) => format!("{d} (HTTP {})", status.as_u16()),
+            (None, None) => format!("the server refused with HTTP {}", status.as_u16()),
         };
+
         let err = match status {
-            StatusCode::UNAUTHORIZED => {
-                JiredError::auth(message).with_hint("run `jired init --force` to re-authenticate")
-            }
+            StatusCode::UNAUTHORIZED => JiredError::auth(message)
+                .with_hint("the credential was rejected — run `jired init --force`"),
             StatusCode::FORBIDDEN => JiredError::auth(message)
                 .with_hint("the account lacks permission for this operation"),
-            StatusCode::NOT_FOUND => JiredError::generic(message)
+            // A 404 on a probe endpoint means the URL is not a Jira, which is a
+            // very different problem from an issue that does not exist.
+            StatusCode::NOT_FOUND if is_probe_path(path) => JiredError::usage(format!(
+                "no Jira REST API at this URL (HTTP {})",
+                status.as_u16()
+            ))
+            .with_hint(
+                "check server.url — it should be the site root, e.g. https://acme.atlassian.net",
+            ),
+            // The user typed the key; a key that does not resolve is their input.
+            StatusCode::NOT_FOUND => JiredError::usage(message)
                 .with_hint("the issue may not exist, or the account cannot see it"),
-            s if s.is_server_error() => JiredError::network(message),
+            s if s.is_server_error() => JiredError::network(message)
+                .with_hint("the server failed, not jired — retrying later usually works"),
             _ => JiredError::generic(message),
         };
         err.with_detail("status", status.as_u16())
+            .with_detail("method", method.to_string())
             .with_detail("path", path.to_string())
     }
+}
+
+/// Endpoints jired calls to check the server itself rather than an issue.
+fn is_probe_path(path: &str) -> bool {
+    path.contains("serverInfo") || path.ends_with("/myself")
+}
+
+/// Name what a REST path was acting on, in the user's vocabulary.
+fn describe_target(path: &str) -> Option<String> {
+    let rest = path.split("/issue/").nth(1)?;
+    let key = rest.split('/').next()?;
+    if key.is_empty() {
+        return None;
+    }
+    let what = if rest.contains("/comment") {
+        "comment on "
+    } else if rest.contains("/attachments") {
+        "attachment on "
+    } else if rest.contains("/transitions") {
+        "transition of "
+    } else if rest.contains("/assignee") {
+        "assignee of "
+    } else {
+        ""
+    };
+    Some(format!("{what}{key}"))
 }
 
 fn auth_header(
@@ -397,21 +442,40 @@ fn backoff(attempt: u32) -> Duration {
 
 fn network_error(e: &reqwest::Error, method: &Method, path: &str) -> JiredError {
     let kind = if e.is_timeout() {
-        "timed out"
+        "the server did not answer in time"
     } else if e.is_connect() {
-        "cannot connect"
+        "cannot reach the server"
     } else {
-        "request failed"
+        "the request failed"
     };
-    let mut err = JiredError::network(format!("{method} {path}: {kind}: {e}"));
-    let text = e.to_string().to_lowercase();
-    if text.contains("certificate") || text.contains("tls") || text.contains("ssl") {
-        err = err.with_hint(
-            "for a self-signed Data Center instance pass --ca-cert <bundle.pem>, \
-             or --insecure to skip verification",
-        );
+    // `reqwest`'s Display is a chain ending in the part that actually explains
+    // it; the whole chain repeats the URL and the layer names for no gain.
+    let cause = innermost_cause(e);
+    let text = format!("{e}").to_lowercase();
+    let hint = if text.contains("certificate") || text.contains("tls") || text.contains("ssl") {
+        "for a self-signed Data Center instance pass --ca-cert <bundle.pem>, \
+         or --insecure to skip verification"
+    } else if text.contains("dns") || text.contains("resolve") {
+        "the hostname did not resolve — check server.url, and any VPN or proxy you need"
+    } else if e.is_timeout() {
+        "check your network and any HTTPS_PROXY setting; `jired doctor` verifies connectivity"
+    } else {
+        "check server.url and your network; `jired doctor` verifies connectivity"
+    };
+    JiredError::network(format!("{kind}: {cause}"))
+        .with_hint(hint)
+        .with_detail("method", method.to_string())
+        .with_detail("path", path.to_string())
+        .with_detail("cause", e.to_string())
+}
+
+/// The last link in an error's source chain: the part that says what went wrong.
+fn innermost_cause(e: &dyn std::error::Error) -> String {
+    let mut current: &dyn std::error::Error = e;
+    while let Some(next) = current.source() {
+        current = next;
     }
-    err
+    current.to_string()
 }
 
 /// Jira reports problems in `errorMessages` and `errors`; surface both.

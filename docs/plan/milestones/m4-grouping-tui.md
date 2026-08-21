@@ -9,7 +9,7 @@ Depends on: M3 complete.
 ## Status
 
 Grouping is delivered: `by-parent/`, `sprints/` and `boards/` are rebuilt from
-`state.db` on every pull and by `clean --regroup`, links degrade
+`state.db` on every pull and by `doctor --regroup`, links degrade
 symlink → hard link → stub, and dragging a card between board columns stages a
 transition that `status` and `push --dry-run` both account for.
 
@@ -21,7 +21,7 @@ command works non-interactively today, so nothing is blocked on them.
 
 ## Acceptance criteria
 
-- [x] `jired clean --regroup` reconstructs all grouping links from `state.db`
+- [x] `jired doctor --regroup` reconstructs all grouping links from `state.db`
 - [ ] Verified on macOS and Windows, and without symlink privilege (needs CI to run)
 - [x] Moving a board symlink between column folders stages a transition visible in `status` and `push --dry-run` (D4)
 - [ ] `init` wizard, pickers, pull/push previews, and conflict resolver work interactively and degrade per spec in `--no-input`
@@ -54,10 +54,10 @@ command works non-interactively today, so nothing is blocked on them.
 - [x] Staged move shown in `status` and `push --dry-run`; ambiguous column→status mapping → warning, move ignored
 - **Done when:** move-detection E2E passes and push applies the staged transition.
 
-### M4.5 `clean --regroup` + orphan link handling
+### M4.5 `doctor --regroup` + orphan link handling
 - [x] Full regeneration of all grouping trees from `state.db` (groups are never source of truth)
 - [x] Dangling links (target renamed/removed) repaired or removed
-- **Done when:** deleting all grouping folders + `clean --regroup` restores them byte-for-byte.
+- **Done when:** deleting all grouping folders + `doctor --regroup` restores them byte-for-byte.
 
 ### M4.6 TUI framework
 - [x] Shared ratatui component kit: list+fuzzy filter, form, confirm dialog; keys arrows/tab, `enter`, `esc`, `f1`

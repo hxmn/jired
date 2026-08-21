@@ -46,14 +46,17 @@ fn random_bytes(len: usize) -> Result<Vec<u8>> {
 
 fn getrandom(buf: &mut [u8]) -> Result<()> {
     use rand::TryRngCore;
-    rand::rngs::OsRng
-        .try_fill_bytes(buf)
-        .map_err(|e| JiredError::generic(format!("no secure randomness available: {e}")))
+    rand::rngs::OsRng.try_fill_bytes(buf).map_err(|e| {
+        JiredError::generic(format!("no secure randomness available: {e}"))
+            .with_hint("jired will not store a credential without it")
+    })
 }
 
 fn derive(passphrase: &str, params: &KdfParams) -> Result<[u8; KEY_LEN]> {
-    let salt = hex::decode(&params.salt)
-        .map_err(|_| JiredError::auth("stored credential has a malformed salt"))?;
+    let salt = hex::decode(&params.salt).map_err(|_| {
+        JiredError::auth("the stored credential is damaged (malformed salt)")
+            .with_hint("run `jired init --force` to store it again")
+    })?;
     let sp = scrypt::Params::new(params.log_n, params.r, params.p, KEY_LEN)
         .map_err(|e| JiredError::auth(format!("invalid key-derivation parameters: {e}")))?;
     let mut key = [0u8; KEY_LEN];
@@ -74,7 +77,10 @@ pub fn seal(plaintext: &[u8], passphrase: &str) -> Result<(Vec<u8>, String)> {
     let nonce_bytes = hex::decode(&params.nonce).expect("just encoded");
     let ciphertext = cipher
         .encrypt(XNonce::from_slice(&nonce_bytes), plaintext)
-        .map_err(|_| JiredError::generic("failed to encrypt the credential"))?;
+        .map_err(|_| {
+            JiredError::generic("failed to encrypt the credential")
+                .with_hint("report this: encryption should not fail once a key is derived")
+        })?;
     params.algorithm = "scrypt-xchacha20poly1305".into();
     Ok((ciphertext, serde_json::to_string(&params)?))
 }
@@ -90,8 +96,10 @@ pub fn open(ciphertext: &[u8], kdf_json: &str, passphrase: &str) -> Result<Vec<u
         )));
     }
     let key = derive(passphrase, &params)?;
-    let nonce = hex::decode(&params.nonce)
-        .map_err(|_| JiredError::auth("stored credential has a malformed nonce"))?;
+    let nonce = hex::decode(&params.nonce).map_err(|_| {
+        JiredError::auth("the stored credential is damaged (malformed nonce)")
+            .with_hint("run `jired init --force` to store it again")
+    })?;
     let cipher = XChaCha20Poly1305::new((&key).into());
     cipher
         .decrypt(XNonce::from_slice(&nonce), ciphertext)

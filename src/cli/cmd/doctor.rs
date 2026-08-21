@@ -28,6 +28,9 @@ pub struct DoctorArgs {
     /// Rebuild the grouping folders even when nothing else changed
     #[arg(long)]
     pub regroup: bool,
+
+    #[command(flatten)]
+    pub conn: crate::cli::ConnectionArgs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -62,6 +65,9 @@ struct Check {
     /// Individual repairs, for the checks that make several.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     changes: Vec<Change>,
+    /// What a grouping rebuild did, when this is the groups check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    regrouped: Option<crate::sync::group::GroupReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,39 +86,97 @@ struct DoctorReport {
 }
 
 pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
-    let mut ctx = Context::open(g, out)?;
-    if !args.dry_run {
-        ctx.lock()?;
-    }
+    let mut ctx = Context::open_with(g, &args.conn, out)?;
 
+    // Always survey first. Doctor renames files, rewrites config and moves
+    // credentials; someone typing `jired doctor` to find out what is wrong
+    // deserves to see the list before any of that happens.
+    let survey = DoctorArgs {
+        dry_run: true,
+        ..args.clone()
+    };
+    let preview = collect(&mut ctx, &survey)?;
+    let repairable = preview
+        .iter()
+        .filter(|c| c.status == Status::WouldFix)
+        .count();
+
+    // Only a person gets asked; a script or `--yes` proceeds, and then the
+    // preview would just be the same list printed twice.
+    let must_ask = ctx.resolver.interactive() && !ctx.yes;
+    let apply = !args.dry_run
+        && repairable > 0
+        && (!must_ask || {
+            render(&preview, out);
+            out.say("");
+            crate::cli::cmd::prompt::confirm(
+                &format!("apply {repairable} repair(s)?"),
+                false,
+                true,
+            )?
+        });
+
+    let checks = if apply {
+        ctx.lock()?;
+        collect(&mut ctx, args)?
+    } else {
+        if !args.dry_run && repairable > 0 {
+            out.say("no changes made");
+            out.emit(
+                "doctor",
+                &DoctorReport {
+                    dry_run: true,
+                    fixed: 0,
+                    pending: repairable,
+                    problems: preview
+                        .iter()
+                        .filter(|c| c.status == Status::Problem)
+                        .count(),
+                    checks: preview,
+                },
+            );
+            return Ok(ExitCode::Success);
+        }
+        preview
+    };
+
+    render(&checks, out);
+    finish(checks, args.dry_run && !apply, out)
+}
+
+/// Run every check, repairing as it goes unless `args.dry_run`.
+fn collect(ctx: &mut Context, args: &DoctorArgs) -> Result<Vec<Check>> {
     // Section repairs rewrite files where they stand, so they run before
     // anything moves them.
-    let sections = check_sections(&mut ctx, args)?;
-    let custom_fields = check_custom_fields(&mut ctx, args)?;
+    let sections = check_sections(ctx, args)?;
+    let custom_fields = check_custom_fields(ctx, args)?;
     // The filename pass decides where every issue ends up, so the database
     // check works from its result rather than from what is on disk right now —
     // otherwise a dry run would report the two repairs undoing each other.
-    let (filenames, final_paths) = check_filenames(&ctx, args)?;
+    let (filenames, final_paths) = check_filenames(ctx, args)?;
     // Grouping folders hold links to issue files by name, so a rename leaves
     // them dangling; repairing the names without repairing the links would be
     // half a repair.
     let renamed = !filenames.changes.is_empty();
     let mut checks = vec![
-        check_layout(&ctx, args)?,
-        check_config(&mut ctx, args)?,
-        check_credentials(&mut ctx, args, g)?,
+        check_layout(ctx, args)?,
+        check_config(ctx, args)?,
+        check_credentials(ctx, args)?,
         sections,
         custom_fields,
         filenames,
-        check_state_paths(&ctx, args, &final_paths)?,
-        check_gitignore(&ctx, args)?,
-        check_agent_docs(&ctx, args)?,
+        check_state_paths(ctx, args, &final_paths)?,
+        check_gitignore(ctx, args)?,
+        check_agent_docs(ctx, args)?,
     ];
     if args.regroup || renamed {
-        checks.push(check_groups(&mut ctx, args)?);
+        checks.push(check_groups(ctx, args)?);
     }
+    Ok(checks)
+}
 
-    for c in &checks {
+fn render(checks: &[Check], out: Out) {
+    for c in checks {
         out.say(format!(
             "{:<5} {:<12} {}",
             c.status.mark(),
@@ -123,7 +187,9 @@ pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
             out.say(format!("            {} → {}", change.from, change.to));
         }
     }
+}
 
+fn finish(checks: Vec<Check>, dry_run: bool, out: Out) -> Result<ExitCode> {
     let fixed = checks.iter().filter(|c| c.status == Status::Fixed).count();
     let pending = checks
         .iter()
@@ -143,7 +209,7 @@ pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
     });
 
     let report = DoctorReport {
-        dry_run: args.dry_run,
+        dry_run,
         checks,
         fixed,
         pending,
@@ -164,6 +230,7 @@ fn ok(name: &'static str, detail: impl Into<String>) -> Check {
         status: Status::Ok,
         detail: detail.into(),
         changes: Vec::new(),
+        regrouped: None,
     }
 }
 
@@ -177,6 +244,7 @@ fn repaired(name: &'static str, dry_run: bool, detail: impl Into<String>) -> Che
         },
         detail: detail.into(),
         changes: Vec::new(),
+        regrouped: None,
     }
 }
 
@@ -186,6 +254,7 @@ fn problem(name: &'static str, detail: impl Into<String>) -> Check {
         status: Status::Problem,
         detail: detail.into(),
         changes: Vec::new(),
+        regrouped: None,
     }
 }
 
@@ -313,7 +382,7 @@ const RENAMED_KEYS: [(&str, &str); 1] = [("checklist.done_transition", "children
 
 /// There is an account, its token can still be read back, and it is kept where
 /// `creds.storage` says it should be.
-fn check_credentials(ctx: &mut Context, args: &DoctorArgs, g: &GlobalArgs) -> Result<Check> {
+fn check_credentials(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     let session = SessionStore::open(&ctx.workspace)?;
     let Some(account) = session.account()? else {
         return Ok(problem(
@@ -358,7 +427,7 @@ fn check_credentials(ctx: &mut Context, args: &DoctorArgs, g: &GlobalArgs) -> Re
     if args.dry_run {
         return Ok(repaired("credentials", true, detail));
     }
-    match session.relocate_secret(&account, wanted, g.insecure_store) {
+    match session.relocate_secret(&account, wanted, args.conn.insecure_store) {
         Ok(()) => Ok(repaired("credentials", false, detail)),
         Err(e) => Ok(problem(
             "credentials",
@@ -818,12 +887,19 @@ fn check_groups(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     };
     let options = crate::sync::group::GroupOptions::from_context(ctx)?;
     let report = crate::sync::group::regroup(&engine, engine.projector.root(), &options)?;
-    Ok(repaired(
+    let mut check = repaired(
         "groups",
         false,
         format!(
             "rebuilt {} link(s) across {} parent(s), {} sprint(s), {} board(s)",
             report.links, report.parents, report.sprints, report.boards
         ),
-    ))
+    );
+    for w in &report.warnings {
+        ctx.out.warn(w);
+    }
+    // Carried into the JSON: what the rebuild produced — how many links, and in
+    // which mode — is the only way a caller can check the outcome.
+    check.regrouped = Some(report);
+    Ok(check)
 }

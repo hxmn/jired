@@ -291,7 +291,9 @@ pub fn split_frontmatter(text: &str) -> Result<(String, String)> {
         .strip_prefix("---\n")
         .or_else(|| text.strip_prefix("---\r\n"))
         .ok_or_else(|| {
-            JiredError::generic("the file does not start with a YAML frontmatter block")
+            // A usage error, not a generic one: a file in this state was
+            // hand-edited, and that is the same class of mistake as a bad flag.
+            JiredError::usage("the file does not start with a YAML frontmatter block")
                 .with_hint("an issue file must begin with a line containing only `---`")
         })?;
 
@@ -306,7 +308,7 @@ pub fn split_frontmatter(text: &str) -> Result<(String, String)> {
         offset += line.len();
     }
     Err(
-        JiredError::generic("the frontmatter block is not closed with `---`")
+        JiredError::usage("the frontmatter block is not closed with `---`")
             .with_hint("add a line containing only `---` after the YAML header"),
     )
 }
@@ -547,7 +549,7 @@ fn parse_comments(content: &str) -> Result<Vec<CommentBlock>> {
 fn parse_comment_heading(text: &str) -> Result<CommentBlock> {
     let rest = text.trim();
     let inner_end = rest.find(']').ok_or_else(|| {
-        JiredError::generic(format!(
+        JiredError::usage(format!(
             "comment heading has no `[id]` marker: `### {rest}`"
         ))
         .with_hint("use `### [new]` for a new comment")
@@ -556,9 +558,10 @@ fn parse_comment_heading(text: &str) -> Result<CommentBlock> {
     let tail = rest[inner_end + 1..].trim();
 
     if !rest.starts_with('[') {
-        return Err(JiredError::generic(format!(
+        return Err(JiredError::usage(format!(
             "comment heading must start with `[`: `### {rest}`"
-        )));
+        ))
+        .with_hint("use `### [new]` for a new comment, or leave an existing `[c-…]` id alone"));
     }
 
     if marker.eq_ignore_ascii_case("new") {

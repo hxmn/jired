@@ -13,6 +13,15 @@ use crate::api::model::*;
 use crate::api::normalize::{self, FieldMap};
 use crate::api::{Deployment, Markup};
 use crate::error::{JiredError, Result};
+
+/// Every fixture failure points back at the directory that produced it.
+///
+/// `JIRED_FIXTURES` is a supported escape hatch, not test-only plumbing: it is
+/// how the end-to-end suite runs offline and how a bug can be reproduced from a
+/// recording. Its errors have to be as legible as any other.
+const FIXTURE_HINT: &str = "the fixture directory in JIRED_FIXTURES is incomplete; \
+                            re-record it with `jired-record`, or unset the variable \
+                            to talk to a real server";
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
@@ -147,7 +156,8 @@ impl FixtureClient {
             .get(key)
             .cloned()
             .ok_or_else(|| {
-                JiredError::generic(format!("fixture has no issue {key}"))
+                JiredError::usage(format!("fixture has no issue {key}"))
+                    .with_hint(FIXTURE_HINT)
                     .with_detail("status", 404)
             })
     }
@@ -239,8 +249,9 @@ impl JiraApi for FixtureClient {
     }
 
     async fn myself(&self) -> Result<Myself> {
-        let v = read_json(&self.dir, "myself.json")
-            .ok_or_else(|| JiredError::auth("fixture has no myself.json"))?;
+        let v = read_json(&self.dir, "myself.json").ok_or_else(|| {
+            JiredError::auth("fixture has no myself.json").with_hint(FIXTURE_HINT)
+        })?;
         Ok(Myself {
             account_id: v
                 .get("accountId")
@@ -342,7 +353,10 @@ impl JiraApi for FixtureClient {
             .and_then(|f| f.get("updated"))
             .and_then(Value::as_str)
             .and_then(parse_timestamp)
-            .ok_or_else(|| JiredError::generic(format!("fixture issue {key} has no updated")))
+            .ok_or_else(|| {
+                JiredError::usage(format!("fixture issue {key} has no `updated` field"))
+                    .with_hint(FIXTURE_HINT)
+            })
     }
 
     async fn changelog(&self, key: &str) -> Result<Vec<ChangelogEntry>> {
@@ -496,7 +510,9 @@ impl JiraApi for FixtureClient {
         normalize::comments_from(Some(&json!([comment])), self.markup())
             .into_iter()
             .next()
-            .ok_or_else(|| JiredError::generic("fixture produced an unreadable comment"))
+            .ok_or_else(|| {
+                JiredError::usage("fixture produced an unreadable comment").with_hint(FIXTURE_HINT)
+            })
     }
 
     async fn update_comment(&self, key: &str, id: &str, body: &RichText) -> Result<RemoteComment> {
@@ -530,7 +546,9 @@ impl JiraApi for FixtureClient {
         normalize::comments_from(Some(&json!([updated])), self.markup())
             .into_iter()
             .next()
-            .ok_or_else(|| JiredError::generic("fixture produced an unreadable comment"))
+            .ok_or_else(|| {
+                JiredError::usage("fixture produced an unreadable comment").with_hint(FIXTURE_HINT)
+            })
     }
 
     async fn delete_comment(&self, key: &str, id: &str) -> Result<()> {

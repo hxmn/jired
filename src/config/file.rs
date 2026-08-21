@@ -21,7 +21,9 @@ impl ConfigFile {
 
     pub fn from_toml(text: &str) -> Result<Self> {
         let doc: DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
-            JiredError::usage(format!("invalid config TOML: {e}"))
+            JiredError::usage(format!("invalid config TOML: {e}")).with_hint(
+                "`jired config edit` opens the file, `jired config set` rewrites one key",
+            )
         })?;
         Ok(Self { doc, path: None })
     }
@@ -40,10 +42,7 @@ impl ConfigFile {
                 cfg.path = Some(path.to_path_buf());
                 Ok(cfg)
             }
-            Err(e) => Err(JiredError::generic(format!(
-                "cannot read {}: {e}",
-                path.display()
-            ))),
+            Err(e) => Err(crate::error::io_error("read", path, e)),
         }
     }
 
@@ -194,14 +193,16 @@ impl ConfigFile {
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = self
-            .path
-            .as_ref()
-            .ok_or_else(|| JiredError::generic("config file has no path"))?;
+        // An internal invariant: every loaded or saved config remembers where it
+        // came from. Reaching this means a caller built one by hand.
+        let path = self.path.as_ref().ok_or_else(|| {
+            JiredError::generic("internal error: this config was not loaded from a file")
+                .with_hint("report this; `jired config path` shows where a write would go")
+        })?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(crate::error::io_ctx("create", parent))?;
         }
-        std::fs::write(path, self.to_toml())?;
+        std::fs::write(path, self.to_toml()).map_err(crate::error::io_ctx("write", path))?;
         Ok(())
     }
 

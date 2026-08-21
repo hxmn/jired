@@ -103,6 +103,10 @@
                 }
               }
             }
+          },
+          "hint": {
+            "type": "string",
+            "description": "What to do about `error`; absent when the issue succeeded"
           }
         }
       }

@@ -26,10 +26,13 @@ use secrecy::SecretString;
 use std::sync::OnceLock;
 
 /// Which Jira product a workspace talks to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Deployment {
+    /// Atlassian-hosted (REST v3, ADF)
     Cloud,
+    /// Self-hosted Data Center or Server (REST v2, wiki markup)
+    #[value(name = "datacenter", alias = "dc", alias = "server")]
     DataCenter,
 }
 
@@ -89,13 +92,21 @@ pub enum Markup {
     Wiki,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthKind {
+    /// Email plus an API token (Jira Cloud)
+    #[value(name = "api-token", alias = "api_token", alias = "token")]
     ApiToken,
+    /// Personal access token as a bearer header (Data Center)
+    #[value(name = "pat", alias = "bearer")]
     Pat,
+    /// Username and password
     Basic,
+    /// Reuse an existing session cookie
+    #[value(alias = "session")]
     Cookie,
+    #[value(name = "oauth2", alias = "oauth")]
     OAuth2,
 }
 
@@ -122,9 +133,8 @@ impl AuthKind {
             "basic" => Ok(AuthKind::Basic),
             "cookie" | "session" => Ok(AuthKind::Cookie),
             "oauth2" | "oauth" => Ok(AuthKind::OAuth2),
-            other => Err(JiredError::usage(format!(
-                "unknown auth method `{other}` (expected api-token, pat, or basic)"
-            ))),
+            other => Err(JiredError::usage(format!("unknown auth method `{other}`"))
+                .with_hint("expected one of: api-token, pat, basic, cookie, oauth2")),
         }
     }
 }
@@ -200,7 +210,11 @@ fn check_supported(deployment: Deployment, version: Option<&str>) -> Result<()> 
             "Jira Data Center {version} is not supported (jired needs {MIN_DC_MAJOR}.0 or newer)"
         ))
         .with_detail("version", version.to_string())
-        .with_detail("minimum", format!("{MIN_DC_MAJOR}.0")));
+        .with_detail("minimum", format!("{MIN_DC_MAJOR}.0"))
+        .with_hint(
+            "ask whoever runs this Jira to upgrade; older releases lack the \
+             PAT auth and v2 endpoints jired depends on",
+        ));
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! `jired comment` [M3.2] — append a comment without hand-editing the file.
 
-use crate::cli::cmd::edit::{edit_issue, message_or_stdin, push_one};
+use crate::cli::cmd::edit::{edit_issue, message_or_stdin, push_one, report_push};
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::doc::{CommentBlock, CommentId};
@@ -10,14 +10,17 @@ use clap::Args;
 
 #[derive(Args, Debug, Clone)]
 pub struct CommentArgs {
-    /// Issue to comment on
+    /// Issue to comment on: a key, or the path to its file
     pub issue: String,
-    /// Comment body (reads stdin when omitted)
+    /// Comment body (opens $EDITOR, or reads stdin, when omitted)
     #[arg(short = 'm', long = "message")]
     pub message: Option<String>,
     /// Send the comment immediately instead of leaving it staged
     #[arg(long)]
     pub push: bool,
+    /// With --push, show the API call without sending it
+    #[arg(long, requires = "push")]
+    pub dry_run: bool,
 }
 
 pub fn run(g: &GlobalArgs, args: &CommentArgs, out: Out) -> Result<ExitCode> {
@@ -39,16 +42,22 @@ pub fn run(g: &GlobalArgs, args: &CommentArgs, out: Out) -> Result<ExitCode> {
     })?;
 
     let pushed = if args.push {
-        Some(push_one(&mut ctx, &key)?)
+        let report = push_one(&mut ctx, &key, args.dry_run)?;
+        report_push(&report, out);
+        Some(report)
     } else {
         None
     };
 
     match &pushed {
+        Some(report) if report.dry_run => {}
         Some(report) if report.results.iter().all(|r| r.ok) => {
             out.say(format!("commented on {key}"))
         }
-        Some(_) => out.say(format!("staged a comment on {key}; the push failed")),
+        Some(_) => out.say(format!(
+            "the comment is staged in {file}, but the push failed — \
+             fix the cause and run `jired push`"
+        )),
         None => out.say(format!(
             "staged a comment on {key} in {file} — run `jired push` to send it"
         )),

@@ -6,6 +6,7 @@
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::config::keys;
+use crate::doc::frontmatter;
 use crate::error::{ExitCode, Result};
 use crate::json::Out;
 use clap::{Args, CommandFactory};
@@ -59,6 +60,15 @@ pub fn write_managed_block(path: &Path, body: &str) -> Result<()> {
     Ok(())
 }
 
+/// A field-name list as prose: `` `a`, `b`, `c` ``.
+fn field_list(fields: &[&str]) -> String {
+    fields
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub fn render() -> String {
     let mut s = String::new();
     s.push_str("# Working with this jired workspace\n\n");
@@ -70,7 +80,9 @@ pub fn render() -> String {
 
     s.push_str("## Safe workflow\n\n```sh\n");
     s.push_str("jired status --json            # what is dirty, behind, or conflicted\n");
-    s.push_str("jired pull --json              # exit 5 means conflicts; nothing was written\n");
+    s.push_str(
+        "jired pull --json              # exit 5 means conflicts; see \"Conflicts\" below\n",
+    );
     s.push_str("#   `updated[].changes` says what each issue's pull brought in\n");
     s.push_str("#   ... edit the .md files ...\n");
     s.push_str("jired diff --json              # confirm only intended changes\n");
@@ -82,8 +94,8 @@ pub fn render() -> String {
     s.push_str("| Path | Meaning |\n|---|---|\n");
     s.push_str("| `PROJ-0142. Summary.md` | One issue. The key prefix is its identity; the summary part is cosmetic. The number is zero-padded so files sort numerically — the key itself is `PROJ-142`, which is what the frontmatter and every command use. |\n");
     s.push_str("| `.PROJ-0142. Summary/` | Attachments for that issue. New files here are uploaded on push. |\n");
-    s.push_str("| `by-parent/`, `sprints/`, `boards/` | Grouping links, regenerated from the database. Never edit as source of truth. |\n");
-    s.push_str("| `.jired/` | Machine state: credentials, sync database, logs. Never edit or commit. |\n\n");
+    s.push_str("| `by-parent/`, `sprints/`, `boards/` | Grouping links onto the same issue files, regenerated from the database on every pull. Edits are lost, with one exception: moving an entry between `boards/<board>/<column>/` folders stages a transition to that column's status, the way dragging the card would. An explicit `status:` edit in the file wins if the two disagree. |\n");
+    s.push_str("| `.jired/` | Machine state: credentials, sync database, templates, logs. Never edit or commit, except `.jired/templates/<name>.md` for `jired create --template <name>`. |\n\n");
 
     s.push_str("## File structure\n\n");
     s.push_str(
@@ -91,17 +103,28 @@ pub fn render() -> String {
          `## Description`, `## Checklist`, `## Children`, `## Comments`, \
          `## Attachments`. Keep the section order and heading text intact.\n\n",
     );
+    // Rendered from the same constants the parser enforces. A hand-copied list
+    // silently becomes a lie the first time a field is added, and an agent that
+    // trusts it either skips an editable field or edits a rejected one.
+    s.push_str(&format!(
+        "Editable frontmatter fields: {}. A difference in one of these becomes an API \
+         call on the next push.\n\n",
+        field_list(frontmatter::EDITABLE)
+    ));
+    s.push_str(&format!(
+        "Read-only fields: {}; `jired:` is the whole sync block. They only report \
+         server state, so an edit is dropped with a warning on the next write.\n\n",
+        field_list(frontmatter::READ_ONLY)
+    ));
+    s.push_str(&format!(
+        "Identity fields: {}. Changing one is an error, not a warning — it would write \
+         one issue's content over another's.\n\n",
+        field_list(frontmatter::IDENTITY)
+    ));
     s.push_str(
-        "Editable frontmatter fields: `type`, `status`, `priority`, `summary`, `labels`, \
-         `components`, `assignee`, `sprint`, `parent`, `epic`, `fix_versions`, \
-         `affects_versions`, `links`, `story_points`, and anything under `custom:`.\n\n",
+        "Any other key you add to the header is preserved verbatim and never sent. \
+         Frontmatter `summary` wins over the `# ` heading if they disagree.\n\n",
     );
-    s.push_str(
-        "Read-only fields: `key`, `id`, `reporter`, `created`, `updated`, `url`, and the \
-         whole `jired:` block. Editing `key` or `id` is an error; editing the others is \
-         ignored with a warning.\n\n",
-    );
-    s.push_str("Frontmatter `summary` wins over the `# ` heading if they disagree.\n\n");
 
     s.push_str("## Custom fields\n\n");
     s.push_str(
@@ -133,7 +156,8 @@ pub fn render() -> String {
     s.push_str(
         "- `## Children` lists the subtasks as `- [ ] PROJ-143 Title`, each of them an \
          issue of its own. Ticking a box applies a done-transition only when \
-         `children.done_transition` is configured; otherwise it is reported and ignored.\n",
+         `children.done_transition` is configured; otherwise it is reported and ignored. \
+         Adding a line does not create a subtask — use `jired create --parent PROJ-142`.\n",
     );
     s.push_str(
         "- `## Checklist` is the checklist plugin's list inside this issue, as \
@@ -142,6 +166,16 @@ pub fn render() -> String {
          items; indented lines under an item are its note. It is read-only: an edit is \
          reported by push rather than sent, and the next write from the server \
          replaces it.\n\n",
+    );
+
+    s.push_str("## New issues\n\n");
+    s.push_str(
+        "`jired create` writes `NEW-<hex>. Summary.md` with a placeholder key: the real \
+         one only exists once Jira has been asked. Push creates the issue, renames the \
+         file, and reports the mapping in `results[].new_key`. Locally created issues \
+         are pushed before existing ones, so an issue may name a `NEW-…` key as its \
+         `parent` or `epic`. `jired create --template <name>` starts from \
+         `.jired/templates/<name>.md`, a partial file with no identity fields.\n\n",
     );
 
     s.push_str("## Credentials\n\n");
@@ -179,10 +213,11 @@ pub fn render() -> String {
     s.push_str(
         "`jired doctor` checks the layout, the config file, the credentials, the filenames, \
          the sections inside each issue file and the database, and repairs what it can; \
-         `jired doctor --dry-run` reports without changing anything. It is the migration \
-         path when a convention changes — a filename shape, a section heading, a renamed \
-         setting — so run it after upgrading jired. It exits 1 when something needs a \
-         human.\n\n",
+         `jired doctor --dry-run` reports without changing anything. It surveys before \
+         repairing and asks first at a terminal, so a non-interactive run (or `--yes`) \
+         proceeds without the question. It is the migration path when a convention \
+         changes — a filename shape, a section heading, a renamed setting — so run it \
+         after upgrading jired. It exits 1 when something needs a human.\n\n",
     );
 
     s.push_str("## Lossy regions\n\n");
@@ -194,6 +229,28 @@ pub fn render() -> String {
          Files containing such a region have `lossy: true` in the `jired:` block.\n\n",
     );
 
+    s.push_str("## Conflicts\n\n");
+    s.push_str(
+        "Exit 5 from `pull` means a field changed on both sides. The default strategy \
+         (`abort`) writes nothing; `pull --strategy merge` writes git-style \
+         `<<<<<<< LOCAL` / `=======` / `>>>>>>> REMOTE` markers into the file **and \
+         still exits 5**, so a non-zero status never implies the working copy is \
+         unchanged. `jired status` and `jired resolve --list` say which issues and \
+         fields are affected.\n\n",
+    );
+    s.push_str("```sh\n");
+    s.push_str("jired resolve --list --json     # issue key and field for each conflict\n");
+    s.push_str("jired resolve --ours --json     # keep the local value wherever both changed\n");
+    s.push_str("jired resolve --theirs --json   # take the server's (discards local edits)\n");
+    s.push_str("#   or: edit the markers out of the file by hand, then\n");
+    s.push_str("jired resolve --done --json     # accept the file as it now stands\n");
+    s.push_str("```\n\n");
+    s.push_str(
+        "`--ours` and `--theirs` re-run the same merge under that strategy rather than \
+         editing the file a second way. `--done` refuses any file that still contains \
+         markers and exits 5 listing them, so `<<<<<<<` cannot reach Jira.\n\n",
+    );
+
     s.push_str("## Exit codes\n\n| Code | Meaning |\n|---|---|\n");
     for (code, meaning) in [
         (0, "success"),
@@ -203,7 +260,8 @@ pub fn render() -> String {
         (4, "network failure"),
         (
             5,
-            "conflict detected (pull wrote nothing; push refused stale issues)",
+            "conflict detected (pull aborted, or `--strategy merge` wrote conflict \
+             markers; push refused stale issues)",
         ),
         (6, "lossy conversion blocked"),
         (7, "required value missing in non-interactive mode"),
@@ -222,7 +280,7 @@ pub fn render() -> String {
         "| `--no-input` | Never prompt; missing values fail with exit 7 naming the value. |\n",
     );
     s.push_str("| `--yes` | Accept confirmations. |\n");
-    s.push_str("| `--dry-run` | On `push`: show the exact API calls without sending them. |\n\n");
+    s.push_str("| `--dry-run` (`-n`) | On `push`: the exact API calls, nothing sent. On `pull`: what would be written, nothing touched. |\n\n");
     s.push_str(
         "Every JSON document carries a `schema` field such as `jired/pull/1`. \
          Run `jired schema` to list the JSON Schemas and `jired schema pull` to print one.\n\n",
@@ -234,6 +292,11 @@ pub fn render() -> String {
             "| `{}` | `{}` | {} |\n",
             def.env, def.key, def.doc
         ));
+    }
+    // No config key and no flag, but they still change what jired does —
+    // `JIRED_SECRET_KEY` is what makes a headless run possible at all.
+    for (env, doc) in keys::ENV_ONLY {
+        s.push_str(&format!("| `{env}` | — | {doc} |\n"));
     }
     s.push('\n');
 
@@ -278,6 +341,77 @@ mod tests {
             );
             assert!(doc.contains(def.key), "{} is missing", def.key);
         }
+        // Not settings, but a headless run is impossible without knowing about
+        // JIRED_SECRET_KEY, and it appears in no other table.
+        for (env, _) in keys::ENV_ONLY {
+            assert!(
+                doc.contains(env),
+                "{env} is missing from the generated docs"
+            );
+        }
+    }
+
+    /// The editability rules are the part an agent acts on directly, and they
+    /// used to be a hand-copied sentence. Rendering them from the constants the
+    /// parser enforces makes drift impossible; this test proves the rendering
+    /// really covers all three lists, including a field added later.
+    #[test]
+    fn field_lists_cannot_drift_from_the_parser() {
+        let doc = render();
+        for field in frontmatter::EDITABLE
+            .iter()
+            .chain(frontmatter::READ_ONLY)
+            .chain(frontmatter::IDENTITY)
+        {
+            assert!(
+                doc.contains(&format!("`{field}`")),
+                "frontmatter field `{field}` is missing from the generated docs"
+            );
+        }
+        // Each list has to appear under its own heading, or "editable" and
+        // "read-only" could be swapped and every field would still be present.
+        for (label, fields) in [
+            ("Editable frontmatter fields: ", frontmatter::EDITABLE),
+            ("Read-only fields: ", frontmatter::READ_ONLY),
+            ("Identity fields: ", frontmatter::IDENTITY),
+        ] {
+            assert!(
+                doc.contains(&format!("{label}{}", field_list(fields))),
+                "{label:?} does not list exactly {fields:?}"
+            );
+        }
+    }
+
+    /// Exit 5 is the one code whose meaning depends on the flags: `--strategy
+    /// merge` writes markers *and* exits 5, so "nothing was written" would send
+    /// an agent past a half-merged file.
+    #[test]
+    fn conflict_recovery_is_documented() {
+        let doc = render();
+        for needle in [
+            "## Conflicts",
+            "jired resolve --list",
+            "--ours",
+            "--theirs",
+            "--done",
+            "<<<<<<< LOCAL",
+        ] {
+            assert!(doc.contains(needle), "generated docs missing {needle:?}");
+        }
+        assert!(
+            !doc.contains("exit 5 means conflicts; nothing was written"),
+            "the exit-5 gloss must not claim nothing was written"
+        );
+    }
+
+    /// A board-column move is a staged transition (`tests/e2e.rs`:
+    /// `dragging_a_card_between_columns_stages_a_transition`), so telling an
+    /// agent the folders are never editable would hide a supported workflow.
+    #[test]
+    fn board_moves_are_documented_as_editable() {
+        let doc = render();
+        assert!(doc.contains("stages a transition"));
+        assert!(!doc.contains("Never edit as source of truth"));
     }
 
     /// Every exit code the binary can return has to be documented, or an agent

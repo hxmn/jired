@@ -177,11 +177,25 @@ impl WorkspaceLock {
             // The holder records its pid; a dead pid means a crashed run, and
             // the OS has already released the advisory lock for us, so a stale
             // lock *file* never blocks anyone.
-            let mut err =
-                JiredError::locked("another jired process is using this workspace".to_string())
-                    .with_hint("wait for it to finish, or remove .jired/lock if it crashed")
-                    .with_detail("reason", reason.to_string());
-            if let Some((pid, since)) = read_holder(path) {
+            // The pid and start time go in the *message*: they used to be
+            // details only, which the human renderer never prints, so the hint
+            // told people to go and check something they could not see.
+            let holder = read_holder(path);
+            let who = match &holder {
+                Some((pid, since)) if since.is_empty() => format!(" (pid {pid})"),
+                Some((pid, since)) => format!(" (pid {pid}, started {since})"),
+                None => String::new(),
+            };
+            let mut err = JiredError::locked(format!(
+                "another jired process{who} is using this workspace"
+            ))
+            // Not "delete the lock file": the OS releases an advisory lock when
+            // its holder dies, so being blocked means that process is genuinely
+            // still running, and deleting the file would only lose the record of
+            // who holds it.
+            .with_hint("wait for it to finish — the lock is released automatically")
+            .with_detail("reason", reason.to_string());
+            if let Some((pid, since)) = holder {
                 err = err.with_detail("pid", pid).with_detail("since", since);
             }
             return Err(err);

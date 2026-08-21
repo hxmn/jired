@@ -3,7 +3,7 @@
 use crate::cli::cmd::prompt::confirm;
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
-use crate::error::{ExitCode, JiredError, Result};
+use crate::error::{ExitCode, Result};
 use crate::json::Out;
 use crate::sync::Engine;
 use clap::Args;
@@ -11,9 +11,6 @@ use serde::Serialize;
 
 #[derive(Args, Debug, Clone)]
 pub struct CleanArgs {
-    /// Rebuild every grouping folder from the state database
-    #[arg(long)]
-    pub regroup: bool,
     /// Report what would be removed without touching anything
     #[arg(long)]
     pub dry_run: bool,
@@ -34,23 +31,6 @@ pub fn run(g: &GlobalArgs, args: &CleanArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
     let engine = Engine::open(&mut ctx)?;
-
-    if args.regroup {
-        // Grouping folders are views: throwing them away and rebuilding from
-        // the database is always safe, and is the recovery path when a link
-        // ends up dangling or a group was renamed by hand.
-        let options = crate::sync::group::GroupOptions::from_context(&mut ctx)?;
-        let report = crate::sync::group::regroup(&engine, engine.projector.root(), &options)?;
-        out.say(format!(
-            "rebuilt {} link(s) across {} parent(s), {} sprint(s), {} board(s)",
-            report.links, report.parents, report.sprints, report.boards
-        ));
-        for w in &report.warnings {
-            out.warn(w);
-        }
-        out.emit("clean", &serde_json::json!({ "regrouped": report }));
-        return Ok(ExitCode::Success);
-    }
 
     let files = engine.projector.scan()?;
     let rows = engine.state.issues()?;
@@ -86,7 +66,7 @@ pub fn run(g: &GlobalArgs, args: &CleanArgs, out: Out) -> Result<ExitCode> {
     orphans.sort_by(|a, b| a.key.cmp(&b.key));
 
     if orphans.is_empty() {
-        out.say("nothing to clean");
+        out.say("nothing to clean — every file here belongs to a tracked issue");
         out.emit("clean", &serde_json::json!({"removed": [], "kept": []}));
         return Ok(ExitCode::Success);
     }
@@ -149,12 +129,4 @@ pub fn run(g: &GlobalArgs, args: &CleanArgs, out: Out) -> Result<ExitCode> {
     } else {
         ExitCode::Generic
     })
-}
-
-/// Exposed for the error path when a workspace has no state at all.
-pub fn require_workspace(ctx: &Context) -> Result<()> {
-    if ctx.workspace.is_initialized() {
-        return Ok(());
-    }
-    Err(JiredError::usage("not a jired workspace").with_hint("run `jired init`"))
 }

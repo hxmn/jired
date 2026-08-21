@@ -14,7 +14,7 @@ use clap::Args;
 
 #[derive(Args, Debug, Clone)]
 pub struct LogArgs {
-    /// Issue to show history for
+    /// Issue to show history for: a key, or the path to its file
     pub issue: String,
     /// Show at most this many entries (newest first)
     #[arg(long, default_value_t = 20)]

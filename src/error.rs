@@ -212,27 +212,87 @@ impl std::error::Error for JiredError {
 
 pub type Result<T> = std::result::Result<T, JiredError>;
 
+/// Wrap an i/o failure with the path it happened to.
+///
+/// The blanket `From<io::Error>` cannot know the path, and "No such file or
+/// directory" without a filename is close to useless. Every `fs::` call site
+/// that knows its path should route through this instead of a bare `?`.
+pub fn io_error(what: &str, path: impl AsRef<std::path::Path>, e: std::io::Error) -> JiredError {
+    let kind = match e.kind() {
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound => ErrorKind::Usage,
+        _ => ErrorKind::Generic,
+    };
+    let err = JiredError::new(
+        kind,
+        format!("cannot {what} {}: {e}", path.as_ref().display()),
+    )
+    .with_detail("path", path.as_ref().display().to_string());
+    match e.kind() {
+        std::io::ErrorKind::PermissionDenied => {
+            err.with_hint("check the file's owner and permissions")
+        }
+        _ => err,
+    }
+}
+
+/// Convenience for `map_err` at an `fs::` call site.
+pub fn io_ctx(
+    what: &'static str,
+    path: impl AsRef<std::path::Path>,
+) -> impl FnOnce(std::io::Error) -> JiredError {
+    let path = path.as_ref().to_path_buf();
+    move |e| io_error(what, path, e)
+}
+
 impl From<std::io::Error> for JiredError {
     fn from(e: std::io::Error) -> Self {
-        JiredError::generic(format!("i/o error: {e}")).with_source(e)
+        // The message stays context-free: `Display` appends the source, and
+        // interpolating `{e}` here too would print the cause twice.
+        JiredError::generic("i/o error").with_source(e)
     }
 }
 
 impl From<rusqlite::Error> for JiredError {
     fn from(e: rusqlite::Error) -> Self {
-        JiredError::corrupt(format!("database error: {e}")).with_source(e)
+        // Not every SQLite failure is corruption. A busy database means another
+        // process, a read-only one means the filesystem — telling the user their
+        // state is corrupt would send them to delete a database that is fine.
+        use rusqlite::ffi::ErrorCode;
+        let (kind, hint) = match &e {
+            rusqlite::Error::SqliteFailure(f, _) => match f.code {
+                ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => (
+                    ErrorKind::Locked,
+                    Some("another jired process is using this workspace; wait for it to finish"),
+                ),
+                ErrorCode::ReadOnly | ErrorCode::CannotOpen | ErrorCode::PermissionDenied => (
+                    ErrorKind::Generic,
+                    Some("check that .jired/ is writable by you"),
+                ),
+                ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase => (
+                    ErrorKind::CorruptState,
+                    Some("run `jired doctor`; if it is state.db, deleting it and running `jired fetch` rebuilds it"),
+                ),
+                _ => (ErrorKind::CorruptState, None),
+            },
+            _ => (ErrorKind::CorruptState, None),
+        };
+        let err = JiredError::new(kind, "database error").with_source(e);
+        match hint {
+            Some(h) => err.with_hint(h),
+            None => err,
+        }
     }
 }
 
 impl From<serde_json::Error> for JiredError {
     fn from(e: serde_json::Error) -> Self {
-        JiredError::generic(format!("json error: {e}")).with_source(e)
+        JiredError::generic("json error").with_source(e)
     }
 }
 
 impl From<serde_yaml_ng::Error> for JiredError {
     fn from(e: serde_yaml_ng::Error) -> Self {
-        JiredError::generic(format!("yaml error: {e}")).with_source(e)
+        JiredError::generic("yaml error").with_source(e)
     }
 }
 
@@ -268,6 +328,47 @@ mod tests {
             std::mem::size_of::<JiredError>(),
             std::mem::size_of::<usize>()
         );
+    }
+
+    /// `Display` appends the source, so a blanket conversion must not also
+    /// interpolate it — that printed every i/o cause twice.
+    #[test]
+    fn a_converted_error_states_its_cause_once() {
+        let io = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file");
+        let err: JiredError = io.into();
+        let text = err.to_string();
+        assert_eq!(text.matches("no such file").count(), 1, "{text}");
+    }
+
+    /// Not every SQLite failure is corruption; saying so sends people to delete
+    /// a database that is fine.
+    #[test]
+    fn sqlite_failures_keep_their_own_kinds() {
+        let busy = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(5), // SQLITE_BUSY
+            Some("database is locked".into()),
+        );
+        assert_eq!(JiredError::from(busy).exit_code(), ExitCode::Locked);
+
+        let corrupt = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(11), // SQLITE_CORRUPT
+            Some("malformed".into()),
+        );
+        let err = JiredError::from(corrupt);
+        assert_eq!(err.exit_code(), ExitCode::CorruptState);
+        assert!(err.hint.is_some(), "corruption must say how to recover");
+    }
+
+    /// A pathless "No such file or directory" is close to useless.
+    #[test]
+    fn io_errors_name_the_path_they_happened_to() {
+        let err = io_error(
+            "read",
+            "/tmp/PROJ-1.md",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "nope"),
+        );
+        assert!(err.message.contains("/tmp/PROJ-1.md"), "{}", err.message);
+        assert_eq!(err.details["path"], "/tmp/PROJ-1.md");
     }
 
     #[test]

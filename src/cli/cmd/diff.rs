@@ -6,17 +6,37 @@ use crate::error::{ExitCode, Result};
 use crate::json::Out;
 use clap::Args;
 
+/// What the working copy is compared against.
+///
+/// This used to be spelled `--remote` and `--all`, but `--all` means "widen the
+/// scope" on every other command; here it selected a comparison. Naming the
+/// choice removes the ambiguity.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Against {
+    /// The last synced snapshot: what `push` would send
+    #[default]
+    Base,
+    /// The last fetched server state: what `pull` would bring in
+    Remote,
+}
+
 #[derive(Args, Debug, Clone, Default)]
 pub struct DiffArgs {
-    /// Restrict the diff to these issues
+    /// Restrict the diff to these issues: keys or file paths
+    #[arg(value_delimiter = ',')]
     pub issues: Vec<String>,
+
+    /// What to compare the working copy against
+    #[arg(long, value_enum, default_value_t = Against::Base, value_name = "WHAT")]
+    pub against: Against,
 
     /// Compare the last fetched remote state against base
     #[arg(long, conflicts_with = "all")]
     pub remote: bool,
 
-    /// Compare the working copy against the last fetched remote state
-    #[arg(long)]
+    /// Deprecated spelling of `--against remote`
+    #[arg(long, hide = true)]
     pub all: bool,
 
     /// Print a summary instead of full diffs
@@ -36,11 +56,22 @@ pub enum DiffMode {
     WorkingRemote,
 }
 
+impl DiffMode {
+    /// What the header says the diff is between.
+    pub fn describe(self) -> &'static str {
+        match self {
+            DiffMode::WorkingBase => "the working copy and the last sync",
+            DiffMode::BaseRemote => "the last sync and the last fetch",
+            DiffMode::WorkingRemote => "the working copy and the last fetch",
+        }
+    }
+}
+
 impl DiffArgs {
     pub fn mode(&self) -> DiffMode {
-        match (self.remote, self.all) {
-            (true, _) => DiffMode::BaseRemote,
-            (_, true) => DiffMode::WorkingRemote,
+        match (self.remote, self.all, self.against) {
+            (true, _, _) => DiffMode::BaseRemote,
+            (_, true, _) | (_, _, Against::Remote) => DiffMode::WorkingRemote,
             _ => DiffMode::WorkingBase,
         }
     }

@@ -4,7 +4,7 @@
 //! the obvious mechanism but Windows only grants them with Developer Mode or
 //! elevation, so the projector falls back rather than failing: a hard link
 //! where the filesystem allows one, and otherwise a small Markdown stub that a
-//! human can still follow and `clean --regroup` can still rebuild.
+//! human can still follow and `doctor --regroup` can still rebuild.
 
 use crate::error::{JiredError, Result};
 use std::path::Path;

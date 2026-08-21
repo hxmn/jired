@@ -9,6 +9,25 @@ and edits work without a network; only `fetch`, `pull`, and `push` need one.
 Supports **Jira Cloud** (REST v3, ADF) and **Jira Data Center** (REST v2, wiki
 markup) behind one interface.
 
+## Install
+
+Building from source is the only route today: there is no published crate and no
+release job, so there are no prebuilt binaries or package-manager recipes.
+
+```sh
+cargo install --git https://github.com/hxmn/jired --locked --bin jired
+```
+
+Rust 1.89 or newer (`File::try_lock`, which the workspace lock uses). `--locked`
+builds against the versions the tree was tested with; drop it and you are on your
+own with a fresh resolver.
+
+On Linux the default credential store is the OS keychain, which means a running
+Secret Service provider — GNOME Keyring, KWallet, `keepassxc` with Secret Service
+enabled. Headless machines and containers usually have none; set `JIRED_SECRET_KEY`
+and jired encrypts the token into a file instead. See
+[When something goes wrong](#when-something-goes-wrong) for the CI recipe.
+
 ## Quickstart
 
 ```sh
@@ -36,7 +55,7 @@ the structured error and nothing else. `--no-input` never prompts and exits 7
 naming any missing value.
 
 ```sh
-jired pull --json --no-input || test $? -eq 5   # 5 means conflicts, nothing written
+jired pull --json --no-input || test $? -eq 5   # 5 means conflicts; the default strategy wrote nothing
 jired schema pull                               # JSON Schema for that output
 ```
 
@@ -100,12 +119,152 @@ were written before this convention. Blocks between `<!--jired:raw:…-->` marke
 Jira content Markdown cannot represent (panels, macros, media): leave them alone
 and they push back byte-identical; edit one and `push` stops with exit code 6.
 
-The two checkbox sections are different things. `## Children` lists the subtasks,
-which are issues of their own: ticking one applies `children.done_transition` if
-that setting is configured. `## Checklist` is the checklist plugin's list, read
-from its custom field and shown read-only — a status the checkbox does not
-already say is written in backticks ahead of the title, edits to it are reported
-by `push` rather than sent, and the next write from the server restores it.
+## The file format
+
+`jired init` also writes these rules into `CLAUDE.md` and `AGENTS.md` for agents.
+This is the same contract, for people.
+
+### Frontmatter
+
+Three classes of field, and jired treats them differently:
+
+| Class | Fields | On edit |
+|---|---|---|
+| Editable | `type`, `status`, `priority`, `summary`, `labels`, `components`, `assignee`, `sprint`, `parent`, `epic`, `fix_versions`, `affects_versions`, `links`, `story_points`, `custom` | becomes an API call on the next `push` |
+| Read-only | `reporter`, `created`, `updated`, `url`, `jired` | dropped with a warning on the next write |
+| Identity | `key`, `id` | an error — jired would otherwise write one issue over another |
+
+Anything else you add to the header is kept verbatim and never sent, so notes of
+your own survive a pull. `summary` in the frontmatter wins over the `# ` heading
+when the two disagree; the heading is written from it.
+
+Links are single-entry maps, one per line, using the link type's own wording:
+
+```yaml
+links:
+- blocks: PROJ-150
+- relates to: PROJ-99
+```
+
+`custom:` holds fields with no well-known name, keyed by their Jira id and written
+in their simple form — a select list as `Platform`, a multi-select as a YAML list,
+a user as `@[Name](id)`. Edit the value; push rebuilds the shape Jira wants
+(`{"value": …}`, `{"name": …}`, `{"accountId": …}`) from what the server last sent
+for that field. A value that could not be simplified is shown as raw JSON and sent
+back unchanged — leave it alone unless you know the field. Deleting an entry clears
+that field.
+
+### Sections
+
+The order is fixed — `# <summary>`, `## Description`, `## Children`,
+`## Checklist`, `## Comments`, `## Attachments` — because both the parser and the
+next reader locate content by heading. Sections you invent are kept and re-rendered after the
+known ones.
+
+**Comments.** An existing one is `### [c-10812] Jane D — 2026-08-15T10:32:00Z`;
+edit the body under it to update it. To add one, append a section headed
+`### [new]` — push creates it and rewrites the heading with the real id. A comment
+heading anywhere but under `## Comments` is warned about and not pushed. Deleting
+a section does nothing unless you pass `push --allow-comment-delete`; without it
+the comment stays on the server.
+
+**The two checkbox sections are different things.** `## Children` lists the
+subtasks, which are issues of their own, as `- [ ] PROJ-143 Add integration test`;
+ticking one transitions that subtask only when `children.done_transition` is set to
+a status name, and otherwise push says so and moves on. Adding a line does **not**
+create a subtask — use `jired create --parent PROJ-142`.
+
+`## Checklist` is the checklist plugin's list inside this issue, read from its
+custom field and shown read-only: a status the checkbox does not already say is
+written in backticks ahead of the title, edits to it are reported by `push` rather
+than sent, and the next write from the server restores it.
+
+### Lossy regions and conflicts
+
+`lossy: true` in the `jired:` block means the file contains at least one
+`<!--jired:raw:…-->` region: Jira content that Markdown cannot represent. Push
+rebuilds those regions from the stored original, so leaving them alone is free.
+Edit one and that issue fails with exit 6 and a list of the regions; `push
+--allow-lossy` sends it anyway, replacing the original markup with plain Markdown.
+Other issues in the same push are unaffected.
+
+`pull --strategy merge` writes git-style `<<<<<<< LOCAL` / `=======` /
+`>>>>>>> REMOTE` markers into the file and exits 5. Fix them with `jired resolve`:
+
+```sh
+jired resolve --list             # which issues and which fields
+jired resolve --ours             # keep the local value everywhere both changed
+jired resolve --theirs           # take the server's (asks first)
+$EDITOR "PROJ-0142. Fix login flow.md" && jired resolve --done
+```
+
+`--done` refuses any file that still contains markers, so `<<<<<<<` cannot reach
+Jira.
+
+## Commands
+
+The loop is `fetch`, `pull`, `diff`, `push`; `status` says where you are. Every
+command that names an issue takes either its key or the path to its file, so
+`jired comment "PROJ-0142. Fix login flow.md" -m "on it"` works — you can tab-complete
+the filename you were just editing instead of retyping the key.
+
+| Command | What it does |
+|---|---|
+| `fetch [ISSUES…]` | update the local snapshot from the server without touching files; `--jql/--sprint/--board/--updated-since` widen the scope, `--full` ignores the incremental watermark, `--slim` skips changelogs to keep `state.db` small |
+| `pull [ISSUES…]` | fetch and merge into the files; `-n/--dry-run` shows what would be written |
+| `push [ISSUES…]` | send staged changes; shows the plan and asks first when interactive (`-y` skips), `-n/--dry-run` (alias `preview`) prints the exact API calls |
+| `diff [ISSUES…]` | `--against base` (default: what `push` would send) or `--against remote` (what `pull` would bring in); `--stat`, `--exit-code` |
+| `status` | dirty, behind, staged, conflicted; `--all` also lists unchanged issues |
+| `comment ISSUE [-m TEXT]` | stage a comment; without `-m` it opens `$VISUAL`/`$EDITOR`, or reads stdin when piped |
+| `create --summary S` | write a `NEW-<hex>. Summary.md`; push creates the issue and renames the file to the real key. `--template NAME` starts from `.jired/templates/NAME.md` |
+| `transition ISSUE --to STATUS` | stage a workflow change; `--list` shows what is available, `--field k=v` fills a transition screen |
+| `assign ISSUE --me\|--user Q\|--none` | stage an assignee change |
+| `attach ISSUE FILE…` | stage an upload into the issue's attachment folder |
+| `attachments pull [ISSUES…]` / `list` | download attachment content over the stubs, or show what is present |
+| `log ISSUE` | the cached changelog; `--refresh` asks the server |
+| `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag) |
+| `resolve` | list and clear recorded conflicts — see above |
+| `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
+| `open ISSUE` | open it in a browser, or `--print` the URL |
+| `whoami` | which account, which server, and where the credential is kept |
+| `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address |
+| `doctor` | check the workspace over and repair it — see below |
+| `config get\|set\|unset\|list\|path\|edit` | read and write settings |
+| `completion <shell>` | print a completion script |
+| `agent-docs` | regenerate `CLAUDE.md` and `AGENTS.md` |
+| `schema [NAME]` | the JSON Schema for a command's `--json` output |
+
+### Grouping folders
+
+`by-parent/`, `sprints/` and `boards/<board>/<column>/` are views onto the same
+issue files, rebuilt from the database by `pull` and by `jired doctor --regroup`.
+`links.mode` chooses how they point at the real file — `auto` (a symlink, or a hard
+link where symlinks are not permitted, or a small Markdown stub if neither works),
+or `symlink`/`hardlink`/`stub` to insist on one.
+
+They are views with one exception: moving an issue's entry from one
+`boards/<board>/<column>/` folder to another stages a transition to that column's
+status, which is what dragging the card would have done. An explicit `status:` edit
+in the file wins if the two disagree. Everything else about a grouping folder is
+regenerated, so edits there are lost.
+
+### Templates
+
+`jired create --template bug` starts from `.jired/templates/bug.md` — an issue file
+without the identity fields, so a team's usual description skeleton, labels and
+components come pre-filled. The file gets a placeholder `NEW-<hex>` key until
+`push` creates the issue in Jira and renames it to the real one.
+
+### Shell completions
+
+```sh
+jired completion zsh > "${fpath[1]}/_jired"
+jired completion bash > ~/.local/share/bash-completion/completions/jired
+jired completion fish > ~/.config/fish/completions/jired.fish
+```
+
+`jired completion --help` lists the rest. Config keys, schema names and enum
+values complete; issue keys do not, because completion must not open the database.
 
 ## Exit codes
 
@@ -116,12 +275,92 @@ by `push` rather than sent, and the next write from the server restores it.
 | 2 | usage error |
 | 3 | authentication failure |
 | 4 | network failure |
-| 5 | conflict (pull wrote nothing; push refused stale issues) |
+| 5 | conflict (`pull` wrote nothing, or `--strategy merge` wrote conflict markers; `push` refused stale issues) |
 | 6 | lossy conversion blocked |
 | 7 | required value missing in non-interactive mode |
 | 8 | workspace locked by another jired process |
 | 9 | local state database corrupt |
 | 10 | unsupported Jira server |
+
+## When something goes wrong
+
+Every error names what failed and, where there is one, what to do about it. Add
+`-v` to see the details (REST paths, pids, causes) that the default output keeps
+out of the way.
+
+| Exit | What happened | What to run |
+|---|---|---|
+| 3 | the credential was rejected — an expired or revoked token, or the wrong identity for this server | `jired whoami`, then `jired init --force` to authenticate again |
+| 4 | DNS, connect, timeout or TLS | `jired doctor` verifies connectivity; see TLS and proxies below |
+| 5 | `pull` found fields changed on both sides, or `push` refused an issue the server has moved on from | `jired pull --strategy merge` then `jired resolve`; for a stale push, `jired pull` first |
+| 6 | a read-only region was edited and its original markup cannot be rebuilt | `jired diff` to see it, restore the block, or `jired push --allow-lossy` |
+| 8 | another jired process holds the workspace lock (the message names its pid and start time) | wait — the lock is released when that process exits, including if it is killed |
+| 9 | a local database will not open or holds something unreadable | see "the databases" below |
+| 10 | Jira Data Center older than 9.0 (Cloud is always supported) | nothing jired can do; the older releases lack the PAT auth and v2 endpoints it depends on |
+
+### TLS
+
+A self-signed or internally-issued certificate is a network failure with a TLS
+cause. Point jired at the bundle instead of turning verification off:
+
+```sh
+jired --ca-cert /etc/ssl/corp-root.pem status   # or: jired config set tls.ca_cert …
+```
+
+`jired init` does this for you: when the certificate does not verify it fetches
+and prints it — subject, issuer, validity, SHA-256 fingerprint — and pins it to
+`.jired/trusted-ca.pem` if you confirm, after which every run uses it silently.
+Check the fingerprint against what your Jira administrator publishes; `--yes` is
+deliberately ignored for that question. `--insecure` (or `tls.insecure`) skips
+verification entirely and prints a warning on every run — a last resort, not a
+setting to leave on.
+
+### Proxies
+
+jired uses the system proxy configuration: `HTTPS_PROXY` (and `NO_PROXY` for the
+hosts to reach directly). A TLS-intercepting corporate proxy needs its root
+certificate through `--ca-cert`, same as above.
+
+### Headless machines and CI
+
+There is no keychain in a container, so name a passphrase and jired encrypts the
+token into a file:
+
+```sh
+export JIRED_SECRET_KEY="$CI_JIRED_PASSPHRASE"
+export JIRED_TOKEN="$CI_JIRA_TOKEN"
+jired init --url https://acme.atlassian.net --email ci@acme.example \
+           --project PROJ --no-input --json
+jired pull --no-input --json
+```
+
+`--no-input` never prompts and exits 7 naming whatever is missing. Set
+`JIRED_NO_KEYRING=1` to ignore a keychain that exists but is locked, and
+`creds.storage` to choose between `local_db` (this workspace) and `user_config`
+(shared by every workspace on the machine). `JIRED_SECRET_KEY` must be the same
+value on every later run; without it the stored token cannot be decrypted.
+
+### Cloud or Data Center
+
+The URL decides: `*.atlassian.net` and `*.jira.com` are Cloud, anything else is
+Data Center, and the server's own `serverInfo` corrects the guess during `init`.
+The choice picks the REST version, the markup (ADF or wiki) and the credential
+kind (Cloud: email + API token; DC: personal access token). A Cloud instance on a
+vanity domain is the case that needs `jired init --deployment cloud`.
+
+### The databases
+
+`.jired/` holds two. `state.db` is a cache — the base snapshot, the remote
+snapshot and the push journal — and deleting it is safe:
+
+```sh
+rm .jired/state.db && jired fetch
+```
+
+Your `.md` files are not touched; `fetch` refills the snapshot from the server.
+`session.db` is the other one: it holds the account and the credential reference,
+cannot be rebuilt from the server, and a corrupt one means `jired init --force`.
+`jired doctor` reports which of the two is at fault.
 
 ## Configuration
 
@@ -180,8 +419,9 @@ binary was built from a tree with uncommitted changes.
 ## Repairing a workspace
 
 ```sh
-jired doctor --dry-run   # what is wrong
-jired doctor             # fix it
+jired doctor --dry-run   # report only, never changes anything
+jired doctor             # show the same list, then ask before repairing
+jired doctor -y          # repair without asking (what a script gets anyway)
 ```
 
 It checks the `.jired/` layout and permissions, the config file, the stored
@@ -189,13 +429,16 @@ credentials, filenames that predate a naming convention, issue files whose secti
 predate one (subtasks still under `## Checklist` move to `## Children`), custom
 fields that disagree with `ignored_custom_fields`, database rows pointing at the
 wrong file, the `.gitignore` block and the generated agent docs — and repairs what
-it can. Run it after upgrading jired, and after changing what is ignored.
+it can. `--regroup` also rebuilds the grouping folders when nothing else needs
+fixing. Run it after upgrading jired, and after changing what is ignored.
 
 ## Documentation
 
 - [docs/security.md](docs/security.md) — credential storage, threat model, TLS
 - [docs/plan/](docs/plan/README.md) — design and phased delivery plan
+- [CHANGELOG.md](CHANGELOG.md) — what changed between versions
 
 ## License
 
-MIT OR Apache-2.0
+MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0 ([LICENSE-APACHE](LICENSE-APACHE)),
+at your option.

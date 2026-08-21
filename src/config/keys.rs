@@ -36,6 +36,17 @@ pub enum Sensitivity {
     Secret,
 }
 
+/// What a setting accepts, so `config set` can reject a bad value where the
+/// typo is still on screen rather than at the next command that reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Text,
+    Bool,
+    Bytes,
+    /// One of a fixed vocabulary; the canonical spellings, for help and errors.
+    Enum(&'static [&'static str]),
+}
+
 pub struct KeyDef {
     /// Dotted config-file path, e.g. `server.url`.
     pub key: &'static str,
@@ -49,6 +60,7 @@ pub struct KeyDef {
     /// everything else has a sane default or a flag, and prompting for it would
     /// turn every command into a questionnaire.
     pub ask: bool,
+    pub kind: Kind,
     pub doc: &'static str,
 }
 
@@ -60,6 +72,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: Some("url"),
         sensitivity: Sensitivity::Plain,
         ask: true,
+        kind: Kind::Text,
         doc: "Base URL of the Jira instance (https://x.atlassian.net or https://jira.corp/jira)",
     },
     KeyDef {
@@ -68,6 +81,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: Some("deployment"),
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Enum(&["cloud", "datacenter"]),
         doc: "Deployment kind: cloud or datacenter (probed automatically when unset)",
     },
     KeyDef {
@@ -76,6 +90,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: Some("email"),
         sensitivity: Sensitivity::Plain,
         ask: true,
+        kind: Kind::Text,
         doc: "Account email (Jira Cloud API-token auth)",
     },
     KeyDef {
@@ -84,6 +99,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: Some("auth"),
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Enum(&["api-token", "pat", "basic", "cookie", "oauth2"]),
         doc: "Authentication method: api-token, pat, or basic",
     },
     KeyDef {
@@ -92,6 +108,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: Some("token"),
         sensitivity: Sensitivity::Secret,
         ask: true,
+        kind: Kind::Text,
         doc: "API token or personal access token (never written to config files)",
     },
     KeyDef {
@@ -100,6 +117,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: None,
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Enum(&["keychain", "local_db", "user_config"]),
         doc: "Where the credential is kept. keychain: the OS keychain. local_db: \
               encrypted in .jired/session.db, so it belongs to this workspace \
               alone. user_config: encrypted in credentials.toml in your user \
@@ -115,22 +133,20 @@ pub const KEYS: &[KeyDef] = &[
         flag: Some("project"),
         sensitivity: Sensitivity::Plain,
         ask: true,
+        kind: Kind::Text,
         doc: "Default project key for fetch/pull scope",
     },
-    KeyDef {
-        key: "workspace.profile",
-        env: "JIRED_PROFILE",
-        flag: Some("profile"),
-        sensitivity: Sensitivity::Plain,
-        ask: false,
-        doc: "Named account profile to use",
-    },
+    // `workspace.profile` used to live here. Nothing read it — the session store
+    // hardcodes the `default` profile — so advertising it as a setting, a flag
+    // and an env var promised a feature that did not exist. It comes back with
+    // multi-profile support, not before.
     KeyDef {
         key: "tls.ca_cert",
         env: "JIRED_CA_CERT",
         flag: Some("ca-cert"),
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Text,
         doc: "Path to an additional CA bundle (PEM) for self-signed Data Center instances",
     },
     KeyDef {
@@ -139,6 +155,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: Some("insecure"),
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Bool,
         doc: "Disable TLS certificate verification (prints a warning on every run)",
     },
     KeyDef {
@@ -147,6 +164,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: Some("no-input"),
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Bool,
         doc: "Never prompt; fail with exit code 7 when a required value is missing",
     },
     KeyDef {
@@ -155,6 +173,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: None,
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Bytes,
         doc: "Attachments up to this size (bytes) are downloaded eagerly on pull",
     },
     KeyDef {
@@ -163,6 +182,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: None,
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Bytes,
         doc: "Refuse to upload attachments larger than this size (bytes)",
     },
     KeyDef {
@@ -171,6 +191,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: None,
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Text,
         doc: "Transition applied when a subtask checkbox under `## Children` is \
               ticked (disabled when unset)",
     },
@@ -180,6 +201,9 @@ pub const KEYS: &[KeyDef] = &[
         flag: None,
         sensitivity: Sensitivity::Plain,
         ask: false,
+        // A list of field ids or names: anything is a legal element, so there is
+        // nothing for `canonicalize` to check beyond leaving it alone.
+        kind: Kind::Text,
         doc: "Custom fields to keep out of issue files entirely, by id \
               (customfield_10000) or by the name the instance gives them. A \
               list in a config file, comma-separated in the environment; edit \
@@ -194,6 +218,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: None,
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Enum(&["auto", "symlink", "hardlink", "stub"]),
         doc: "How grouping folders point at issue files. auto: a symlink, or a \
               hard link where symlinks are not permitted (Windows without \
               Developer Mode), or a small Markdown stub file if neither works. \
@@ -206,6 +231,7 @@ pub const KEYS: &[KeyDef] = &[
         flag: None,
         sensitivity: Sensitivity::Plain,
         ask: false,
+        kind: Kind::Bool,
         doc: "Project closed sprints into sprints/ (default false)",
     },
 ];
@@ -215,6 +241,31 @@ pub const KEYS: &[KeyDef] = &[
 /// They are the only keys `jired config add` and `remove` accept, and the only
 /// ones written to a config file as a TOML array.
 pub const LIST_KEYS: &[&str] = &["ignored_custom_fields"];
+
+/// Environment variables that are not settings but still change what jired does.
+///
+/// They have no config key and no flag, so `KEYS` cannot describe them — but
+/// leaving them out of every table meant `JIRED_SECRET_KEY`, which headless runs
+/// require, appeared in no help output at all.
+pub const ENV_ONLY: &[(&str, &str)] = &[
+    (
+        "JIRED_SECRET_KEY",
+        "Passphrase encrypting the credential in the file-backed stores. \
+         Required for local_db or user_config storage on a machine with no keychain",
+    ),
+    (
+        "JIRED_NO_KEYRING",
+        "Set to 1 to ignore the OS keychain even when one is available",
+    ),
+    (
+        "JIRED_LOG",
+        "tracing filter for diagnostics, e.g. `jired=debug` (overrides -v)",
+    ),
+    (
+        "JIRED_FIXTURES",
+        "Directory of recorded API responses to serve instead of a live server (testing)",
+    ),
+];
 
 pub fn lookup(key: &str) -> Option<&'static KeyDef> {
     KEYS.iter().find(|k| k.key == key)
@@ -226,6 +277,73 @@ pub fn is_secret(key: &str) -> bool {
 
 pub fn is_list(key: &str) -> bool {
     LIST_KEYS.contains(&key)
+}
+
+/// Keys whose name is closest to `key`, for a "did you mean" hint.
+///
+/// A single edit-distance pass over a 15-row table: cheap, and it turns a dead
+/// end into a correction.
+pub fn nearest(key: &str) -> Vec<&'static str> {
+    let mut scored: Vec<(usize, &'static str)> = KEYS
+        .iter()
+        .map(|k| (distance(&key.to_lowercase(), k.key), k.key))
+        .filter(|(d, _)| *d <= 4)
+        .collect();
+    scored.sort();
+    scored.into_iter().take(3).map(|(_, k)| k).collect()
+}
+
+/// Levenshtein distance, two rows at a time.
+fn distance(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut current = vec![0usize; b_chars.len() + 1];
+    for (i, ca) in a.chars().enumerate() {
+        current[0] = i + 1;
+        for (j, cb) in b_chars.iter().enumerate() {
+            let cost = usize::from(ca != *cb);
+            current[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut current);
+    }
+    prev[b_chars.len()]
+}
+
+/// Check a value against what its setting accepts, returning the canonical
+/// spelling so a config file never accumulates `local-db`, `localdb` and
+/// `local_db` for the same thing.
+pub fn canonicalize(key: &str, value: &str) -> crate::error::Result<String> {
+    use crate::error::JiredError;
+    let Some(def) = lookup(key) else {
+        return Ok(value.to_string());
+    };
+    let fail = |expected: String| {
+        JiredError::usage(format!("`{key}` does not accept `{value}`"))
+            .with_detail("key", key.to_string())
+            .with_detail("value", value.to_string())
+            .with_hint(expected)
+    };
+    match def.kind {
+        Kind::Text => Ok(value.to_string()),
+        Kind::Bool => match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "yes" | "on" | "1" => Ok("true".into()),
+            "false" | "no" | "off" | "0" => Ok("false".into()),
+            _ => Err(fail("expected true or false".into())),
+        },
+        Kind::Bytes => value
+            .trim()
+            .parse::<u64>()
+            .map(|n| n.to_string())
+            .map_err(|_| fail("expected a whole number of bytes, e.g. 10485760".into())),
+        Kind::Enum(allowed) => {
+            let normalized = value.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+            allowed
+                .iter()
+                .find(|a| a.replace('-', "_") == normalized)
+                .map(|a| (*a).to_string())
+                .ok_or_else(|| fail(format!("expected one of: {}", allowed.join(", "))))
+        }
+    }
 }
 
 #[cfg(test)]

@@ -37,6 +37,10 @@ pub struct PullArgs {
     /// Overwrite local changes with remote state (equivalent to --strategy theirs)
     #[arg(long)]
     pub force: bool,
+
+    /// Show what would be written without touching any file
+    #[arg(long, short = 'n')]
+    pub dry_run: bool,
 }
 
 impl PullArgs {
@@ -52,6 +56,26 @@ impl PullArgs {
 pub fn run(g: &GlobalArgs, args: &PullArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
+
+    // `theirs` discards local edits. Name the issues that would lose them before
+    // doing it, rather than after.
+    if !args.dry_run && matches!(args.effective_strategy(), Strategy::Theirs) {
+        let dirty = crate::sync::status::dirty_keys(&mut ctx)?;
+        if !dirty.is_empty() {
+            for key in &dirty {
+                out.say(format!("  {key} has local edits that will be discarded"));
+            }
+            if !crate::cli::cmd::prompt::confirm(
+                &format!("overwrite {} issue(s) with the server's copy?", dirty.len()),
+                ctx.yes || !ctx.resolver.interactive(),
+                ctx.resolver.interactive(),
+            )? {
+                out.say("cancelled — nothing was written");
+                return Ok(ExitCode::Success);
+            }
+        }
+    }
+
     let report = crate::sync::pull::run(&mut ctx, args)?;
     report.render(out);
     out.emit("pull", &report);

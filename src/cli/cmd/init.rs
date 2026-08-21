@@ -29,6 +29,13 @@ pub struct InitArgs {
     /// Re-authenticate an already initialized workspace
     #[arg(long)]
     pub force: bool,
+
+    /// Do not write CLAUDE.md and AGENTS.md into the workspace
+    #[arg(long)]
+    pub no_agent_docs: bool,
+
+    #[command(flatten)]
+    pub conn: crate::cli::ConnectionArgs,
 }
 
 #[derive(serde::Serialize)]
@@ -71,8 +78,8 @@ pub struct WorkspaceReport {
 }
 
 pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
-    let mut ctx = Context::open_uninitialized(g, out)?;
-    let ui = Ui::new(ctx.resolver.interactive(), !out.json && !out.quiet);
+    let mut ctx = Context::open_uninitialized_with(g, &args.conn, out)?;
+    let ui = Ui::new(ctx.resolver.interactive(), !out.json && !out.quiet).assume_yes(g.yes);
 
     if ctx.workspace.is_initialized() && !args.force {
         let has_account = SessionStore::open(&ctx.workspace)
@@ -115,7 +122,7 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
         tls_ca_path: conn.tls.ca_path.as_ref().map(|p| p.display().to_string()),
         tls_insecure: conn.tls.insecure,
         token: conn.token.clone(),
-        allow_plaintext: g.insecure_store,
+        allow_plaintext: args.conn.insecure_store,
         store: wanted_store,
     })?;
 
@@ -189,11 +196,16 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
     }
 
     let gitignore_updated = ctx.workspace.ensure_gitignore()?;
-    let docs = crate::cli::cmd::agent_docs::render();
     let mut agent_docs = Vec::new();
-    for name in ["CLAUDE.md", "AGENTS.md"] {
-        crate::cli::cmd::agent_docs::write_managed_block(&ctx.workspace.root().join(name), &docs)?;
-        agent_docs.push(name.to_string());
+    if !args.no_agent_docs {
+        let docs = crate::cli::cmd::agent_docs::render();
+        for name in ["CLAUDE.md", "AGENTS.md"] {
+            crate::cli::cmd::agent_docs::write_managed_block(
+                &ctx.workspace.root().join(name),
+                &docs,
+            )?;
+            agent_docs.push(name.to_string());
+        }
     }
 
     // Creating the state database now means every later command can assume it.
@@ -231,7 +243,9 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
         "  config     {}",
         ctx.workspace.config_path().display()
     ));
-    out.say(format!("  agent docs {}", agent_docs.join(", ")));
+    if !agent_docs.is_empty() {
+        out.say(format!("  agent docs {}", agent_docs.join(", ")));
+    }
 
     // Pulling needs a scope; without a project there is nothing to ask the
     // server for, and failing here would undo an otherwise finished setup.
@@ -244,9 +258,24 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
     } else {
         out.say("");
         let pull_args = crate::cli::cmd::pull::PullArgs::default();
-        let report = crate::sync::pull::run(&mut ctx, &pull_args)?;
-        report.render(out);
-        Some(report)
+        // Setup succeeded whatever the network did next. Propagating this error
+        // would report a failed `init` for a workspace that is fully configured,
+        // and would swallow the "next:" block that says how to retry.
+        match crate::sync::pull::run(&mut ctx, &pull_args) {
+            Ok(report) => {
+                report.render(out);
+                Some(report)
+            }
+            Err(e) => {
+                out.warn(format!(
+                    "the workspace is set up, but the first pull failed: {e}"
+                ));
+                if let Some(hint) = &e.hint {
+                    out.warn(hint);
+                }
+                None
+            }
+        }
     };
 
     out.say("");
@@ -639,7 +668,10 @@ fn offer_certificate(ctx: &Context, ui: &Ui, base_url: &str) -> Result<Option<(P
     }
 
     ui.detail("check the fingerprint against what your Jira administrator publishes");
-    if !ui.confirm("Trust this certificate for this workspace?", false)? {
+    // Deliberately not honouring `--yes`: pinning a certificate is a trust
+    // decision about a fingerprint a person has to have looked at. "Assume yes
+    // for confirmations" must not silently mean "trust any certificate".
+    if !ui.confirm_deliberate("Trust this certificate for this workspace?", false)? {
         return Ok(None);
     }
 
@@ -715,14 +747,21 @@ fn pick_project(ui: &Ui, projects: &[crate::api::Project]) -> Result<Option<Stri
             ));
         }
 
-        let answer = ui.ask_optional(
+        // Enter must not mean "every project": that leaves a workspace whose
+        // plain `jired pull` fails with "no project or query to fetch". The
+        // no-project route stays available, but has to be asked for by name.
+        let answer = ui.ask(
             "Which project should this workspace track?",
-            Some("a number, a project key, or empty to track every project you can see"),
+            Some(
+                "a number, a project key, or part of a name to narrow the list\n\
+                 `all` tracks every project you can see (`jired fetch --jql` picks the scope)",
+            ),
+            Some(&matches[0].key),
         )?;
-        let Some(answer) = answer else {
+        if answer.eq_ignore_ascii_case("all") {
             ui.good("tracking every project this account can see");
             return Ok(None);
-        };
+        }
 
         if let Ok(n) = answer.parse::<usize>() {
             match matches.iter().take(PROJECT_PAGE).nth(n.wrapping_sub(1)) {

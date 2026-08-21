@@ -19,6 +19,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct PullReport {
     pub strategy: String,
+    /// True when the run planned the writes but made none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetched: Option<fetch::FetchReport>,
     pub created: Vec<IssueChange>,
@@ -29,6 +32,10 @@ pub struct PullReport {
     pub conflicts: Vec<Conflict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub groups: Option<crate::sync::group::GroupReport>,
+    /// Things that went wrong without failing the pull — a missing attachment,
+    /// a grouping folder that could not be rebuilt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +125,14 @@ pub struct Conflict {
 
 impl PullReport {
     pub fn render(&self, out: Out) {
+        // What came off the server is half the story of a pull, and the report
+        // used to keep it only in the JSON.
+        if let Some(f) = &self.fetched {
+            out.say(format!(
+                "fetched {} issue(s) from the server, {} changed",
+                f.fetched, f.changed
+            ));
+        }
         for c in &self.created {
             out.say(format!("  new       {}", c.key));
         }
@@ -138,6 +153,14 @@ impl PullReport {
         for r in &self.renamed {
             out.say(format!("  renamed   {}  {} → {}", r.key, r.from, r.to));
         }
+        // Shown with the report rather than as they happen: a long pull would
+        // otherwise scroll them off the top before anyone read them.
+        for w in &self.warnings {
+            out.say(crate::style::out(
+                crate::style::YELLOW,
+                format!("  warning   {w}"),
+            ));
+        }
         for d in &self.deleted {
             out.say(format!("  gone      {}  (no longer in scope)", d.key));
         }
@@ -148,15 +171,35 @@ impl PullReport {
                 self.updated.len(),
                 self.unchanged
             ));
-        } else {
-            out.say(format!(
-                "{} conflicting issue(s); nothing was written",
-                self.conflicts.len()
-            ));
-            for c in &self.conflicts {
-                out.say(format!("  conflict  {}  [{}]", c.key, c.fields.join(", ")));
+            if self.dry_run {
+                out.say("dry run — no files were written");
             }
-            out.say("resolve with `jired pull --strategy merge`, --strategy ours|theirs, or edit and re-pull");
+            return;
+        }
+
+        // `merge` is the one strategy that writes despite the conflict, so the
+        // summary must not claim nothing was written.
+        let wrote_markers = self.strategy == "merge";
+        out.say(crate::style::out(
+            crate::style::RED,
+            format!(
+                "{} conflicting issue(s); {}",
+                self.conflicts.len(),
+                if wrote_markers {
+                    "conflict markers were written into the files"
+                } else {
+                    "nothing was written"
+                }
+            ),
+        ));
+        for c in &self.conflicts {
+            out.say(format!("  conflict  {}  [{}]", c.key, c.fields.join(", ")));
+        }
+        if wrote_markers {
+            out.hint("edit the <<<<<<< ======= >>>>>>> regions, then \"jired resolve --done\"");
+        } else {
+            out.hint("use \"jired pull --strategy merge\" to write conflict markers");
+            out.hint("or \"jired resolve --ours\" / \"--theirs\" to take one side");
         }
     }
 }
@@ -348,8 +391,33 @@ pub fn run_scoped(
         return Ok(report);
     }
 
+    // `--dry-run` stops here: everything above is planning, everything below
+    // writes. The plan is reported in the same shape a real pull produces, so
+    // the preview and the outcome can be compared line for line.
+    if args.dry_run {
+        report.dry_run = true;
+        for write in planned {
+            let change = IssueChange {
+                key: write.key,
+                file: write.previous,
+                fields: write.fields,
+                changes: write.changes,
+            };
+            match write.kind {
+                ChangeKind::Created => report.created.push(change),
+                ChangeKind::Updated => report.updated.push(change),
+            }
+        }
+        report.created.sort_by(|a, b| a.key.cmp(&b.key));
+        report.updated.sort_by(|a, b| a.key.cmp(&b.key));
+        return Ok(report);
+    }
+
     let mut attachment_folders: Vec<(String, String)> = Vec::new();
+    let writing = crate::sync::progress::Progress::bar(ctx.out, planned.len(), "writing");
     for mut write in planned {
+        writing.set_message(format!("writing {}", write.key));
+        writing.inc();
         // The hash in the frontmatter must describe the file that contains it,
         // so it is written in two passes: render, hash, rewrite.
         write.doc.frontmatter.jired.content_hash = String::new();
@@ -411,6 +479,7 @@ pub fn run_scoped(
             ChangeKind::Updated => report.updated.push(change),
         }
     }
+    writing.finish();
 
     // Attachment content is fetched only when the network is already in play,
     // so a `--no-fetch` pull stays offline.
@@ -420,16 +489,32 @@ pub fn run_scoped(
             .get_u64("attachments.auto_download_max")?
             .unwrap_or(256 * 1024);
         let client = engine.client(ctx)?;
+        let downloading =
+            crate::sync::progress::Progress::bar(ctx.out, attachment_folders.len(), "attachments");
+        let mut attachment_warnings = Vec::new();
         for (key, file) in &attachment_folders {
             let dir = engine.projector.attachment_dir(file);
+            downloading.inc();
             // A missing attachment must not fail a pull that otherwise
             // succeeded; the stub still records what the issue has.
-            if let Err(e) =
-                attachments::sync_folder(&engine.state, client.as_ref(), key, &dir, auto_max)
-            {
-                ctx.out.warn(format!("{key}: {}", e.message));
+            if let Err(e) = attachments::sync_folder(
+                &engine.state,
+                client.as_ref(),
+                key,
+                &dir,
+                auto_max,
+                &mut attachment_warnings,
+            ) {
+                attachment_warnings.push(match &e.hint {
+                    Some(h) => format!("{key}: {} — {h}", e.message),
+                    None => format!("{key}: {}", e.message),
+                });
             }
         }
+        downloading.finish();
+        // Collected, not printed here: `render` shows them once, in the report,
+        // where a long pull cannot scroll them off the top.
+        report.warnings.extend(attachment_warnings);
     }
 
     // Grouping folders are views over what was just written, so they are
@@ -437,10 +522,14 @@ pub fn run_scoped(
     if !attachment_folders.is_empty() {
         let options = crate::sync::group::GroupOptions::from_context(ctx)?;
         match crate::sync::group::regroup(&engine, engine.projector.root(), &options) {
-            Ok(groups) => report.groups = Some(groups),
-            Err(e) => ctx
-                .out
-                .warn(format!("cannot rebuild grouping folders: {}", e.message)),
+            Ok(groups) => {
+                report.warnings.extend(groups.warnings.iter().cloned());
+                report.groups = Some(groups);
+            }
+            Err(e) => report.warnings.push(format!(
+                "cannot rebuild grouping folders: {} — `jired doctor --regroup` retries it",
+                e.message
+            )),
         }
     }
 

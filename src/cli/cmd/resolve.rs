@@ -17,7 +17,8 @@ use clap::Args;
 
 #[derive(Args, Debug, Clone)]
 pub struct ResolveArgs {
-    /// Issues to resolve (default: all conflicted)
+    /// Issues to resolve: keys or file paths (default: all conflicted)
+    #[arg(value_delimiter = ',')]
     pub issues: Vec<String>,
     /// Keep the local value wherever both sides changed
     #[arg(long, conflicts_with_all = ["theirs", "done"])]
@@ -28,8 +29,8 @@ pub struct ResolveArgs {
     /// Accept the file as it stands, after editing the conflict markers by hand
     #[arg(long)]
     pub done: bool,
-    /// Resolve only this field
-    #[arg(long)]
+    /// Resolve only this field (listing only; per-field resolution is not built yet)
+    #[arg(long, hide = true)]
     pub field: Option<String>,
     /// List conflicts without resolving anything
     #[arg(long)]
@@ -37,6 +38,17 @@ pub struct ResolveArgs {
 }
 
 pub fn run(g: &GlobalArgs, args: &ResolveArgs, out: Out) -> Result<ExitCode> {
+    // Checked before anything else: `--field` narrows the *listing* but cannot
+    // narrow a resolution, and finding that out after the conflicts have been
+    // read and reported reads like the command half-worked.
+    if args.field.is_some() && (args.ours || args.theirs || args.done) {
+        return Err(crate::cli::not_yet(
+            "jired resolve --field",
+            "M3.8",
+            "resolve the whole issue, or edit the file by hand and use --done",
+        ));
+    }
+
     let mut ctx = Context::open(g, out)?;
     let engine = Engine::open(&mut ctx)?;
 
@@ -92,15 +104,19 @@ pub fn run(g: &GlobalArgs, args: &ResolveArgs, out: Out) -> Result<ExitCode> {
         return accept_as_edited(&mut ctx, &engine, &keys, out);
     }
 
-    if args.field.is_some() {
-        // Per-field resolution needs the merge to take a decision map rather
-        // than one strategy; until then, saying so beats resolving the rest of
-        // the issue behind the user's back.
-        return Err(
-            JiredError::usage("resolving a single field is not implemented yet")
-                .with_detail("milestone", "M3.8")
-                .with_hint("resolve the whole issue, or edit the file and use --done"),
-        );
+    // Taking the server's copy throws away local edits, so name them first.
+    if args.theirs
+        && !crate::cli::cmd::prompt::confirm(
+            &format!(
+                "discard local changes to {} and take the server's copy?",
+                keys.join(", ")
+            ),
+            ctx.yes || !ctx.resolver.interactive(),
+            ctx.resolver.interactive(),
+        )?
+    {
+        out.say("cancelled");
+        return Ok(ExitCode::Success);
     }
 
     ctx.lock()?;

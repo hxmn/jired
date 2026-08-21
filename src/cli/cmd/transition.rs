@@ -1,15 +1,16 @@
 //! `jired transition` [M3.6] — validated workflow status change.
 
-use crate::cli::cmd::edit::{edit_issue, push_one};
+use crate::cli::cmd::edit::{edit_issue, push_one, report_push};
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
-use crate::error::{ExitCode, JiredError, Result};
+use crate::error::{ErrorKind, ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::sync::Engine;
 use clap::Args;
 
 #[derive(Args, Debug, Clone)]
 pub struct TransitionArgs {
+    /// Issue to transition: a key, or the path to its file
     pub issue: String,
     /// Target status name
     #[arg(long)]
@@ -23,37 +24,61 @@ pub struct TransitionArgs {
     /// Apply immediately instead of leaving the change staged
     #[arg(long)]
     pub push: bool,
+    /// With --push, show the API call without sending it
+    #[arg(long, requires = "push")]
+    pub dry_run: bool,
 }
 
 pub fn run(g: &GlobalArgs, args: &TransitionArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let key = crate::project::naming::key_from_input(&args.issue);
 
-    // Transitions depend on the issue's current status and the workflow, so
-    // they can only come from the server.
+    // Transitions depend on the issue's current status and the workflow, so the
+    // server is the authority — but staging an edit is otherwise an offline
+    // operation, and a plane should not stop someone moving a ticket.
     let engine = Engine::open(&mut ctx)?;
-    let client = engine.client(&mut ctx)?;
-    let available = crate::api::block_on(client.transitions(&key))?;
-
-    if args.list || args.to.is_none() {
-        for t in &available {
-            let required = if t.required_fields.is_empty() {
-                String::new()
-            } else {
-                format!("  (requires {})", t.required_fields.join(", "))
-            };
-            out.say(format!("{:<20} → {}{}", t.name, t.to_status, required));
+    let available = match engine
+        .client(&mut ctx)
+        .and_then(|c| crate::api::block_on(c.transitions(&key)))
+    {
+        Ok(list) => {
+            engine.state.cache_transitions(&key, &list)?;
+            list
         }
+        Err(e) if e.kind == ErrorKind::Network => match engine.state.cached_transitions(&key)? {
+            Some((list, at)) => {
+                out.warn(format!(
+                    "the server is unreachable; using the workflow cached at {at}"
+                ));
+                list
+            }
+            None => return Err(e),
+        },
+        Err(e) => return Err(e),
+    };
+
+    if args.list {
+        render_list(&available, out);
         out.emit(
             "transitions",
             &serde_json::json!({ "key": key, "transitions": available }),
         );
-        if args.to.is_none() && !args.list {
-            return Err(JiredError::usage("no target status given")
-                .with_detail("issue", key)
-                .with_hint("pass --to \"In Review\", or --list to see the options"));
-        }
         return Ok(ExitCode::Success);
+    }
+
+    if args.to.is_none() {
+        // Only one document may reach stdout, so the options go to stderr as
+        // part of the error rather than as a second result document.
+        for t in &available {
+            out.warn(format!("available: {} → {}", t.name, t.to_status));
+        }
+        return Err(JiredError::usage("no target status given")
+            .with_detail("issue", key)
+            .with_detail(
+                "available",
+                serde_json::json!(available.iter().map(|t| &t.to_status).collect::<Vec<_>>()),
+            )
+            .with_hint("pass --to \"In Review\", or --list to see the options"));
     }
 
     let to = args.to.as_ref().expect("checked above");
@@ -97,19 +122,28 @@ pub fn run(g: &GlobalArgs, args: &TransitionArgs, out: Out) -> Result<ExitCode> 
     })?;
 
     let pushed = if args.push {
-        Some(push_one(&mut ctx, &key)?)
+        let report = push_one(&mut ctx, &key, args.dry_run)?;
+        report_push(&report, out);
+        Some(report)
     } else {
         None
     };
 
-    out.say(match &pushed {
-        Some(r) if r.results.iter().all(|x| x.ok) => format!("{key} → {}", target.to_status),
-        Some(_) => format!("staged {key} → {}; the push failed", target.to_status),
-        None => format!(
+    match &pushed {
+        Some(r) if r.dry_run => {}
+        Some(r) if r.results.iter().all(|x| x.ok) => {
+            out.say(format!("{key} → {}", target.to_status))
+        }
+        Some(_) => out.say(format!(
+            "{key} → {} is staged in {file}, but the push failed — \
+             fix the cause and run `jired push`",
+            target.to_status
+        )),
+        None => out.say(format!(
             "staged {key} → {} in {file} — run `jired push` to apply it",
             target.to_status
-        ),
-    });
+        )),
+    }
     out.emit(
         "transition",
         &serde_json::json!({
@@ -125,4 +159,20 @@ pub fn run(g: &GlobalArgs, args: &TransitionArgs, out: Out) -> Result<ExitCode> 
         Some(report) => report.exit_code(),
         None => ExitCode::Success,
     })
+}
+
+fn render_list(available: &[crate::api::Transition], out: Out) {
+    if available.is_empty() {
+        out.say("no transitions are available from this status");
+        return;
+    }
+    let width = available.iter().map(|t| t.name.len()).max().unwrap_or(20);
+    for t in available {
+        let required = if t.required_fields.is_empty() {
+            String::new()
+        } else {
+            format!("  (requires {})", t.required_fields.join(", "))
+        };
+        out.say(format!("{:<width$} → {}{}", t.name, t.to_status, required));
+    }
 }

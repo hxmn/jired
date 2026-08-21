@@ -53,44 +53,83 @@ pub struct SectionDiff {
 
 impl DiffReport {
     pub fn render(&self, out: Out, stat_only: bool) {
+        use crate::style::{self, BOLD, CYAN, DIM, GREEN, RED};
+
         if self.issues.is_empty() {
-            out.say("no differences");
+            out.say(format!("no differences between {}", self.mode.describe()));
+            if self.mode == crate::cli::cmd::diff::DiffMode::WorkingBase {
+                out.hint("use \"jired diff --against remote\" to see what a pull would bring in");
+            }
             return;
         }
+
+        // Widths from the data: a fixed 14 wraps on a long key, and a fixed 18
+        // wraps on almost every custom field name.
+        let key_width = self
+            .issues
+            .iter()
+            .map(|i| i.key.len())
+            .max()
+            .unwrap_or(10)
+            .clamp(8, 30);
+
         if stat_only {
             for issue in &self.issues {
                 let added: usize = issue.sections.iter().map(|s| s.added).sum();
                 let removed: usize = issue.sections.iter().map(|s| s.removed).sum();
                 out.say(format!(
-                    "{:<14} {:>2} field(s), +{added} -{removed}",
+                    "{:<key_width$} {:>2} field(s), {} {}",
                     issue.key,
-                    issue.fields.len()
+                    issue.fields.len(),
+                    style::out(GREEN, format!("+{added}")),
+                    style::out(RED, format!("-{removed}"))
                 ));
             }
             out.say(format!(
-                "{} issue(s), {} field(s) changed, +{} -{}",
-                self.stat.issues, self.stat.fields, self.stat.added, self.stat.removed
+                "{} issue(s), {} field(s) changed, {} {}",
+                self.stat.issues,
+                self.stat.fields,
+                style::out(GREEN, format!("+{}", self.stat.added)),
+                style::out(RED, format!("-{}", self.stat.removed))
             ));
             return;
         }
+
+        let field_width = self
+            .issues
+            .iter()
+            .flat_map(|i| i.fields.iter().map(|f| f.field.len()))
+            .max()
+            .unwrap_or(14)
+            .clamp(10, 32);
+
         for issue in &self.issues {
             out.say(format!(
-                "── {} ({}) {}",
-                issue.key,
-                issue.status,
+                "── {} {} {}",
+                style::out(CYAN, &issue.key),
+                style::out(DIM, format!("({})", issue.status)),
                 issue.file.as_deref().unwrap_or("")
             ));
             for f in &issue.fields {
                 out.say(format!(
-                    "   {:<18} {} → {}",
+                    "   {:<field_width$} {} → {}",
                     f.field,
-                    render_value(&f.from),
-                    render_value(&f.to)
+                    style::out(RED, render_value(&f.from)),
+                    style::out(GREEN, render_value(&f.to))
                 ));
             }
             for s in &issue.sections {
-                out.say(format!("   --- {} ---", s.section));
-                out.say(s.unified.trim_end());
+                out.say(style::out(BOLD, format!("   --- {} ---", s.section)));
+                for line in s.unified.trim_end().lines() {
+                    // Colouring the diff body is the difference between reading
+                    // it and counting `+` signs.
+                    out.say(match line.chars().next() {
+                        Some('+') => style::out(GREEN, line),
+                        Some('-') => style::out(RED, line),
+                        Some('@') => style::out(CYAN, line),
+                        _ => line.to_string(),
+                    });
+                }
             }
         }
     }
