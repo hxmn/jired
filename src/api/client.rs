@@ -90,6 +90,17 @@ pub trait JiraApi: Send + Sync {
     /// board API is the way that works on both deployments.
     async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()>;
 
+    /// Every worklog on an issue, for the case the issue payload paged them.
+    async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>>;
+    async fn add_worklog(&self, key: &str, worklog: &WorklogInput) -> Result<RemoteWorklog>;
+    async fn update_worklog(
+        &self,
+        key: &str,
+        id: &str,
+        worklog: &WorklogInput,
+    ) -> Result<RemoteWorklog>;
+    async fn delete_worklog(&self, key: &str, id: &str) -> Result<()>;
+
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment>;
     async fn update_comment(&self, key: &str, id: &str, body: &RichText) -> Result<RemoteComment>;
     async fn delete_comment(&self, key: &str, id: &str) -> Result<()>;

@@ -227,6 +227,8 @@ mod tests {
             description: crate::api::RichText::Empty,
             fields: Default::default(),
             comments: vec![],
+            worklogs: Vec::new(),
+            worklog_total: 0,
             attachments: vec![attachment("known.txt", 1)],
             raw: serde_json::json!({
                 "key": "P-1", "id": "1",

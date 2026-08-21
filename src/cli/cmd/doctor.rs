@@ -525,15 +525,20 @@ fn check_filenames(
 /// the wrong heading and no `## Children` at all. Moving them is a repair only
 /// doctor can make: `pull` would see a hand-edited file and merge into the
 /// confusion rather than out of it.
+///
+/// `## Worklogs` is newer still, and a file written before it simply lacks the
+/// heading; the entries come back from the last snapshot with the checklist.
 fn check_sections(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
-    use crate::doc::{ChecklistEntry, ChildItem, SECTION_CHECKLIST, SECTION_CHILDREN};
+    use crate::doc::{
+        ChecklistEntry, ChildItem, SECTION_CHECKLIST, SECTION_CHILDREN, SECTION_WORKLOGS,
+    };
 
     let projector = crate::project::Projector::new(ctx.workspace.root());
     let files = projector.scan()?;
     let state = StateStore::open(&ctx.workspace)?;
-    // The checklist is server-owned, so the last snapshot is where its current
-    // contents come from. Without a readable account there is none, which costs
-    // the checklist but not the move.
+    // The checklist and the worklogs are server-owned, so the last snapshot is
+    // where their current contents come from. Without a readable account there
+    // is none, which costs those two but not the move.
     let engine = crate::sync::Engine::open(ctx).ok();
     let field_map = match &engine {
         Some(engine) => engine.field_map().ok(),
@@ -548,7 +553,7 @@ fn check_sections(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
         };
         let headings = crate::doc::section_headings(&text);
         let has = |name: &str| headings.iter().any(|h| h == name);
-        if has(SECTION_CHILDREN) && has(SECTION_CHECKLIST) {
+        if has(SECTION_CHILDREN) && has(SECTION_CHECKLIST) && has(SECTION_WORKLOGS) {
             continue;
         }
         let mut doc = match projector.read(&file.relative) {
@@ -580,7 +585,17 @@ fn check_sections(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
                 .collect();
             doc.children.len()
         };
-        doc.checklist = base_checklist(&state, field_map.as_ref(), engine.as_ref(), key);
+        let snapshot = base_snapshot(&state, field_map.as_ref(), engine.as_ref(), key);
+        if let Some(issue) = &snapshot {
+            doc.checklist = issue.fields.checklist.clone();
+            // Only when the file never had the heading: a file that does have
+            // it may be carrying time staged but not yet pushed.
+            if !has(SECTION_WORKLOGS) {
+                doc.worklogs = crate::sync::render::worklog_entries(issue);
+            }
+        } else {
+            doc.checklist = Vec::new();
+        }
 
         let rewritten = doc.render()?;
         if rewritten == text {
@@ -594,12 +609,23 @@ fn check_sections(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
                 state.set_base_md_hash(key, &crate::store::state::content_hash(&rewritten))?;
             }
         }
+        let mut what = Vec::new();
+        if moved > 0 {
+            what.push(format!(
+                "{moved} subtask(s) moved under `## {SECTION_CHILDREN}`"
+            ));
+        }
+        for (missing, name) in [
+            (!has(SECTION_CHECKLIST), SECTION_CHECKLIST),
+            (!has(SECTION_WORKLOGS), SECTION_WORKLOGS),
+        ] {
+            if missing {
+                what.push(format!("restoring `## {name}`"));
+            }
+        }
         changes.push(Change {
             from: file.relative.clone(),
-            to: match moved {
-                0 => format!("restoring `## {SECTION_CHECKLIST}`"),
-                n => format!("{n} subtask(s) moved under `## {SECTION_CHILDREN}`"),
-            },
+            to: what.join("; "),
         });
     }
 
@@ -763,25 +789,17 @@ fn base_custom(
         .custom)
 }
 
-/// What the checklist plugin held for this issue the last time jired looked.
-fn base_checklist(
+/// The issue as the server last showed it, which is where the server-owned
+/// sections — the checklist, the worklogs — come back from.
+fn base_snapshot(
     state: &StateStore,
     field_map: Option<&crate::api::normalize::FieldMap>,
     engine: Option<&crate::sync::Engine>,
     key: &str,
-) -> Vec<crate::doc::ChecklistEntry> {
-    let (Some(field_map), Some(engine)) = (field_map, engine) else {
-        return Vec::new();
-    };
-    let Ok(Some(row)) = state.issue(key) else {
-        return Vec::new();
-    };
-    let Some(base) = row.base else {
-        return Vec::new();
-    };
-    crate::api::normalize::issue_from_json(&base.raw, engine.markup(), field_map)
-        .map(|issue| issue.fields.checklist)
-        .unwrap_or_default()
+) -> Option<crate::api::RemoteIssue> {
+    let (field_map, engine) = (field_map?, engine?);
+    let base = state.issue(key).ok()??.base?;
+    crate::api::normalize::issue_from_json(&base.raw, engine.markup(), field_map).ok()
 }
 
 /// True when the file on disk is exactly what jired last wrote for this issue.

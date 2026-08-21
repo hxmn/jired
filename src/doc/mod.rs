@@ -1,9 +1,9 @@
 //! The issue Markdown file: parse and render [M1.11, M2.1].
 //!
 //! Fixed section order — `# summary`, `## Description`, `## Checklist`,
-//! `## Children`, `## Comments`, `## Attachments` — so both humans and agents
-//! can locate content by heading. Section scanning is fence-aware: a `## `
-//! inside a code block is content, not a heading.
+//! `## Children`, `## Comments`, `## Worklogs`, `## Attachments` — so both
+//! humans and agents can locate content by heading. Section scanning is
+//! fence-aware: a `## ` inside a code block is content, not a heading.
 //!
 //! The two checkbox sections are not the same thing and must not be confused:
 //! `## Checklist` is the checklist plugin's list, which lives inside this
@@ -20,6 +20,7 @@ pub const SECTION_DESCRIPTION: &str = "Description";
 pub const SECTION_CHECKLIST: &str = "Checklist";
 pub const SECTION_CHILDREN: &str = "Children";
 pub const SECTION_COMMENTS: &str = "Comments";
+pub const SECTION_WORKLOGS: &str = "Worklogs";
 pub const SECTION_ATTACHMENTS: &str = "Attachments";
 
 /// A parsed issue file.
@@ -36,6 +37,8 @@ pub struct IssueDoc {
     /// Subtasks, one checkbox each.
     pub children: Vec<ChildItem>,
     pub comments: Vec<CommentBlock>,
+    /// Time booked against the issue, newest last.
+    pub worklogs: Vec<WorklogEntry>,
     pub attachments: Vec<AttachmentLine>,
     /// Sections jired does not know about, preserved in place.
     pub extra_sections: Vec<(String, String)>,
@@ -82,6 +85,28 @@ pub struct CommentBlock {
     pub timestamp: String,
     /// Free-text note after `[new]`, ignored on push.
     pub note: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorklogId {
+    Existing(String),
+    /// Booked locally, not yet sent.
+    New,
+}
+
+/// One entry of `## Worklogs`: time somebody booked against this issue.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorklogEntry {
+    pub id: WorklogId,
+    /// How long, in Jira's own notation — `2h 30m`, `1d 4h`. Kept as the text
+    /// the server uses rather than as seconds, because how long a day is is an
+    /// instance setting and converting here would guess at it.
+    pub time_spent: String,
+    pub author: String,
+    /// When the work started, which is not when the entry was written.
+    pub started: String,
+    /// The worklog's note, if it has one.
     pub body: String,
 }
 
@@ -138,6 +163,7 @@ impl IssueDoc {
             checklist: Vec::new(),
             children: Vec::new(),
             comments: Vec::new(),
+            worklogs: Vec::new(),
             attachments: Vec::new(),
             extra_sections: Vec::new(),
         };
@@ -148,6 +174,7 @@ impl IssueDoc {
                 SECTION_CHECKLIST => doc.checklist = parse_checklist(&content),
                 SECTION_CHILDREN => doc.children = parse_children(&content),
                 SECTION_COMMENTS => doc.comments = parse_comments(&content)?,
+                SECTION_WORKLOGS => doc.worklogs = parse_worklogs(&content)?,
                 SECTION_ATTACHMENTS => doc.attachments = parse_attachments(&content),
                 _ => doc.extra_sections.push((name, content.trim().to_string())),
             }
@@ -205,6 +232,16 @@ impl IssueDoc {
             }
         }
 
+        out.push_str(&format!("## {SECTION_WORKLOGS}\n\n"));
+        for w in &self.worklogs {
+            out.push_str(&render_worklog_heading(w));
+            out.push_str("\n\n");
+            if !w.body.trim().is_empty() {
+                out.push_str(w.body.trim());
+                out.push_str("\n\n");
+            }
+        }
+
         out.push_str(&format!("## {SECTION_ATTACHMENTS}\n\n"));
         for a in &self.attachments {
             out.push_str(&format!("- [{}]({})", a.filename, a.path));
@@ -238,6 +275,16 @@ impl IssueDoc {
     pub fn new_comments(&self) -> impl Iterator<Item = &CommentBlock> {
         self.comments.iter().filter(|c| c.id == CommentId::New)
     }
+
+    pub fn worklog(&self, id: &str) -> Option<&WorklogEntry> {
+        self.worklogs
+            .iter()
+            .find(|w| matches!(&w.id, WorklogId::Existing(x) if x == id))
+    }
+
+    pub fn new_worklogs(&self) -> impl Iterator<Item = &WorklogEntry> {
+        self.worklogs.iter().filter(|w| w.id == WorklogId::New)
+    }
 }
 
 /// The `## ` headings a file actually carries, in order.
@@ -258,12 +305,15 @@ pub fn section_headings(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Comment headings that sit outside `## Comments` and will therefore be
-/// ignored on push.
+/// `[marker]` headings that sit outside the two sections that own them, and
+/// will therefore be ignored on push.
 ///
 /// Appending `### [new]` to the end of the file is a natural thing for an agent
 /// to do, and it lands in `## Attachments` instead of `## Comments`. Silently
 /// dropping the comment is the worst outcome, so callers surface this.
+///
+/// `## Worklogs` uses the same heading shape, so it is exempt too: a staged
+/// worklog is where it belongs, not a comment in the wrong place.
 pub fn misplaced_comment_headings(text: &str) -> Vec<String> {
     let Ok((_, body)) = split_frontmatter(text) else {
         return Vec::new();
@@ -274,7 +324,9 @@ pub fn misplaced_comment_headings(text: &str) -> Vec<String> {
         match line {
             Scanned::Heading { level: 2, text, .. } => section = text.to_string(),
             Scanned::Heading { level: 3, text, .. }
-                if section != SECTION_COMMENTS && text.trim_start().starts_with('[') =>
+                if section != SECTION_COMMENTS
+                    && section != SECTION_WORKLOGS
+                    && text.trim_start().starts_with('[') =>
             {
                 out.push(format!("### {text}"));
             }
@@ -608,6 +660,146 @@ fn render_comment_heading(c: &CommentBlock) -> String {
     }
 }
 
+fn parse_worklogs(content: &str) -> Result<Vec<WorklogEntry>> {
+    let mut out: Vec<WorklogEntry> = Vec::new();
+    let mut current: Option<WorklogEntry> = None;
+    let mut body: Vec<&str> = Vec::new();
+
+    for line in ScanLines::new(content) {
+        match line {
+            Scanned::Heading { level: 3, text, .. } => {
+                if let Some(mut w) = current.take() {
+                    w.body = body.join("\n").trim().to_string();
+                    out.push(w);
+                }
+                body.clear();
+                current = Some(parse_worklog_heading(text)?);
+            }
+            Scanned::Line(l) => body.push(l),
+            Scanned::Heading { raw, .. } => body.push(raw),
+        }
+    }
+    if let Some(mut w) = current.take() {
+        w.body = body.join("\n").trim().to_string();
+        out.push(w);
+    }
+    Ok(out)
+}
+
+/// `[w-10500] 2h 30m — Jane Doe — 2026-08-15T09:00:00Z`, or `[new] 2h 30m`.
+///
+/// The duration comes first because it is the whole point of the entry, and it
+/// is the one part that must be there. Author and start time are told apart by
+/// shape rather than by position, so a `[new]` entry can carry a start time
+/// without inventing an author for the person writing it.
+fn parse_worklog_heading(text: &str) -> Result<WorklogEntry> {
+    let rest = text.trim();
+    if !rest.starts_with('[') {
+        return Err(JiredError::generic(format!(
+            "worklog heading must start with `[`: `### {rest}`"
+        ))
+        .with_hint("use `### [new] 2h 30m` to book time"));
+    }
+    let inner_end = rest.find(']').ok_or_else(|| {
+        JiredError::generic(format!(
+            "worklog heading has no `[id]` marker: `### {rest}`"
+        ))
+        .with_hint("use `### [new] 2h 30m` to book time")
+    })?;
+    let marker = rest[1..inner_end].trim();
+
+    // The separator is an em dash; accept a hyphen too since editors mangle it.
+    let tail = rest[inner_end + 1..].trim().replace(" - ", " — ");
+    let mut parts = tail
+        .split('—')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string);
+
+    let time_spent = parts.next().unwrap_or_default();
+    if time_spent.is_empty() {
+        // `## Comments` and `## Worklogs` share the `### [new]` shape, and a
+        // comment written one section too low lands here, so the hint names
+        // both ways out.
+        return Err(
+            JiredError::generic(format!("worklog `### {rest}` says no amount of time")).with_hint(
+                "write it after the marker: `### [new] 2h 30m` — \
+             or move the section under `## Comments` if it is a comment",
+            ),
+        );
+    }
+
+    let (mut author, mut started) = (String::new(), String::new());
+    for part in parts {
+        if started.is_empty() && crate::api::model::parse_timestamp(&part).is_some() {
+            started = part;
+        } else if author.is_empty() {
+            author = part;
+        }
+    }
+
+    let id = if marker.eq_ignore_ascii_case("new") {
+        WorklogId::New
+    } else {
+        WorklogId::Existing(marker.strip_prefix("w-").unwrap_or(marker).to_string())
+    };
+    Ok(WorklogEntry {
+        id,
+        time_spent,
+        author,
+        started,
+        body: String::new(),
+    })
+}
+
+fn render_worklog_heading(w: &WorklogEntry) -> String {
+    let mut parts = vec![match &w.id {
+        WorklogId::Existing(id) => format!("[w-{id}] {}", w.time_spent),
+        WorklogId::New => format!("[new] {}", w.time_spent),
+    }];
+    if !w.author.is_empty() {
+        parts.push(w.author.clone());
+    }
+    if !w.started.is_empty() {
+        parts.push(w.started.clone());
+    }
+    format!("### {}", parts.join(" — "))
+}
+
+/// Check a duration in Jira's notation, returning it in seconds.
+///
+/// Only the syntax is checked. A week and a day are whatever the instance has
+/// them configured as — the seconds here are for comparison and error messages,
+/// never for what goes over the wire, which is always the text the user wrote.
+pub fn parse_duration(text: &str) -> Option<u64> {
+    let mut total: u64 = 0;
+    let mut digits = String::new();
+    let mut any = false;
+
+    for c in text.trim().chars() {
+        match c {
+            '0'..='9' => digits.push(c),
+            ' ' | ',' => {}
+            _ => {
+                let scale = match c.to_ascii_lowercase() {
+                    'w' => 5 * 8 * 3600,
+                    'd' => 8 * 3600,
+                    'h' => 3600,
+                    'm' => 60,
+                    _ => return None,
+                };
+                let n: u64 = digits.parse().ok()?;
+                digits.clear();
+                total = total.checked_add(n.checked_mul(scale)?)?;
+                any = true;
+            }
+        }
+    }
+    // A bare number is ambiguous — Jira reads it as minutes only because of an
+    // instance setting — so it is refused rather than assumed.
+    (any && digits.is_empty() && total > 0).then_some(total)
+}
+
 fn parse_attachments(content: &str) -> Vec<AttachmentLine> {
     content
         .lines()
@@ -647,6 +839,8 @@ mod tests {
             "## Comments\n\n### [c-10812] Jane Doe — 2026-08-15T10:32:00Z\n\nRepro confirmed.\n\n",
         );
         s.push_str("### [new] follow-up\n\nFixed by rotating the cert.\n\n");
+        s.push_str("## Worklogs\n\n### [w-10500] 2h 30m — Jane Doe — 2026-08-15T09:00:00Z\n\nChased the redirect loop.\n\n");
+        s.push_str("### [new] 45m\n\n");
         s.push_str(
             "## Attachments\n\n- [trace.har](.PROJ-142. Fix login flow/trace.har) (2.1 MiB)\n",
         );
@@ -689,8 +883,64 @@ mod tests {
         assert_eq!(doc.comments[0].body, "Repro confirmed.");
         assert_eq!(doc.comments[1].id, CommentId::New);
         assert_eq!(doc.comments[1].note, "follow-up");
+        assert_eq!(doc.worklogs.len(), 2);
+        assert_eq!(doc.worklogs[0].id, WorklogId::Existing("10500".into()));
+        assert_eq!(doc.worklogs[0].time_spent, "2h 30m");
+        assert_eq!(doc.worklogs[0].author, "Jane Doe");
+        assert_eq!(doc.worklogs[0].started, "2026-08-15T09:00:00Z");
+        assert_eq!(doc.worklogs[0].body, "Chased the redirect loop.");
+        assert_eq!(doc.worklogs[1].id, WorklogId::New);
+        assert_eq!(doc.worklogs[1].time_spent, "45m");
+        assert!(doc.worklogs[1].author.is_empty());
         assert_eq!(doc.attachments[0].filename, "trace.har");
         assert_eq!(doc.attachments[0].note, "2.1 MiB");
+    }
+
+    /// A `[new]` worklog may name when the work started without naming an
+    /// author, so the two are told apart by shape rather than by position.
+    #[test]
+    fn a_worklog_start_time_is_not_mistaken_for_an_author() {
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Worklogs\n\n### [new] 1h — 2026-08-20T08:00:00Z\n\nnote\n");
+        let doc = IssueDoc::parse(&s).unwrap();
+        assert_eq!(doc.worklogs[0].id, WorklogId::New);
+        assert_eq!(doc.worklogs[0].time_spent, "1h");
+        assert!(doc.worklogs[0].author.is_empty());
+        assert_eq!(doc.worklogs[0].started, "2026-08-20T08:00:00Z");
+        // And it survives a round trip, which is what push compares against.
+        let again = IssueDoc::parse(&doc.render().unwrap()).unwrap();
+        assert_eq!(doc.worklogs, again.worklogs);
+    }
+
+    #[test]
+    fn a_worklog_without_a_duration_is_rejected_with_a_hint() {
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Worklogs\n\n### [new]\n\nnote\n");
+        let err = IssueDoc::parse(&s).unwrap_err();
+        assert!(err.message.contains("no amount of time"), "{}", err.message);
+        assert!(err.hint.is_some());
+    }
+
+    /// `## Worklogs` uses the same `### [marker]` shape as `## Comments`, so a
+    /// staged worklog must not be reported as a comment in the wrong place.
+    #[test]
+    fn a_staged_worklog_is_not_reported_as_a_misplaced_comment() {
+        assert!(misplaced_comment_headings(&sample()).is_empty());
+    }
+
+    #[test]
+    fn durations_are_checked_but_never_assumed() {
+        assert_eq!(parse_duration("2h 30m"), Some(9000));
+        assert_eq!(parse_duration("2h30m"), Some(9000));
+        assert_eq!(parse_duration("1d"), Some(8 * 3600));
+        assert_eq!(parse_duration("1w"), Some(40 * 3600));
+        assert_eq!(parse_duration("45M"), Some(2700));
+        // A bare number means minutes only because of an instance setting.
+        assert_eq!(parse_duration("90"), None);
+        assert_eq!(parse_duration("2h 30"), None);
+        assert_eq!(parse_duration("soon"), None);
+        assert_eq!(parse_duration("0h"), None);
+        assert_eq!(parse_duration(""), None);
     }
 
     #[test]
@@ -766,6 +1016,7 @@ mod tests {
                 SECTION_CHECKLIST,
                 SECTION_CHILDREN,
                 SECTION_COMMENTS,
+                SECTION_WORKLOGS,
                 SECTION_ATTACHMENTS
             ]
         );

@@ -479,6 +479,109 @@ impl JiraApi for FixtureClient {
         Ok(())
     }
 
+    async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {
+        let v = self.issue_value(key)?;
+        Ok(normalize::worklogs_from(
+            v.get("fields").and_then(|f| f.get("worklog")),
+            self.markup(),
+        )
+        .0)
+    }
+
+    async fn add_worklog(&self, key: &str, worklog: &WorklogInput) -> Result<RemoteWorklog> {
+        self.record("POST", &format!("/issue/{key}/worklog"), worklog.to_body())?;
+        let id = self.next_id();
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
+        let entry = json!({
+            "id": id,
+            "author": {"accountId": "fixture-user", "displayName": "Fixture User"},
+            "started": worklog.started.as_ref().map(format_worklog_started).unwrap_or_else(|| now.clone()),
+            "created": now, "updated": now,
+            "timeSpent": worklog.time_spent,
+            "timeSpentSeconds": crate::doc::parse_duration(&worklog.time_spent).unwrap_or(0),
+            "comment": worklog.comment.to_field_value(),
+        });
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            if let Some(issue) = issues.get_mut(key) {
+                match issue["fields"]["worklog"]["worklogs"].as_array_mut() {
+                    Some(list) => {
+                        list.push(entry.clone());
+                        let n = list.len();
+                        issue["fields"]["worklog"]["total"] = json!(n);
+                    }
+                    None => {
+                        issue["fields"]["worklog"] = json!({"startAt": 0, "maxResults": 20, "total": 1,
+                                   "worklogs": [entry.clone()]})
+                    }
+                }
+            }
+        }
+        self.bump_updated(key);
+        normalize::one_worklog(&entry, self.markup())
+            .ok_or_else(|| JiredError::generic("fixture produced an unreadable worklog"))
+    }
+
+    async fn update_worklog(
+        &self,
+        key: &str,
+        id: &str,
+        worklog: &WorklogInput,
+    ) -> Result<RemoteWorklog> {
+        self.record(
+            "PUT",
+            &format!("/issue/{key}/worklog/{id}"),
+            worklog.to_body(),
+        )?;
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
+        let mut updated = json!(null);
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            if let Some(issue) = issues.get_mut(key) {
+                if let Some(list) = issue["fields"]["worklog"]["worklogs"].as_array_mut() {
+                    for w in list.iter_mut() {
+                        if w.get("id").and_then(Value::as_str) != Some(id) {
+                            continue;
+                        }
+                        w["timeSpent"] = json!(worklog.time_spent);
+                        w["timeSpentSeconds"] =
+                            json!(crate::doc::parse_duration(&worklog.time_spent).unwrap_or(0));
+                        w["comment"] = worklog.comment.to_field_value();
+                        if let Some(started) = &worklog.started {
+                            w["started"] = json!(format_worklog_started(started));
+                        }
+                        w["updated"] = json!(now);
+                        updated = w.clone();
+                    }
+                }
+            }
+        }
+        if updated.is_null() {
+            return Err(JiredError::generic(format!(
+                "fixture has no worklog {id} on {key}"
+            )));
+        }
+        self.bump_updated(key);
+        normalize::one_worklog(&updated, self.markup())
+            .ok_or_else(|| JiredError::generic("fixture produced an unreadable worklog"))
+    }
+
+    async fn delete_worklog(&self, key: &str, id: &str) -> Result<()> {
+        self.record("DELETE", &format!("/issue/{key}/worklog/{id}"), Value::Null)?;
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            if let Some(issue) = issues.get_mut(key) {
+                if let Some(list) = issue["fields"]["worklog"]["worklogs"].as_array_mut() {
+                    list.retain(|w| w.get("id").and_then(Value::as_str) != Some(id));
+                    let n = list.len();
+                    issue["fields"]["worklog"]["total"] = json!(n);
+                }
+            }
+        }
+        self.bump_updated(key);
+        Ok(())
+    }
+
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment> {
         self.record(
             "POST",

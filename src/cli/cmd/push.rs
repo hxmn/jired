@@ -28,6 +28,10 @@ pub struct PushArgs {
     #[arg(long)]
     pub allow_comment_delete: bool,
 
+    /// Allow deleting worklogs removed from the file
+    #[arg(long)]
+    pub allow_worklog_delete: bool,
+
     /// Replay operations left pending by an interrupted push
     #[arg(long)]
     pub resume: bool,

@@ -377,6 +377,10 @@ pub fn run(ctx: &mut Context, args: &StatusArgs) -> Result<StatusReport> {
         if working.new_comments().count() > 0 {
             fields.push("comments".into());
         }
+        // Staged time and edits to time already booked are both unpushed work.
+        if working.new_worklogs().count() > 0 || base_doc.doc.worklogs != working.worklogs {
+            fields.push("worklogs".into());
+        }
 
         if working.frontmatter.status != base_doc.doc.frontmatter.status {
             staged.push(StagedTransition {

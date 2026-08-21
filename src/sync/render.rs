@@ -9,6 +9,7 @@ use crate::convert::{self, ast::RawBlock};
 use crate::doc::frontmatter::format_user;
 use crate::doc::{
     AttachmentLine, ChildItem, CommentBlock, CommentId, Frontmatter, IssueDoc, SyncMeta,
+    WorklogEntry, WorklogId,
 };
 use crate::error::Result;
 use crate::project::naming;
@@ -18,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Rendered {
     pub doc: IssueDoc,
     pub description_raw: Vec<RawBlock>,
-    /// Keyed by container, e.g. `comment:10812`.
-    pub comment_raw: BTreeMap<String, Vec<RawBlock>>,
+    /// Keyed by container, e.g. `comment:10812` or `worklog:10500`.
+    pub body_raw: BTreeMap<String, Vec<RawBlock>>,
     /// Description as it will be stored in `base_desc`.
     pub description_storage: String,
 }
@@ -49,12 +50,12 @@ impl RenderContext<'_> {
 pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rendered> {
     let description = convert::to_markdown(&issue.description);
 
-    let mut comment_raw = BTreeMap::new();
+    let mut body_raw = BTreeMap::new();
     let mut comments = Vec::with_capacity(issue.comments.len());
     for c in &issue.comments {
         let converted = convert::to_markdown(&c.body);
         if !converted.raw.is_empty() {
-            comment_raw.insert(format!("comment:{}", c.id), converted.raw.clone());
+            body_raw.insert(format!("comment:{}", c.id), converted.raw.clone());
         }
         comments.push(CommentBlock {
             id: CommentId::Existing(c.id.clone()),
@@ -72,6 +73,14 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
             note: String::new(),
             body: converted.markdown.trim().to_string(),
         });
+    }
+
+    let worklogs = worklog_entries(issue);
+    for w in &issue.worklogs {
+        let raw = convert::to_markdown(&w.comment).raw;
+        if !raw.is_empty() {
+            body_raw.insert(format!("worklog:{}", w.id), raw);
+        }
     }
 
     let children = issue
@@ -96,7 +105,7 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
         })
         .collect();
 
-    let lossy = !description.raw.is_empty() || !comment_raw.is_empty();
+    let lossy = !description.raw.is_empty() || !body_raw.is_empty();
     let frontmatter = build_frontmatter(issue, ctx, lossy);
 
     let doc = IssueDoc {
@@ -107,6 +116,7 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
         checklist: issue.fields.checklist.clone(),
         children,
         comments,
+        worklogs,
         attachments,
         extra_sections: Vec::new(),
     };
@@ -114,9 +124,38 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
     Ok(Rendered {
         doc,
         description_raw: description.raw,
-        comment_raw,
+        body_raw,
         description_storage: issue.description.to_storage(),
     })
+}
+
+/// The `## Worklogs` section for an issue, oldest first.
+///
+/// Ordering by when the work started, rather than by whatever order the server
+/// paged the entries in, is what makes the section read as a log; ties break on
+/// the id so the file does not reshuffle between pulls.
+pub fn worklog_entries(issue: &RemoteIssue) -> Vec<WorklogEntry> {
+    let mut sorted: Vec<&crate::api::RemoteWorklog> = issue.worklogs.iter().collect();
+    sorted.sort_by(|a, b| (a.started, &a.id).cmp(&(b.started, &b.id)));
+    sorted
+        .into_iter()
+        .map(|w| WorklogEntry {
+            id: WorklogId::Existing(w.id.clone()),
+            time_spent: w.time_spent.clone(),
+            author: w
+                .author
+                .as_ref()
+                .map(|a| a.display_name.clone())
+                .unwrap_or_else(|| "Unknown".into()),
+            started: w
+                .started
+                .or(w.created)
+                .as_ref()
+                .map(crate::api::model::format_timestamp)
+                .unwrap_or_default(),
+            body: convert::to_markdown(&w.comment).markdown.trim().to_string(),
+        })
+        .collect()
 }
 
 fn build_frontmatter(issue: &RemoteIssue, ctx: &RenderContext<'_>, lossy: bool) -> Frontmatter {
@@ -258,6 +297,37 @@ mod tests {
                 updated: parse_timestamp("2026-08-15T10:32:00Z"),
                 body: RichText::Wiki("Repro confirmed.".into()),
             }],
+            // Deliberately out of order: the section is a log, so rendering has
+            // to put them back in the order the work happened.
+            worklogs: vec![
+                RemoteWorklog {
+                    id: "10501".into(),
+                    author: Some(UserRef {
+                        id: "5b10a2".into(),
+                        display_name: "Ilya A".into(),
+                    }),
+                    started: parse_timestamp("2026-08-16T08:00:00Z"),
+                    created: parse_timestamp("2026-08-16T09:00:00Z"),
+                    updated: parse_timestamp("2026-08-16T09:00:00Z"),
+                    time_spent: "1h".into(),
+                    time_spent_seconds: 3600,
+                    comment: RichText::Empty,
+                },
+                RemoteWorklog {
+                    id: "10500".into(),
+                    author: Some(UserRef {
+                        id: "5b1af9".into(),
+                        display_name: "Jane D".into(),
+                    }),
+                    started: parse_timestamp("2026-08-15T09:00:00Z"),
+                    created: parse_timestamp("2026-08-15T11:30:00Z"),
+                    updated: parse_timestamp("2026-08-15T11:30:00Z"),
+                    time_spent: "2h 30m".into(),
+                    time_spent_seconds: 9000,
+                    comment: RichText::Wiki("Chased the redirect loop.".into()),
+                },
+            ],
+            worklog_total: 2,
             attachments: vec![RemoteAttachment {
                 id: "5001".into(),
                 filename: "trace.har".into(),
@@ -330,6 +400,26 @@ mod tests {
         assert_eq!(r.doc.comments[0].timestamp, "2026-08-15T10:32:00Z");
     }
 
+    /// The section is a log of the work, so it reads oldest first whatever
+    /// order the server listed the entries in.
+    #[test]
+    fn worklogs_render_in_the_order_the_work_happened() {
+        let r = render_issue(&issue(), &ctx()).unwrap();
+        assert_eq!(r.doc.worklogs.len(), 2);
+        assert_eq!(r.doc.worklogs[0].id, WorklogId::Existing("10500".into()));
+        assert_eq!(r.doc.worklogs[0].time_spent, "2h 30m");
+        assert_eq!(r.doc.worklogs[0].author, "Jane D");
+        assert_eq!(r.doc.worklogs[0].started, "2026-08-15T09:00:00Z");
+        assert_eq!(r.doc.worklogs[0].body, "Chased the redirect loop.");
+        assert_eq!(r.doc.worklogs[1].id, WorklogId::Existing("10501".into()));
+
+        let text = r.doc.render().unwrap();
+        assert!(
+            text.contains("## Worklogs\n\n### [w-10500] 2h 30m — Jane D — 2026-08-15T09:00:00Z")
+        );
+        assert!(text.find("[w-10500]") < text.find("[w-10501]"));
+    }
+
     #[test]
     fn attachments_link_into_the_dot_folder() {
         let r = render_issue(&issue(), &ctx()).unwrap();
@@ -389,6 +479,7 @@ mod tests {
         assert_eq!(back.checklist.len(), 2);
         assert_eq!(back.children.len(), 2);
         assert_eq!(back.comments.len(), 1);
+        assert_eq!(back.worklogs.len(), 2);
     }
 
     /// The round trip must be exact, not merely similar: `diff`, `status` and
@@ -401,6 +492,7 @@ mod tests {
         assert_eq!(r.doc.comments[0].body, back.comments[0].body);
         assert_eq!(r.doc.checklist, back.checklist);
         assert_eq!(r.doc.children, back.children);
+        assert_eq!(r.doc.worklogs, back.worklogs);
     }
 
     #[test]

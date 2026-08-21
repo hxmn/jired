@@ -101,7 +101,8 @@ pub fn render() -> String {
     s.push_str(
         "YAML frontmatter, then fixed sections in this order: `# <summary>`, \
          `## Description`, `## Checklist`, `## Children`, `## Comments`, \
-         `## Attachments`. Keep the section order and heading text intact.\n\n",
+         `## Worklogs`, `## Attachments`. Keep the section order and heading \
+         text intact.\n\n",
     );
     // Rendered from the same constants the parser enforces. A hand-copied list
     // silently becomes a lie the first time a field is added, and an agent that
@@ -150,6 +151,28 @@ pub fn render() -> String {
     s.push_str("- Existing: `### [c-10812] Jane Doe — 2026-08-15T10:32:00Z`. Edit the body below it to update the comment.\n");
     s.push_str("- New: add a `### [new]` section; push creates it and rewrites the heading with the real id.\n");
     s.push_str("- Deleting a section only deletes the comment with `--allow-comment-delete`.\n\n");
+
+    s.push_str("## Worklogs\n\n");
+    s.push_str(
+        "`## Worklogs` is the time booked against the issue, oldest first, one \
+         `### ` heading each: the duration, then who booked it, then when the \
+         work started — `### [w-10500] 2h 30m — Jane Doe — 2026-08-15T09:00:00Z`. \
+         Text under a heading is that entry's note.\n\n",
+    );
+    s.push_str(
+        "- Book time with `jired logwork KEY \"2h 30m\" -m \"what it went on\"`, \
+         which stages `### [new] 2h 30m — <when>` for the next push; writing that \
+         heading by hand does the same thing.\n",
+    );
+    s.push_str(
+        "- The duration is Jira's own notation — weeks, days, hours, minutes — \
+         and is sent as written, because how long a day is is an instance \
+         setting. A bare number is refused rather than guessed at.\n",
+    );
+    s.push_str(
+        "- Editing a heading or its note updates that worklog; deleting a section \
+         only deletes it with `--allow-worklog-delete`.\n\n",
+    );
 
     s.push_str("## Children and checklists\n\n");
     s.push_str("Two checkbox sections, two different things.\n\n");

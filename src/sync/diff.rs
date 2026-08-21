@@ -262,6 +262,7 @@ fn compare(
                 checklist: vec![],
                 children: vec![],
                 comments: vec![],
+                worklogs: vec![],
                 attachments: vec![],
                 extra_sections: vec![],
             };
@@ -303,6 +304,12 @@ fn compare(
                 if let Some(d) = unified(&format!("Comments/c-{id}"), &before, &c.body) {
                     sections.push(d);
                 }
+            }
+            // A worklog's duration and start time are as much of the entry as
+            // its note, so the whole heading is what gets compared.
+            let (wa, wb) = (worklog_text(a), worklog_text(b));
+            if let Some(d) = unified("Worklogs", &wa, &wb) {
+                sections.push(d);
             }
         }
     }
@@ -348,6 +355,24 @@ fn children_text(doc: &IssueDoc) -> String {
                     .unwrap_or_default(),
                 i.title
             )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn worklog_text(doc: &IssueDoc) -> String {
+    doc.worklogs
+        .iter()
+        .map(|w| {
+            let id = match &w.id {
+                crate::doc::WorklogId::Existing(id) => format!("w-{id}"),
+                crate::doc::WorklogId::New => "new".to_string(),
+            };
+            let mut line = format!("[{id}] {} {} {}", w.time_spent, w.author, w.started);
+            for note in w.body.lines() {
+                line.push_str(&format!("\n  {note}"));
+            }
+            line
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -407,6 +432,7 @@ mod tests {
             checklist: vec![],
             children: vec![],
             comments: vec![],
+            worklogs: Vec::new(),
             attachments: vec![],
             extra_sections: vec![],
         }

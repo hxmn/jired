@@ -173,6 +173,8 @@ pub enum Command {
     Log(cmd::log::LogArgs),
     /// Add a comment to an issue
     Comment(cmd::comment::CommentArgs),
+    /// Book time against an issue
+    Logwork(cmd::logwork::LogworkArgs),
     /// Create a new issue locally
     Create(cmd::create::CreateArgs),
     /// Edit an issue in a form
@@ -266,6 +268,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Status(a) => cmd::status::run(g, a, out),
         Command::Log(a) => cmd::log::run(g, a, out),
         Command::Comment(a) => cmd::comment::run(g, a, out),
+        Command::Logwork(a) => cmd::logwork::run(g, a, out),
         Command::Create(a) => cmd::create::run(g, a, out),
         Command::Edit(a) => cmd::edit::run(g, a, out),
         Command::Transition(a) => cmd::transition::run(g, a, out),

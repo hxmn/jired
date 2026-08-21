@@ -4,17 +4,43 @@
     "key": "DC-77",
     "fields": {
       "summary": "Rotate the LDAP bind credential",
-      "issuetype": { "name": "Task" },
-      "status": { "id": "3", "name": "In Progress" },
-      "priority": { "name": "High" },
-      "labels": ["security", "ldap"],
-      "components": [{ "name": "directory" }],
-      "assignee": { "name": "ilya", "key": "JIRAUSER10100", "displayName": "Ilya A" },
-      "reporter": { "name": "jane", "key": "JIRAUSER10101", "displayName": "Jane D" },
+      "issuetype": {
+        "name": "Task"
+      },
+      "status": {
+        "id": "3",
+        "name": "In Progress"
+      },
+      "priority": {
+        "name": "High"
+      },
+      "labels": [
+        "security",
+        "ldap"
+      ],
+      "components": [
+        {
+          "name": "directory"
+        }
+      ],
+      "assignee": {
+        "name": "ilya",
+        "key": "JIRAUSER10100",
+        "displayName": "Ilya A"
+      },
+      "reporter": {
+        "name": "jane",
+        "key": "JIRAUSER10101",
+        "displayName": "Jane D"
+      },
       "created": "2026-07-30T08:15:00.000+0200",
       "updated": "2026-08-14T16:42:00.000+0200",
       "description": "The bind account expires soon. Coordinate with [~jane] before the window.\n\n{panel:title=Change freeze}\nNo directory changes during the release window.\n{panel}\n\nh3. Steps\n\n* Generate the replacement secret\n* Update the connector config\n\n{code:java}\nLdapContext ctx = new InitialLdapContext(env, null);\n{code}\n\n||Environment||Owner||\n|staging|platform|\n|production|sre|\n\nSee DC-78 for the rollback plan.",
-      "fixVersions": [{ "name": "2026.08" }],
+      "fixVersions": [
+        {
+          "name": "2026.08"
+        }
+      ],
       "versions": [],
       "customfield_10106": 3,
       "customfield_10100": "DC-50",
@@ -29,8 +55,13 @@
       "customfield_10207": "1/3",
       "issuelinks": [
         {
-          "type": { "outward": "relates to", "inward": "relates to" },
-          "outwardIssue": { "key": "DC-78" }
+          "type": {
+            "outward": "relates to",
+            "inward": "relates to"
+          },
+          "outwardIssue": {
+            "key": "DC-78"
+          }
         }
       ],
       "subtasks": [
@@ -38,7 +69,12 @@
           "key": "DC-79",
           "fields": {
             "summary": "Update the connector config",
-            "status": { "name": "Open", "statusCategory": { "key": "new" } }
+            "status": {
+              "name": "Open",
+              "statusCategory": {
+                "key": "new"
+              }
+            }
           }
         }
       ],
@@ -46,10 +82,13 @@
         "comments": [
           {
             "id": "40901",
-            "author": { "name": "jane", "displayName": "Jane D" },
+            "author": {
+              "name": "jane",
+              "displayName": "Jane D"
+            },
             "created": "2026-08-12T11:05:00.000+0200",
             "updated": "2026-08-12T11:05:00.000+0200",
-            "body": "Confirmed with [~ilya] — the *staging* bind account is already rotated.\n\n{noformat}\nbind: cn=svc,ou=apps\n{noformat}"
+            "body": "Confirmed with [~ilya] \u2014 the *staging* bind account is already rotated.\n\n{noformat}\nbind: cn=svc,ou=apps\n{noformat}"
           }
         ]
       },
@@ -60,10 +99,44 @@
           "size": 48210,
           "mimeType": "text/plain",
           "created": "2026-08-12T10:00:00.000+0200",
-          "author": { "displayName": "Jane D" },
+          "author": {
+            "displayName": "Jane D"
+          },
           "content": "https://jira.corp.example/secure/attachment/60300/ldap-audit.log"
         }
-      ]
+      ],
+      "worklog": {
+        "startAt": 0,
+        "maxResults": 20,
+        "total": 2,
+        "worklogs": [
+          {
+            "id": "10500",
+            "author": {
+              "name": "jane",
+              "displayName": "Jane Doe"
+            },
+            "started": "2026-08-15T09:00:00.000+0000",
+            "created": "2026-08-15T11:30:00.000+0000",
+            "updated": "2026-08-15T11:30:00.000+0000",
+            "timeSpent": "2h 30m",
+            "timeSpentSeconds": 9000,
+            "comment": "Chased the redirect loop."
+          },
+          {
+            "id": "10501",
+            "author": {
+              "name": "ilya",
+              "displayName": "Ilya A"
+            },
+            "started": "2026-08-16T08:00:00.000+0000",
+            "created": "2026-08-16T09:05:00.000+0000",
+            "updated": "2026-08-16T09:05:00.000+0000",
+            "timeSpent": "1h",
+            "timeSpentSeconds": 3600
+          }
+        ]
+      }
     }
   },
   {
@@ -71,16 +144,25 @@
     "key": "DC-78",
     "fields": {
       "summary": "Document the LDAP rollback plan",
-      "issuetype": { "name": "Task" },
-      "status": { "id": "1", "name": "Open" },
-      "priority": { "name": "Medium" },
+      "issuetype": {
+        "name": "Task"
+      },
+      "status": {
+        "id": "1",
+        "name": "Open"
+      },
+      "priority": {
+        "name": "Medium"
+      },
       "labels": [],
       "components": [],
       "created": "2026-07-31T09:00:00.000+0200",
       "updated": "2026-08-09T12:00:00.000+0200",
       "description": "bq. Rollback must be possible without a restart.\n\n# Restore the previous secret\n# Reload the connector\n\nSee [the runbook|https://wiki.corp.example/ldap] for detail.",
       "subtasks": [],
-      "comment": { "comments": [] },
+      "comment": {
+        "comments": []
+      },
       "attachment": []
     }
   },
@@ -89,17 +171,28 @@
     "key": "DC-79",
     "fields": {
       "summary": "Update the connector config",
-      "issuetype": { "name": "Sub-task" },
-      "status": { "id": "1", "name": "Open" },
-      "priority": { "name": "Medium" },
+      "issuetype": {
+        "name": "Sub-task"
+      },
+      "status": {
+        "id": "1",
+        "name": "Open"
+      },
+      "priority": {
+        "name": "Medium"
+      },
       "labels": [],
       "components": [],
       "created": "2026-08-01T09:00:00.000+0200",
       "updated": "2026-08-05T09:30:00.000+0200",
       "description": "Change the bind DN in {{connector.yaml}} and restart the pool.",
-      "parent": { "key": "DC-77" },
+      "parent": {
+        "key": "DC-77"
+      },
       "subtasks": [],
-      "comment": { "comments": [] },
+      "comment": {
+        "comments": []
+      },
       "attachment": []
     }
   }

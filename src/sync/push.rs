@@ -7,11 +7,11 @@
 //! * a lossy region is rebuilt from its stored original, never from the file,
 //!   so untouched read-only content goes back byte-identical.
 
-use crate::api::{JiraApi, Markup, RemoteIssue, RichText};
+use crate::api::{JiraApi, Markup, RemoteIssue, RichText, WorklogInput};
 use crate::cli::cmd::push::PushArgs;
 use crate::cli::context::Context;
 use crate::convert;
-use crate::doc::{CommentId, IssueDoc};
+use crate::doc::{CommentId, IssueDoc, WorklogEntry, WorklogId};
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::sync::render::{render_issue, RenderContext};
@@ -238,6 +238,14 @@ enum Action {
         body: RichText,
     },
     DeleteComment {
+        id: String,
+    },
+    CreateWorklog(WorklogInput),
+    UpdateWorklog {
+        id: String,
+        worklog: WorklogInput,
+    },
+    DeleteWorklog {
         id: String,
     },
     UploadAttachment {
@@ -679,6 +687,53 @@ fn create_issue(
     })
 }
 
+/// Check a worklog's duration before it can cost an API call.
+///
+/// A duration Jira would reject fails the whole push otherwise, taking the
+/// field edits planned alongside it down as well; reporting it here leaves the
+/// rest of the issue to go out and the entry in the file to be corrected.
+fn validate_duration<'a>(
+    w: &'a WorklogEntry,
+    key: &str,
+    warnings: &mut Vec<String>,
+) -> Option<&'a str> {
+    if crate::doc::parse_duration(&w.time_spent).is_some() {
+        return Some(&w.time_spent);
+    }
+    warnings.push(format!(
+        "{key}: `{}` is not a length of time, so that worklog was not sent — \
+         write it as `2h 30m`, in weeks, days, hours or minutes",
+        w.time_spent
+    ));
+    None
+}
+
+fn worklog_input(
+    w: &WorklogEntry,
+    time_spent: &str,
+    markup: Markup,
+    raw: &[crate::convert::ast::RawBlock],
+) -> WorklogInput {
+    WorklogInput {
+        time_spent: time_spent.to_string(),
+        // An entry with no start time is one written just now; leaving it out
+        // lets the server date it rather than guessing a time here.
+        started: crate::api::model::parse_timestamp(&w.started),
+        comment: if w.body.trim().is_empty() {
+            RichText::Empty
+        } else {
+            convert::from_markdown(&w.body, markup, raw)
+        },
+    }
+}
+
+fn summarize_worklog(w: &WorklogEntry) -> String {
+    match first_line(&w.body) {
+        note if note.is_empty() => w.time_spent.clone(),
+        note => format!("{} — {note}", w.time_spent),
+    }
+}
+
 /// The sprint id to move into, `None` for the backlog, or the names this
 /// workspace does know when the one asked for is not among them.
 fn sprint_target(
@@ -1009,6 +1064,73 @@ fn plan(
         }
     }
 
+    for w in &working.worklogs {
+        let duration = validate_duration(w, &base.frontmatter.key, warnings);
+        match (&w.id, duration) {
+            (_, None) => continue,
+            (WorklogId::New, Some(time_spent)) => {
+                let input = worklog_input(w, time_spent, markup, &[]);
+                ops.push(Op {
+                    kind: "create_worklog",
+                    summary: summarize_worklog(w),
+                    request: json!({"method": "POST", "path": "/issue/{key}/worklog",
+                                    "body": input.to_body()}),
+                    action: Action::CreateWorklog(input),
+                });
+            }
+            (WorklogId::Existing(id), Some(time_spent)) => {
+                let Some(before) = base.worklog(id) else {
+                    continue;
+                };
+                if (&before.time_spent, &before.started, &before.body)
+                    == (&w.time_spent, &w.started, &w.body)
+                {
+                    continue;
+                }
+                let container = format!("worklog:{id}");
+                let wraw = engine.state.raw_blocks(&base.frontmatter.key, &container)?;
+                let input = worklog_input(w, time_spent, markup, &wraw);
+                ops.push(Op {
+                    kind: "update_worklog",
+                    summary: format!("w-{id} {}", summarize_worklog(w)),
+                    request: json!({"method": "PUT",
+                                    "path": format!("/issue/{{key}}/worklog/{id}"),
+                                    "body": input.to_body()}),
+                    action: Action::UpdateWorklog {
+                        id: id.clone(),
+                        worklog: input,
+                    },
+                });
+            }
+        }
+    }
+
+    for w in &base.worklogs {
+        let WorklogId::Existing(id) = &w.id else {
+            continue;
+        };
+        if working.worklog(id).is_some() {
+            continue;
+        }
+        if !args.allow_worklog_delete {
+            // Deleting time somebody booked is not recoverable from the working
+            // copy, so it takes the same explicit opt-in a comment does.
+            warnings.push(format!(
+                "{}: worklog w-{id} was removed from the file; pass \
+                 --allow-worklog-delete to delete it on the server",
+                base.frontmatter.key
+            ));
+            continue;
+        }
+        ops.push(Op {
+            kind: "delete_worklog",
+            summary: format!("w-{id} ({})", w.time_spent),
+            request: json!({"method": "DELETE",
+                            "path": format!("/issue/{{key}}/worklog/{id}")}),
+            action: Action::DeleteWorklog { id: id.clone() },
+        });
+    }
+
     // The checklist plugin's list is rendered read-only: jired can show what
     // the plugin holds but has no supported way to write it back, and inventing
     // one would corrupt the field for everyone else looking at the issue.
@@ -1321,6 +1443,11 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                 client.update_comment(key, id, body).await.map(|_| ())
             }
             Action::DeleteComment { id } => client.delete_comment(key, id).await,
+            Action::CreateWorklog(worklog) => client.add_worklog(key, worklog).await.map(|_| ()),
+            Action::UpdateWorklog { id, worklog } => {
+                client.update_worklog(key, id, worklog).await.map(|_| ())
+            }
+            Action::DeleteWorklog { id } => client.delete_worklog(key, id).await,
             Action::UploadAttachment { filename, bytes } => client
                 .upload_attachment(key, filename, bytes.clone())
                 .await
@@ -1357,7 +1484,7 @@ fn rewrite_after_push(
     engine
         .state
         .replace_raw_blocks(&issue.key, "description", &rendered.description_raw)?;
-    for (container, blocks) in &rendered.comment_raw {
+    for (container, blocks) in &rendered.body_raw {
         engine
             .state
             .replace_raw_blocks(&issue.key, container, blocks)?;

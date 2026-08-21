@@ -137,7 +137,7 @@ an ignored field a file still carries, and `jired doctor` is what brings the fil
 into line in either direction.
 
 ### `jired push`
-`jired push [ISSUE…] [-n/--dry-run|preview] [--force] [--allow-lossy] [--allow-comment-delete] [--resume]`
+`jired push [ISSUE…] [-n/--dry-run|preview] [--force] [--allow-lossy] [--allow-comment-delete] [--allow-worklog-delete] [--resume]`
 Plans ops (D23 order), `--dry-run` prints exact API calls + diffs (human and JSON).
 Interactively it always plans first: the plan lines are printed and the run asks
 `send N operation(s) across M issue(s)?` before anything is sent. `-y` and
@@ -182,6 +182,25 @@ Cached changelog (fetched with `expand=changelog`). Offline unless `--refresh`.
 Appends a `### [new]` section to the file; `--push` sends immediately. Without
 `-m` it opens `$VISUAL`/`$EDITOR` on a scratch file (an empty buffer aborts), or
 reads the body from stdin when one is piped.
+
+### `jired logwork ISSUE-KEY TIME [-m "text"] [--started TS] [--push]`
+Books time against the issue by appending a `### [new] 2h 30m — <when>` section
+under `## Worklogs`; `--push` sends immediately. `--started` defaults to now, so
+the entry is dated when the work happened rather than when the push does.
+
+The duration is Jira's own notation — `2h 30m`, `1d`, `45m` — validated here for
+syntax only and sent as the text it was written as: how long a day is is an
+instance setting, and converting to seconds would answer that question wrongly.
+A bare number is refused rather than read as minutes.
+
+`## Worklogs` holds what the server has, oldest first, one heading each:
+`### [w-10500] 2h 30m — Jane Doe — 2026-08-15T09:00:00Z`, with the note below
+it. An issue payload carries only the first page of them, so `fetch` asks the
+worklog endpoint for the rest whenever the server says there are more — a file
+that showed 20 of 45 would be a file that lies. Editing a heading or its note is
+an update on push; removing a section is reported and ignored unless
+`--allow-worklog-delete` is passed, since deleting somebody's booked time cannot
+be undone from the working copy.
 
 ### `jired create [--type Story] [--template T] [--summary S] [-i]`
 Writes `NEW-<6hex>. Summary.md` (D14) from template; real key assigned on push
@@ -282,7 +301,8 @@ missing config defaults, settings that changed name (`checklist.done_transition`
 `creds.storage` says they belong (it moves them), filenames that predate a naming
 convention (this is the migration path for zero-padded issue numbers), issue files
 whose sections predate one — subtasks written under `## Checklist` move to
-`## Children`, and the checklist comes back from the last snapshot — custom fields
+`## Children`, and the checklist and the worklogs come back from the last
+snapshot — custom fields
 that disagree with `ignored_custom_fields` (dropped from every file; restored from
 the last snapshot for a file that is still in sync, since after un-ignoring one it
 is the file that would read as having cleared the field), database rows pointing at

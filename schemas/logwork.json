@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/logwork/1",
+  "title": "jired logwork result",
+  "description": "Result of booking time against an issue",
+  "type": "object",
+  "required": [
+    "schema",
+    "key",
+    "file",
+    "time_spent",
+    "started",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/logwork/1"
+    },
+    "key": {
+      "type": "string"
+    },
+    "file": {
+      "type": "string"
+    },
+    "time_spent": {
+      "type": "string",
+      "description": "The duration as written, in Jira's own notation"
+    },
+    "started": {
+      "type": "string",
+      "description": "When the work started, ISO-8601 in UTC"
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

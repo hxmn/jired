@@ -468,12 +468,15 @@ fn the_written_file_has_the_documented_structure() {
     assert!(text.contains("\n## Description\n"));
     assert!(text.contains("\n## Checklist\n"));
     assert!(text.contains("\n## Comments\n"));
+    assert!(text.contains("\n## Worklogs\n"));
     assert!(text.contains("\n## Attachments\n"));
 
     assert!(text.contains("- [ ] PROJ-143 Add integration test"));
     assert!(text.contains("- [x] PROJ-144 Update runbook"));
     assert!(text.contains("### [c-10812] Jane D — 2026-08-15T10:32:00Z"));
     assert!(text.contains("Repro confirmed on staging."));
+    assert!(text.contains("### [w-10500] 2h 30m — Jane D — 2026-08-15T09:00:00Z"));
+    assert!(text.contains("Chased the redirect loop."));
     assert!(text.contains("login-trace.har"));
 }
 
@@ -766,8 +769,8 @@ fn push_creates_a_new_comment_and_rewrites_its_heading_with_the_real_id() {
     ws.json(&["pull"]);
 
     let text = ws.read(ISSUE_FILE).replace(
-        "## Attachments",
-        "### [new]\n\nFixed by rotating the IdP cert.\n\n## Attachments",
+        "## Worklogs",
+        "### [new]\n\nFixed by rotating the IdP cert.\n\n## Worklogs",
     );
     ws.write(ISSUE_FILE, &text);
 
@@ -1483,6 +1486,159 @@ fn commenting_on_an_unknown_issue_is_a_usage_error() {
     ws.init();
     ws.json(&["pull"]);
     let err = ws.json_err(&["comment", "PROJ-999", "-m", "x"], 2);
+    assert_eq!(err["kind"], "usage");
+    assert_eq!(err["details"]["issue"], "PROJ-999");
+}
+
+#[test]
+fn logwork_stages_time_that_push_then_books() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&[
+        "logwork",
+        "PROJ-142",
+        "2h 30m",
+        "-m",
+        "Traced the redirect loop.",
+        "--started",
+        "2026-08-20T09:00:00Z",
+    ]);
+    assert_eq!(report["key"], "PROJ-142");
+    assert_eq!(report["time_spent"], "2h 30m");
+    assert_eq!(report["started"], "2026-08-20T09:00:00Z");
+    assert_eq!(report["pushed"], false);
+
+    let file = ws.read(ISSUE_FILE);
+    assert!(
+        file.contains("### [new] 2h 30m — 2026-08-20T09:00:00Z"),
+        "{file}"
+    );
+    assert!(file.contains("Traced the redirect loop."));
+
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::from("worklogs")));
+
+    let push = ws.json(&["push"]);
+    let ops = push["results"][0]["ops"].as_array().unwrap();
+    let booked = ops
+        .iter()
+        .find(|o| o["kind"] == "create_worklog")
+        .unwrap_or_else(|| panic!("no create_worklog op in {ops:?}"));
+    assert_eq!(booked["status"], "done");
+
+    // The staged entry comes back with the id the server gave it, and the
+    // duration the file asked for.
+    let after = ws.read(ISSUE_FILE);
+    assert!(
+        !after.contains("### [new]"),
+        "the placeholder must be replaced:\n{after}"
+    );
+    assert!(after.contains("2h 30m — Fixture User"), "{after}");
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn logwork_with_push_sends_immediately() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["logwork", "PROJ-142", "45m", "--push"]);
+    assert_eq!(report["pushed"], true);
+    assert_eq!(report["push"]["results"][0]["ok"], true);
+
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// A duration Jira would reject costs nothing to catch here, and catching it
+/// later would take the field edits planned alongside it down too.
+#[test]
+fn a_duration_that_is_not_one_is_refused_before_anything_is_written() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let before = ws.read(ISSUE_FILE);
+    let err = ws.json_err(&["logwork", "PROJ-142", "a while"], 2);
+    assert_eq!(err["kind"], "usage");
+    assert!(err["hint"].as_str().unwrap().contains("2h 30m"), "{err}");
+    assert_eq!(ws.read(ISSUE_FILE), before, "nothing may have been written");
+
+    // A bare number means minutes only because of an instance setting.
+    ws.json_err(&["logwork", "PROJ-142", "90"], 2);
+}
+
+/// Time booked on the server is the file's to edit, and push carries the whole
+/// entry — duration, start time and note — not just the note.
+#[test]
+fn editing_a_booked_worklog_sends_the_whole_entry() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("### [w-10500] 2h 30m", "### [w-10500] 3h");
+    ws.write(ISSUE_FILE, &text);
+
+    let push = ws.json(&["push"]);
+    let ops = push["results"][0]["ops"].as_array().unwrap();
+    assert!(
+        ops.iter()
+            .any(|o| o["kind"] == "update_worklog" && o["status"] == "done"),
+        "{ops:?}"
+    );
+    assert!(ws.read(ISSUE_FILE).contains("### [w-10500] 3h"));
+}
+
+/// Deleting time somebody booked cannot be undone from the working copy, so it
+/// takes the same explicit opt-in a comment does.
+#[test]
+fn removing_a_worklog_is_reported_rather_than_deleted_by_default() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(ISSUE_FILE);
+    let start = text.find("### [w-10500]").unwrap();
+    let end = text.find("### [w-10501]").unwrap();
+    ws.write(ISSUE_FILE, &format!("{}{}", &text[..start], &text[end..]));
+
+    let push = ws.json(&["push"]);
+    let warnings = push["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("--allow-worklog-delete")),
+        "{warnings:?}"
+    );
+    assert!(
+        push["results"].as_array().unwrap().is_empty(),
+        "nothing may have been sent: {push}"
+    );
+
+    // With the flag, it goes.
+    let push = ws.json(&["push", "--allow-worklog-delete"]);
+    let ops = push["results"][0]["ops"].as_array().unwrap();
+    assert!(
+        ops.iter()
+            .any(|o| o["kind"] == "delete_worklog" && o["status"] == "done"),
+        "{ops:?}"
+    );
+    assert!(!ws.read(ISSUE_FILE).contains("### [w-10500]"));
+}
+
+#[test]
+fn logging_work_on_an_unknown_issue_is_a_usage_error() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let err = ws.json_err(&["logwork", "PROJ-999", "1h"], 2);
     assert_eq!(err["kind"], "usage");
     assert_eq!(err["details"]["issue"], "PROJ-999");
 }

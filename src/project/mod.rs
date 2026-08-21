@@ -222,6 +222,7 @@ mod tests {
             checklist: vec![],
             children: vec![],
             comments: vec![],
+            worklogs: Vec::new(),
             attachments: vec![],
             extra_sections: vec![],
         }

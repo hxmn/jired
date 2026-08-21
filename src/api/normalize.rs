@@ -175,6 +175,8 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
         custom: custom_fields(f, map),
     };
 
+    let (worklogs, worklog_total) = worklogs_from(f.get("worklog"), markup);
+
     Ok(RemoteIssue {
         key,
         id,
@@ -182,6 +184,8 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
         description,
         fields,
         comments: comments_from(f.get("comment"), markup),
+        worklogs,
+        worklog_total,
         attachments: attachments_from(f.get("attachment")),
         raw: v.clone(),
     })
@@ -228,6 +232,85 @@ pub fn comments_from(v: Option<&Value>, markup: Markup) -> Vec<RemoteComment> {
             })
         })
         .collect()
+}
+
+/// The worklogs a payload carries, and how many the server says there are.
+///
+/// An issue payload holds only the first page — 20 on a stock instance — so the
+/// total is what tells a caller it has to ask for the rest.
+pub fn worklogs_from(v: Option<&Value>, markup: Markup) -> (Vec<RemoteWorklog>, usize) {
+    let (list, total) = match v {
+        Some(Value::Object(o)) => (
+            o.get("worklogs").and_then(Value::as_array).cloned(),
+            o.get("total").and_then(Value::as_u64).map(|n| n as usize),
+        ),
+        Some(Value::Array(a)) => (Some(a.clone()), None),
+        _ => (None, None),
+    };
+    let worklogs: Vec<RemoteWorklog> = list
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|w| one_worklog(w, markup))
+        .collect();
+    let total = total.unwrap_or(worklogs.len()).max(worklogs.len());
+    (worklogs, total)
+}
+
+pub fn one_worklog(w: &Value, markup: Markup) -> Option<RemoteWorklog> {
+    Some(RemoteWorklog {
+        id: str_at(w, "id")?.to_string(),
+        author: user_ref(w.get("author")),
+        started: w
+            .get("started")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp),
+        created: w
+            .get("created")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp),
+        updated: w
+            .get("updated")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp),
+        // Older Data Center payloads omit the rendered form; the seconds are
+        // always there, so the duration is rebuilt from them rather than lost.
+        time_spent: str_at(w, "timeSpent")
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                render_duration(
+                    w.get("timeSpentSeconds")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                )
+            }),
+        time_spent_seconds: w
+            .get("timeSpentSeconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        comment: rich_text(w.get("comment"), markup),
+    })
+}
+
+/// Seconds as Jira would write them, assuming its default 8-hour day.
+fn render_duration(seconds: u64) -> String {
+    let mut left = seconds;
+    let mut parts = Vec::new();
+    for (unit, scale) in [
+        ("w", 5 * 8 * 3600u64),
+        ("d", 8 * 3600),
+        ("h", 3600),
+        ("m", 60),
+    ] {
+        let n = left / scale;
+        if n > 0 {
+            parts.push(format!("{n}{unit}"));
+            left -= n * scale;
+        }
+    }
+    if parts.is_empty() {
+        return "0m".to_string();
+    }
+    parts.join(" ")
 }
 
 pub fn attachments_from(v: Option<&Value>) -> Vec<RemoteAttachment> {
@@ -476,8 +559,24 @@ mod tests {
         ])
     }
 
+    /// Kept out of `cloud_issue` so that literal stays inside the `json!`
+    /// macro's expansion depth.
+    fn cloud_worklog_field() -> Value {
+        json!({"startAt": 0, "maxResults": 20, "total": 2, "worklogs": [
+            {"id": "10500", "author": {"accountId": "5b1af9", "displayName": "Jane D"},
+             "started": "2026-08-15T09:00:00.000+0000",
+             "created": "2026-08-15T11:30:00.000+0000",
+             "updated": "2026-08-15T11:30:00.000+0000",
+             "timeSpent": "2h 30m", "timeSpentSeconds": 9000,
+             "comment": {"type": "doc", "version": 1, "content": []}},
+            {"id": "10501", "author": {"accountId": "5b10a2", "displayName": "Ilya A"},
+             "started": "2026-08-16T08:00:00.000+0000",
+             "timeSpentSeconds": 3600}
+        ]})
+    }
+
     fn cloud_issue() -> Value {
-        json!({
+        let mut v = json!({
             "id": "10023",
             "key": "PROJ-142",
             "fields": {
@@ -526,7 +625,9 @@ mod tests {
                      "content": "https://x.atlassian.net/secure/attachment/5001/trace.har"}
                 ]
             }
-        })
+        });
+        v["fields"]["worklog"] = cloud_worklog_field();
+        v
     }
 
     #[test]
@@ -547,6 +648,50 @@ mod tests {
         assert_eq!(issue.fields.fix_versions, ["2.4.0"]);
         assert_eq!(issue.comments.len(), 1);
         assert_eq!(issue.attachments[0].filename, "trace.har");
+    }
+
+    /// The duration is the server's own text where it sent one, and rebuilt
+    /// from the seconds where it did not — never dropped.
+    #[test]
+    fn worklogs_normalize_with_their_duration_either_way_round() {
+        let issue = issue_from_json(&cloud_issue(), Markup::Adf, &field_map()).unwrap();
+        assert_eq!(issue.worklog_total, 2);
+        assert_eq!(issue.worklogs.len(), 2);
+        assert_eq!(issue.worklogs[0].id, "10500");
+        assert_eq!(issue.worklogs[0].time_spent, "2h 30m");
+        assert_eq!(issue.worklogs[0].time_spent_seconds, 9000);
+        assert_eq!(
+            issue.worklogs[0].author.as_ref().unwrap().display_name,
+            "Jane D"
+        );
+        assert_eq!(
+            format_timestamp(&issue.worklogs[0].started.unwrap()),
+            "2026-08-15T09:00:00Z"
+        );
+        assert_eq!(issue.worklogs[1].time_spent, "1h");
+    }
+
+    /// A payload that pages its worklogs says so, and that is what tells the
+    /// client to go and fetch the rest rather than show a partial list.
+    #[test]
+    fn a_paged_worklog_field_reports_the_full_total() {
+        let v = json!({"startAt": 0, "maxResults": 20, "total": 45, "worklogs": [
+            {"id": "1", "timeSpent": "1h", "timeSpentSeconds": 3600}
+        ]});
+        let (worklogs, total) = worklogs_from(Some(&v), Markup::Adf);
+        assert_eq!(worklogs.len(), 1);
+        assert_eq!(total, 45);
+
+        // No worklog field at all is zero of them, not an unknown number.
+        assert_eq!(worklogs_from(None, Markup::Adf).1, 0);
+    }
+
+    #[test]
+    fn seconds_become_the_duration_jira_would_have_written() {
+        assert_eq!(render_duration(0), "0m");
+        assert_eq!(render_duration(9000), "2h 30m");
+        assert_eq!(render_duration(8 * 3600), "1d");
+        assert_eq!(render_duration(40 * 3600 + 60), "1w 1m");
     }
 
     #[test]

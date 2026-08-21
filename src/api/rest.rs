@@ -59,6 +59,30 @@ impl Rest {
             FieldSet::Full => "*all",
         }
     }
+
+    /// Fetch the worklogs an issue payload left out.
+    ///
+    /// An issue carries only the first page of them — 20 on a stock instance —
+    /// and a file that shows 20 of 45 is a file that lies. Only issues that
+    /// actually have more cost the extra call.
+    async fn complete_worklogs(&self, issue: &mut RemoteIssue) {
+        if issue.worklog_total <= issue.worklogs.len() {
+            return;
+        }
+        match self.worklogs(&issue.key).await {
+            Ok(all) => {
+                issue.worklog_total = all.len().max(issue.worklog_total);
+                issue.worklogs = all;
+            }
+            // A worklog endpoint that refuses is not a reason to fail a fetch;
+            // the first page is still better than nothing.
+            Err(e) => tracing::warn!(
+                "{}: cannot read the rest of the worklogs: {}",
+                issue.key,
+                e.message
+            ),
+        }
+    }
 }
 
 #[async_trait]
@@ -329,7 +353,7 @@ impl JiraApi for Rest {
             .post_json(&format!("{}/search", self.api()), body)
             .await?;
 
-        let issues = v
+        let mut issues = v
             .get("issues")
             .and_then(Value::as_array)
             .map(|a| {
@@ -339,6 +363,9 @@ impl JiraApi for Rest {
             })
             .transpose()?
             .unwrap_or_default();
+        for issue in &mut issues {
+            self.complete_worklogs(issue).await;
+        }
 
         Ok(SearchPage {
             start_at: v.get("startAt").and_then(Value::as_u64).unwrap_or(0) as usize,
@@ -360,7 +387,9 @@ impl JiraApi for Rest {
             .http
             .get_json(&format!("{}/issue/{key}?fields=*all", self.api()))
             .await?;
-        normalize::issue_from_json(&v, self.markup(), &map)
+        let mut issue = normalize::issue_from_json(&v, self.markup(), &map)?;
+        self.complete_worklogs(&mut issue).await;
+        Ok(issue)
     }
 
     async fn issue_updated(&self, key: &str) -> Result<DateTime<Utc>> {
@@ -539,6 +568,62 @@ impl JiraApi for Rest {
             .map(|_| ())
     }
 
+    async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {
+        let markup = self.markup();
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        loop {
+            let v = self
+                .http
+                .get_json(&format!(
+                    "{}/issue/{key}/worklog?startAt={start}&maxResults=100",
+                    self.api()
+                ))
+                .await?;
+            let (page, total) = normalize::worklogs_from(Some(&v), markup);
+            let n = page.len();
+            out.extend(page);
+            if n == 0 || out.len() >= total {
+                break;
+            }
+            start += n;
+        }
+        Ok(out)
+    }
+
+    async fn add_worklog(&self, key: &str, worklog: &WorklogInput) -> Result<RemoteWorklog> {
+        let v = self
+            .http
+            .post_json(
+                &format!("{}/issue/{key}/worklog", self.api()),
+                worklog.to_body(),
+            )
+            .await?;
+        one_worklog(&v, self.markup())
+    }
+
+    async fn update_worklog(
+        &self,
+        key: &str,
+        id: &str,
+        worklog: &WorklogInput,
+    ) -> Result<RemoteWorklog> {
+        let v = self
+            .http
+            .put_json(
+                &format!("{}/issue/{key}/worklog/{id}", self.api()),
+                worklog.to_body(),
+            )
+            .await?;
+        one_worklog(&v, self.markup())
+    }
+
+    async fn delete_worklog(&self, key: &str, id: &str) -> Result<()> {
+        self.http
+            .delete(&format!("{}/issue/{key}/worklog/{id}", self.api()))
+            .await
+    }
+
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment> {
         let v = self
             .http
@@ -649,6 +734,11 @@ fn one_comment(v: &Value, markup: Markup) -> Result<RemoteComment> {
         .into_iter()
         .next()
         .ok_or_else(|| JiredError::generic("the server returned an unreadable comment"))
+}
+
+fn one_worklog(v: &Value, markup: Markup) -> Result<RemoteWorklog> {
+    normalize::one_worklog(v, markup)
+        .ok_or_else(|| JiredError::generic("the server returned an unreadable worklog"))
 }
 
 #[cfg(test)]

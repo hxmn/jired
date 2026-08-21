@@ -183,6 +183,12 @@ pub struct RemoteIssue {
     pub description: RichText,
     pub fields: IssueFields,
     pub comments: Vec<RemoteComment>,
+    pub worklogs: Vec<RemoteWorklog>,
+    /// How many worklogs the server says the issue has.
+    ///
+    /// An issue payload carries only the first page of them, so this is what
+    /// says whether the list above is the whole story.
+    pub worklog_total: usize,
     pub attachments: Vec<RemoteAttachment>,
     /// The untouched server payload, kept so unmodelled data round-trips.
     pub raw: serde_json::Value,
@@ -210,6 +216,51 @@ pub struct RemoteComment {
     pub created: Option<DateTime<Utc>>,
     pub updated: Option<DateTime<Utc>>,
     pub body: RichText,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteWorklog {
+    pub id: String,
+    pub author: Option<UserRef>,
+    /// When the work started, which is what a worklog is dated by.
+    pub started: Option<DateTime<Utc>>,
+    pub created: Option<DateTime<Utc>>,
+    pub updated: Option<DateTime<Utc>>,
+    /// Jira's own rendering of the duration — `2h 30m`.
+    pub time_spent: String,
+    pub time_spent_seconds: u64,
+    pub comment: RichText,
+}
+
+/// A worklog on its way to the server.
+///
+/// `time_spent` goes out as the text it was written as: how long a day is is an
+/// instance setting, and sending seconds would silently answer that question.
+#[derive(Debug, Clone)]
+pub struct WorklogInput {
+    pub time_spent: String,
+    pub started: Option<DateTime<Utc>>,
+    pub comment: RichText,
+}
+
+impl WorklogInput {
+    /// The request body a worklog write sends, on either deployment.
+    pub fn to_body(&self) -> serde_json::Value {
+        let mut body = serde_json::json!({ "timeSpent": self.time_spent });
+        if let Some(started) = &self.started {
+            body["started"] = serde_json::json!(format_worklog_started(started));
+        }
+        if !self.comment.is_empty() {
+            body["comment"] = self.comment.to_field_value();
+        }
+        body
+    }
+}
+
+/// The timestamp format Jira's worklog endpoint insists on: milliseconds, and
+/// a numeric offset with no colon in it.
+pub fn format_worklog_started(dt: &DateTime<Utc>) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%S%.3f%z").to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,6 +368,12 @@ mod tests {
     fn date_only_values_parse_as_midnight_utc() {
         let d = parse_timestamp("2026-08-16").unwrap();
         assert_eq!(format_timestamp(&d), "2026-08-16T00:00:00Z");
+    }
+
+    #[test]
+    fn a_worklog_start_time_carries_milliseconds_and_a_bare_offset() {
+        let dt = parse_timestamp("2026-08-15T09:00:00Z").unwrap();
+        assert_eq!(format_worklog_started(&dt), "2026-08-15T09:00:00.000+0000");
     }
 
     #[test]

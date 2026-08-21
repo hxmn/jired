@@ -1040,6 +1040,13 @@ mod tests {
                 note: String::new(),
                 body: "Repro confirmed.".into(),
             }],
+            worklogs: vec![crate::doc::WorklogEntry {
+                id: crate::doc::WorklogId::Existing("w1".into()),
+                time_spent: "2h 30m".into(),
+                author: "Jane D".into(),
+                started: "2026-08-15T09:00:00Z".into(),
+                body: String::new(),
+            }],
             attachments: vec![],
             extra_sections: vec![],
         };
@@ -1061,6 +1068,8 @@ mod tests {
         assert_eq!(doc.frontmatter.epic.as_deref(), Some("PROJ-90"));
         assert_eq!(doc.frontmatter.custom.len(), 1);
         assert_eq!(doc.comments.len(), 1);
+        assert_eq!(doc.worklogs.len(), 1);
+        assert_eq!(doc.worklogs[0].time_spent, "2h 30m");
         assert_eq!(doc.frontmatter.jired.base_updated, "2026-08-16T12:03:00Z");
 
         // And loading it again sees exactly what was applied.

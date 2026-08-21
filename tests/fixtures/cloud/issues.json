@@ -190,7 +190,53 @@
         {
           "value": "Payments"
         }
-      ]
+      ],
+      "worklog": {
+        "startAt": 0,
+        "maxResults": 20,
+        "total": 2,
+        "worklogs": [
+          {
+            "id": "10500",
+            "author": {
+              "accountId": "5b1af9jane",
+              "displayName": "Jane D"
+            },
+            "started": "2026-08-15T09:00:00.000+0000",
+            "created": "2026-08-15T11:30:00.000+0000",
+            "updated": "2026-08-15T11:30:00.000+0000",
+            "timeSpent": "2h 30m",
+            "timeSpentSeconds": 9000,
+            "comment": {
+              "type": "doc",
+              "version": 1,
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Chased the redirect loop."
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "10501",
+            "author": {
+              "accountId": "5b10a2ilya",
+              "displayName": "Ilya A"
+            },
+            "started": "2026-08-16T08:00:00.000+0000",
+            "created": "2026-08-16T09:05:00.000+0000",
+            "updated": "2026-08-16T09:05:00.000+0000",
+            "timeSpent": "1h",
+            "timeSpentSeconds": 3600
+          }
+        ]
+      }
     }
   },
   {

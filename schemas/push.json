@@ -66,9 +66,13 @@
                     "update_fields",
                     "update_description",
                     "transition",
+                    "move_sprint",
                     "create_comment",
                     "update_comment",
                     "delete_comment",
+                    "create_worklog",
+                    "update_worklog",
+                    "delete_worklog",
                     "upload_attachment",
                     "rename_file"
                   ]

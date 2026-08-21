@@ -8,7 +8,7 @@ use crate::api::normalize::FieldMap;
 use crate::api::{Markup, RemoteIssue};
 use crate::cli::cmd::pull::{PullArgs, Strategy};
 use crate::cli::context::Context;
-use crate::doc::{ChecklistEntry, CommentBlock, CommentId, IssueDoc};
+use crate::doc::{ChecklistEntry, CommentBlock, CommentId, IssueDoc, WorklogEntry, WorklogId};
 use crate::error::{JiredError, Result};
 use crate::json::Out;
 use crate::sync::merge::{self, Decision};
@@ -281,7 +281,7 @@ pub fn run_scoped(
                     doc: remote_doc.doc,
                     description_storage: remote_doc.description_storage,
                     description_raw: remote_doc.description_raw,
-                    comment_raw: remote_doc.comment_raw,
+                    body_raw: remote_doc.body_raw,
                     previous: existing.clone(),
                     kind: if existing.is_some() {
                         ChangeKind::Updated
@@ -315,7 +315,7 @@ pub fn run_scoped(
                         doc: remote_doc.doc,
                         description_storage: remote_doc.description_storage,
                         description_raw: remote_doc.description_raw,
-                        comment_raw: remote_doc.comment_raw,
+                        body_raw: remote_doc.body_raw,
                         previous: Some(file.clone()),
                         kind: ChangeKind::Updated,
                         fields: change_names(&changes),
@@ -375,7 +375,7 @@ pub fn run_scoped(
                     doc: outcome.doc,
                     description_storage: remote_doc.description_storage,
                     description_raw: remote_doc.description_raw,
-                    comment_raw: remote_doc.comment_raw,
+                    body_raw: remote_doc.body_raw,
                     previous: Some(file.clone()),
                     kind: ChangeKind::Updated,
                     fields: outcome.merged_fields,
@@ -437,7 +437,7 @@ pub fn run_scoped(
         engine
             .state
             .replace_raw_blocks(&write.key, "description", &write.description_raw)?;
-        for (container, blocks) in &write.comment_raw {
+        for (container, blocks) in &write.body_raw {
             engine
                 .state
                 .replace_raw_blocks(&write.key, container, blocks)?;
@@ -556,7 +556,8 @@ struct PlannedWrite {
     base_doc: IssueDoc,
     description_storage: String,
     description_raw: Vec<crate::convert::ast::RawBlock>,
-    comment_raw: std::collections::BTreeMap<String, Vec<crate::convert::ast::RawBlock>>,
+    /// Lossy regions of the comment and worklog bodies, keyed by container.
+    body_raw: std::collections::BTreeMap<String, Vec<crate::convert::ast::RawBlock>>,
     previous: Option<String>,
     kind: ChangeKind,
     fields: Vec<String>,
@@ -643,6 +644,18 @@ fn field_changes(base: &IssueDoc, remote: &IssueDoc, names: &FieldMap) -> Vec<Fi
 
     if let Some(change) = comment_changes(base, remote) {
         out.push(change);
+    }
+
+    if base.worklogs != remote.worklogs {
+        let booked = |d: &IssueDoc| d.worklogs.len();
+        out.push(FieldChange {
+            field: "worklogs".into(),
+            label: None,
+            from: Some(format!("{} entries", booked(base))),
+            to: Some(format!("{} entries", booked(remote))),
+            added: None,
+            removed: None,
+        });
     }
 
     if base.children != remote.children {
@@ -852,6 +865,13 @@ pub fn merge_docs(
         out.comments.push(c.clone());
     }
 
+    out.worklogs = merge_worklogs(base, remote, working, strategy, &mut conflicts, &mut merged);
+
+    // Nor unbooked local time.
+    for w in working.new_worklogs() {
+        out.worklogs.push(w.clone());
+    }
+
     MergeOutcome {
         doc: out,
         conflicts,
@@ -894,6 +914,52 @@ fn merge_comments(
     out
 }
 
+/// The worklog half of the merge.
+///
+/// An entry is three editable things at once — how long, when, and the note —
+/// so they are compared together: a duration corrected on one side and a note
+/// added on the other is still one person's edit of one entry.
+fn merge_worklogs(
+    base: &IssueDoc,
+    remote: &IssueDoc,
+    working: &IssueDoc,
+    strategy: Strategy,
+    conflicts: &mut Vec<String>,
+    merged: &mut Vec<String>,
+) -> Vec<WorklogEntry> {
+    fn editable(w: &WorklogEntry) -> (&str, &str, &str) {
+        (&w.time_spent, &w.started, &w.body)
+    }
+
+    let mut out = Vec::new();
+    for r in &remote.worklogs {
+        let WorklogId::Existing(id) = &r.id else {
+            continue;
+        };
+        match (base.worklog(id), working.worklog(id)) {
+            (Some(b), Some(w)) => {
+                let d = merge::decide(&editable(b), &editable(r), &editable(w));
+                if d.is_conflict() {
+                    conflicts.push(format!("worklog:{id}"));
+                }
+                if d != Decision::Unchanged {
+                    merged.push(format!("worklog:{id}"));
+                }
+                let mut kept = r.clone();
+                let (time_spent, started, body) =
+                    *merge::apply(d, &editable(r), &editable(w), strategy);
+                kept.time_spent = time_spent.to_string();
+                kept.started = started.to_string();
+                kept.body = body.to_string();
+                out.push(kept);
+            }
+            // Present remotely but not locally: somebody else booked time.
+            _ => out.push(r.clone()),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,6 +981,7 @@ mod tests {
             checklist: vec![],
             children: vec![],
             comments: vec![],
+            worklogs: vec![],
             attachments: vec![],
             extra_sections: vec![],
         }
@@ -1061,6 +1128,67 @@ mod tests {
         let out = merge_docs(&base, &remote, &working, Strategy::Abort, "PROJ-1");
         assert!(out.conflicts.is_empty());
         assert_eq!(out.doc.comments.len(), 1);
+    }
+
+    fn worklog(id: &str, time_spent: &str, body: &str) -> WorklogEntry {
+        WorklogEntry {
+            id: WorklogId::Existing(id.into()),
+            time_spent: time_spent.into(),
+            author: "A".into(),
+            started: "2026-08-15T09:00:00Z".into(),
+            body: body.into(),
+        }
+    }
+
+    #[test]
+    fn unbooked_local_time_survives_a_pull() {
+        let base = doc("s", "b", &[]);
+        let remote = base.clone();
+        let mut working = base.clone();
+        working.worklogs.push(WorklogEntry {
+            id: WorklogId::New,
+            time_spent: "45m".into(),
+            author: String::new(),
+            started: String::new(),
+            body: "not sent yet".into(),
+        });
+
+        let out = merge_docs(&base, &remote, &working, Strategy::Abort, "PROJ-1");
+        assert_eq!(out.doc.worklogs.len(), 1);
+        assert_eq!(out.doc.worklogs[0].id, WorklogId::New);
+        assert_eq!(out.doc.worklogs[0].time_spent, "45m");
+    }
+
+    /// A duration corrected on one side and a note added on the other are one
+    /// person's edit of one entry, so they are compared together.
+    #[test]
+    fn a_worklog_edited_on_both_sides_conflicts_across_all_of_its_parts() {
+        let mut base = doc("s", "b", &[]);
+        base.worklogs.push(worklog("w1", "1h", "first pass"));
+
+        let mut remote = base.clone();
+        remote.worklogs[0].time_spent = "2h".into();
+        let mut working = base.clone();
+        working.worklogs[0].body = "first pass, plus the retry".into();
+
+        let out = merge_docs(&base, &remote, &working, Strategy::Abort, "PROJ-1");
+        assert_eq!(out.conflicts, vec!["worklog:w1"]);
+
+        // With only one side moving there is nothing to argue about.
+        let out = merge_docs(&base, &remote, &base, Strategy::Abort, "PROJ-1");
+        assert!(out.conflicts.is_empty());
+        assert_eq!(out.doc.worklogs[0].time_spent, "2h");
+    }
+
+    #[test]
+    fn time_booked_by_someone_else_arrives_without_a_conflict() {
+        let base = doc("s", "b", &[]);
+        let mut remote = base.clone();
+        remote.worklogs.push(worklog("w9", "30m", "triage"));
+
+        let out = merge_docs(&base, &remote, &base, Strategy::Abort, "PROJ-1");
+        assert!(out.conflicts.is_empty());
+        assert_eq!(out.doc.worklogs.len(), 1);
     }
 
     #[test]

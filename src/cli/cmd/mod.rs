@@ -15,6 +15,7 @@ pub mod fetch;
 pub mod init;
 pub mod list;
 pub mod log;
+pub mod logwork;
 pub mod open;
 pub mod prompt;
 pub mod pull;

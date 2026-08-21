@@ -296,6 +296,7 @@ fn blank() -> IssueDoc {
         checklist: Vec::new(),
         children: Vec::new(),
         comments: Vec::new(),
+        worklogs: Vec::new(),
         attachments: Vec::new(),
         extra_sections: Vec::new(),
     }
