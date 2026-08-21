@@ -133,7 +133,13 @@ fn build_frontmatter(issue: &RemoteIssue, ctx: &RenderContext<'_>, lossy: bool) 
             issue.key
         ),
         story_points: f.story_points,
-        custom: f.custom.clone().into_iter().collect(),
+        // The file shows the editable form; `api::custom` puts the Jira
+        // wrapper back when a change is pushed.
+        custom: f
+            .custom
+            .iter()
+            .map(|(id, v)| (id.clone(), crate::api::custom::simplify(v)))
+            .collect(),
         jired: SyncMeta {
             base_updated: crate::api::model::format_timestamp(&issue.updated),
             base_version: None,

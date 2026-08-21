@@ -11,7 +11,6 @@ use crate::cli::context::Context;
 use crate::doc::{CommentBlock, CommentId, IssueDoc};
 use crate::error::{JiredError, Result};
 use crate::json::Out;
-use crate::store::state::IssueRow;
 use crate::sync::merge::{self, Decision};
 use crate::sync::render::{render_issue, RenderContext};
 use crate::sync::{attachments, fetch, Engine};
@@ -36,7 +35,71 @@ pub struct PullReport {
 pub struct IssueChange {
     pub key: String,
     pub file: Option<String>,
+    /// Names of what changed, at merge granularity — `custom` covers every
+    /// custom field, `description` the whole body.
     pub fields: Vec<String>,
+    /// What the pull brought in, field by field, for showing a person.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<FieldChange>,
+}
+
+/// One field's before and after, in the form a summary line wants.
+///
+/// Body-like fields report line counts instead of values: printing a paragraph
+/// twice is not a summary, and `jired diff` already exists for the full text.
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldChange {
+    /// Stable identifier: `status`, `description`, `custom.customfield_10205`.
+    pub field: String,
+    /// Human name of a custom field, when the instance told us one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<usize>,
+}
+
+impl FieldChange {
+    /// The right-hand side of a summary line.
+    pub fn describe(&self) -> String {
+        if self.added.is_some() || self.removed.is_some() {
+            let mut parts = Vec::new();
+            if let Some(n) = self.added.filter(|n| *n > 0) {
+                parts.push(format!("+{n}"));
+            }
+            if let Some(n) = self.removed.filter(|n| *n > 0) {
+                parts.push(format!("-{n}"));
+            }
+            if let Some(extra) = &self.to {
+                parts.push(extra.clone());
+            }
+            return parts.join(" ");
+        }
+        const UNSET: &str = "—";
+        format!(
+            "{} → {}",
+            self.from.as_deref().unwrap_or(UNSET),
+            self.to.as_deref().unwrap_or(UNSET)
+        )
+    }
+
+    /// What to print in the left-hand column.
+    ///
+    /// A custom field goes by its name where the instance gave us one; failing
+    /// that by its number, because `customfield_` in front of every id is six
+    /// syllables of nothing.
+    pub fn title(&self) -> String {
+        match (&self.label, self.field.strip_prefix("custom.")) {
+            (Some(name), _) => format!("custom.{name}"),
+            (None, Some(id)) => format!("custom.{}", id.trim_start_matches("customfield_")),
+            (None, None) => self.field.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,7 +122,18 @@ impl PullReport {
             out.say(format!("  new       {}", c.key));
         }
         for c in &self.updated {
-            out.say(format!("  updated   {}  [{}]", c.key, c.fields.join(", ")));
+            if c.changes.is_empty() {
+                out.say(format!("  updated   {}  [{}]", c.key, c.fields.join(", ")));
+                continue;
+            }
+            out.say(format!("  updated   {}", c.key));
+            for change in &c.changes {
+                out.say(format!(
+                    "              {:<18} {}",
+                    change.title(),
+                    change.describe()
+                ));
+            }
         }
         for r in &self.renamed {
             out.say(format!("  renamed   {}  {} → {}", r.key, r.from, r.to));
@@ -143,6 +217,7 @@ pub fn run_scoped(
                 key: row.key.clone(),
                 file: existing,
                 fields: vec![],
+                changes: vec![],
             });
             continue;
         }
@@ -170,6 +245,7 @@ pub fn run_scoped(
                         ChangeKind::Created
                     },
                     fields: vec![],
+                    changes: vec![],
                 });
             }
             (Some(base), Some(file)) => {
@@ -183,7 +259,12 @@ pub fn run_scoped(
                     continue;
                 }
                 if !dirty {
-                    let changed = changed_fields(&row, markup, &fields, &base_url)?;
+                    let base_doc = render_issue(
+                        &parse_snapshot(&base.raw, markup, &fields, &row.key)?,
+                        &render_ctx,
+                    )?
+                    .doc;
+                    let changes = field_changes(&base_doc, &remote_doc.doc, &fields);
                     planned.push(PlannedWrite {
                         key: row.key.clone(),
                         base_doc: remote_doc.doc.clone(),
@@ -193,7 +274,8 @@ pub fn run_scoped(
                         comment_raw: remote_doc.comment_raw,
                         previous: Some(file.clone()),
                         kind: ChangeKind::Updated,
-                        fields: changed,
+                        fields: change_names(&changes),
+                        changes,
                     });
                     continue;
                 }
@@ -242,6 +324,7 @@ pub fn run_scoped(
                     });
                 }
 
+                let changes = field_changes(&base_doc, &remote_doc.doc, &fields);
                 planned.push(PlannedWrite {
                     key: row.key.clone(),
                     base_doc: remote_doc.doc,
@@ -252,6 +335,7 @@ pub fn run_scoped(
                     previous: Some(file.clone()),
                     kind: ChangeKind::Updated,
                     fields: outcome.merged_fields,
+                    changes,
                 });
             }
         }
@@ -319,6 +403,7 @@ pub fn run_scoped(
             key: write.key.clone(),
             file: Some(outcome.relative),
             fields: write.fields,
+            changes: write.changes,
         };
         match write.kind {
             ChangeKind::Created => report.created.push(change),
@@ -385,6 +470,7 @@ struct PlannedWrite {
     previous: Option<String>,
     kind: ChangeKind,
     fields: Vec<String>,
+    changes: Vec<FieldChange>,
 }
 
 fn parse_snapshot(
@@ -402,37 +488,172 @@ fn parse_snapshot(
     })
 }
 
-/// Field names that differ between base and remote, for the change summary.
-fn changed_fields(
-    row: &IssueRow,
-    markup: Markup,
-    fields: &FieldMap,
-    base_url: &str,
-) -> Result<Vec<String>> {
-    let (Some(base), Some(remote)) = (&row.base, &row.remote) else {
-        return Ok(vec![]);
-    };
-    let ctx = RenderContext { markup, base_url };
-    let b = render_issue(&parse_snapshot(&base.raw, markup, fields, &row.key)?, &ctx)?.doc;
-    let r = render_issue(
-        &parse_snapshot(&remote.raw, markup, fields, &row.key)?,
-        &ctx,
-    )?
-    .doc;
+/// What the server changed between the two snapshots, field by field.
+///
+/// This is deliberately base→remote rather than "what the merge did": the
+/// question a pull answers is what arrived from Jira, and after a merge that is
+/// still the interesting half.
+fn field_changes(base: &IssueDoc, remote: &IssueDoc, names: &FieldMap) -> Vec<FieldChange> {
+    let mut out = Vec::new();
 
-    let mut changed = Vec::new();
     for name in crate::doc::frontmatter::EDITABLE {
-        if b.frontmatter.field(name) != r.frontmatter.field(name) {
-            changed.push((*name).to_string());
+        if *name == "custom" {
+            continue;
+        }
+        let (b, r) = (base.frontmatter.field(name), remote.frontmatter.field(name));
+        if b != r {
+            out.push(FieldChange {
+                field: (*name).to_string(),
+                label: None,
+                from: b.as_ref().and_then(show),
+                to: r.as_ref().and_then(show),
+                added: None,
+                removed: None,
+            });
         }
     }
-    if b.description != r.description {
-        changed.push("description".into());
+
+    // Custom fields are listed one by one: "custom changed" tells nobody
+    // anything, and their ids are unreadable without the instance's own name.
+    let mut ids: Vec<&String> = base
+        .frontmatter
+        .custom
+        .keys()
+        .chain(remote.frontmatter.custom.keys())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    for id in ids {
+        let b = base.frontmatter.custom.get(id);
+        let r = remote.frontmatter.custom.get(id);
+        if b == r {
+            continue;
+        }
+        out.push(FieldChange {
+            field: format!("custom.{id}"),
+            label: names.names.get(id).cloned(),
+            from: b.and_then(show),
+            to: r.and_then(show),
+            added: None,
+            removed: None,
+        });
     }
-    if b.comments.len() != r.comments.len() {
-        changed.push("comments".into());
+
+    if base.description != remote.description {
+        let (added, removed) = line_counts(&base.description, &remote.description);
+        out.push(FieldChange {
+            field: "description".into(),
+            label: None,
+            from: None,
+            to: None,
+            added: Some(added),
+            removed: Some(removed),
+        });
     }
-    Ok(changed)
+
+    if let Some(change) = comment_changes(base, remote) {
+        out.push(change);
+    }
+
+    if base.checklist != remote.checklist {
+        let done = |d: &IssueDoc| d.checklist.iter().filter(|i| i.checked).count();
+        out.push(FieldChange {
+            field: "checklist".into(),
+            label: None,
+            from: Some(format!("{}/{} done", done(base), base.checklist.len())),
+            to: Some(format!("{}/{} done", done(remote), remote.checklist.len())),
+            added: None,
+            removed: None,
+        });
+    }
+
+    out
+}
+
+/// New, removed and edited comments as one line.
+fn comment_changes(base: &IssueDoc, remote: &IssueDoc) -> Option<FieldChange> {
+    fn ids(d: &IssueDoc) -> Vec<&str> {
+        d.comments
+            .iter()
+            .filter_map(|c| match &c.id {
+                CommentId::Existing(id) => Some(id.as_str()),
+                CommentId::New => None,
+            })
+            .collect()
+    }
+    let (before, after) = (ids(base), ids(remote));
+    let added = after.iter().filter(|id| !before.contains(id)).count();
+    let removed = before.iter().filter(|id| !after.contains(id)).count();
+    let edited = remote
+        .comments
+        .iter()
+        .filter(|c| match &c.id {
+            CommentId::Existing(id) => base.comment(id).is_some_and(|b| b.body != c.body),
+            CommentId::New => false,
+        })
+        .count();
+
+    (added + removed + edited > 0).then(|| FieldChange {
+        field: "comments".into(),
+        label: None,
+        from: None,
+        to: (edited > 0).then(|| format!("{edited} edited")),
+        added: Some(added),
+        removed: Some(removed),
+    })
+}
+
+fn line_counts(from: &str, to: &str) -> (usize, usize) {
+    let diff = similar::TextDiff::from_lines(from, to);
+    let mut added = 0;
+    let mut removed = 0;
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            similar::ChangeTag::Insert => added += 1,
+            similar::ChangeTag::Delete => removed += 1,
+            similar::ChangeTag::Equal => {}
+        }
+    }
+    (added, removed)
+}
+
+/// Longest a value may be on a summary line before it is cut short.
+const VALUE_WIDTH: usize = 32;
+
+/// A field value as one short line, or `None` when there is nothing there.
+fn show(v: &serde_json::Value) -> Option<String> {
+    let text = match v {
+        serde_json::Value::Null => return None,
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Array(items) if items.is_empty() => return None,
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(|i| show(i).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(", "),
+        serde_json::Value::Object(map) if map.is_empty() => return None,
+        other => other.to_string(),
+    };
+    let text = text.replace('\n', " ");
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(crate::project::naming::truncate(text.trim(), VALUE_WIDTH))
+}
+
+/// The merge-granularity names, derived from the per-field list.
+fn change_names(changes: &[FieldChange]) -> Vec<String> {
+    let mut names: Vec<String> = changes
+        .iter()
+        .map(|c| match c.field.split_once('.') {
+            Some((head, _)) => head.to_string(),
+            None => c.field.clone(),
+        })
+        .collect();
+    names.dedup();
+    names
 }
 
 pub struct MergeOutcome {

@@ -3,37 +3,93 @@
   "$id": "jired/pull/1",
   "title": "jired pull result",
   "type": "object",
-  "required": ["schema", "created", "updated", "deleted", "conflicts", "unchanged"],
+  "required": [
+    "schema",
+    "created",
+    "updated",
+    "deleted",
+    "conflicts",
+    "unchanged"
+  ],
   "properties": {
-    "schema": { "const": "jired/pull/1" },
-    "strategy": { "type": "string", "enum": ["abort", "merge", "ours", "theirs"] },
-    "fetched": { "type": ["object", "null"] },
-    "created": { "$ref": "#/$defs/changeList" },
-    "updated": { "$ref": "#/$defs/changeList" },
-    "deleted": { "$ref": "#/$defs/changeList" },
+    "schema": {
+      "const": "jired/pull/1"
+    },
+    "strategy": {
+      "type": "string",
+      "enum": [
+        "abort",
+        "merge",
+        "ours",
+        "theirs"
+      ]
+    },
+    "fetched": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "created": {
+      "$ref": "#/$defs/changeList"
+    },
+    "updated": {
+      "$ref": "#/$defs/changeList"
+    },
+    "deleted": {
+      "$ref": "#/$defs/changeList"
+    },
     "renamed": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key", "from", "to"],
+        "required": [
+          "key",
+          "from",
+          "to"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "from": { "type": "string" },
-          "to": { "type": "string" }
+          "key": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
         }
       }
     },
-    "unchanged": { "type": "integer", "minimum": 0 },
+    "unchanged": {
+      "type": "integer",
+      "minimum": 0
+    },
     "conflicts": {
       "type": "array",
       "description": "Non-empty means nothing was written unless strategy is merge",
       "items": {
         "type": "object",
-        "required": ["key", "fields"],
+        "required": [
+          "key",
+          "fields"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "file": { "type": ["string", "null"] },
-          "fields": { "type": "array", "items": { "type": "string" } }
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     }
@@ -43,11 +99,63 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["key"],
+        "required": [
+          "key"
+        ],
         "properties": {
-          "key": { "type": "string" },
-          "file": { "type": ["string", "null"] },
-          "fields": { "type": "array", "items": { "type": "string" } }
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "changes": {
+            "type": "array",
+            "description": "What the pull brought in for this issue, field by field",
+            "items": {
+              "type": "object",
+              "required": [
+                "field"
+              ],
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "status, summary, description, comments, checklist, or custom.<id>"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Display name of a custom field"
+                },
+                "from": {
+                  "type": "string",
+                  "description": "Previous value, shortened for display"
+                },
+                "to": {
+                  "type": "string",
+                  "description": "New value, shortened for display"
+                },
+                "added": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Lines or comments added"
+                },
+                "removed": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Lines or comments removed"
+                }
+              }
+            }
+          }
         }
       }
     }

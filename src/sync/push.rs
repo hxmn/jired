@@ -162,6 +162,9 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     let client = engine.client(ctx)?;
     let markup = engine.markup();
     let fields = engine.field_map()?;
+    // Custom fields need their schema, not just their name: it is what says
+    // whether a value goes out bare, wrapped in `{"value": …}`, or as a list.
+    let field_meta = engine.state.field_meta_by_id()?;
     let base_url = engine.base_url().to_string();
     let files = engine.projector.scan()?;
     let max_upload = ctx
@@ -333,6 +336,8 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         let ops = plan(
             &base_doc,
             &working,
+            &base.raw,
+            &field_meta,
             markup,
             &raw,
             &engine,
@@ -449,6 +454,16 @@ fn create_issue(
     if let Some(priority) = &doc.frontmatter.priority {
         fields.insert("priority".into(), json!({ "name": priority }));
     }
+    // A locally created issue may already carry custom fields; there is no
+    // previous value to learn the shape from, so the schema decides.
+    let field_meta = engine.state.field_meta_by_id()?;
+    for (id, value) in &doc.frontmatter.custom {
+        let payload =
+            crate::api::custom::expand(value, None, field_meta.get(id), engine.account.deployment);
+        if !payload.is_null() {
+            fields.insert(id.clone(), payload);
+        }
+    }
 
     let payload = Value::Object(fields);
     let request = json!({"method": "POST", "path": "/issue", "body": {"fields": payload}});
@@ -522,11 +537,51 @@ fn create_issue(
     })
 }
 
+/// Plan the custom-field half of an update.
+///
+/// Comparison is done on the simplified form of both sides, so a file written
+/// before jired started collapsing these values does not read as an edit; and
+/// what goes out is rebuilt from the shape the server last sent.
+fn plan_custom_fields(
+    bf: &crate::doc::Frontmatter,
+    wf: &crate::doc::Frontmatter,
+    base_raw: &Value,
+    field_meta: &std::collections::BTreeMap<String, crate::api::FieldMeta>,
+    engine: &Engine,
+    fields: &mut serde_json::Map<String, Value>,
+) {
+    let deployment = engine.account.deployment;
+    let raw_of = |id: &str| base_raw.get("fields").and_then(|f| f.get(id));
+
+    for (id, value) in &wf.custom {
+        let before = bf.custom.get(id).map(crate::api::custom::simplify);
+        if before.as_ref() == Some(&crate::api::custom::simplify(value)) {
+            continue;
+        }
+        fields.insert(
+            id.clone(),
+            crate::api::custom::expand(value, raw_of(id), field_meta.get(id), deployment),
+        );
+    }
+
+    // Deleting the entry is how a file says "clear this field"; leaving the
+    // server value in place would make the file lie about the issue.
+    for id in bf.custom.keys() {
+        if !wf.custom.contains_key(id) {
+            fields.insert(id.clone(), Value::Null);
+        }
+    }
+}
+
 /// Build the ordered operation list for one issue (decision D23).
 #[allow(clippy::too_many_arguments)]
 fn plan(
     base: &IssueDoc,
     working: &IssueDoc,
+    // The snapshot the base document was rendered from: the only place the
+    // original shape of each custom field still exists.
+    base_raw: &Value,
+    field_meta: &std::collections::BTreeMap<String, crate::api::FieldMeta>,
     markup: Markup,
     raw: &[crate::convert::ast::RawBlock],
     engine: &Engine,
@@ -610,11 +665,7 @@ fn plan(
                 .unwrap_or(Value::Null),
         );
     }
-    for (id, value) in &wf.custom {
-        if bf.custom.get(id) != Some(value) {
-            fields.insert(id.clone(), value.clone());
-        }
-    }
+    plan_custom_fields(bf, wf, base_raw, field_meta, engine, &mut fields);
 
     if !fields.is_empty() {
         let payload = Value::Object(fields);

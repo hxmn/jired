@@ -76,9 +76,33 @@ JSON: `{"schema":"jired/fetch/1","fetched":123,"changed":17,"deleted":2}`.
 Fetch (unless `--no-fetch`) + three-way merge ([sync-algorithm.md](sync-algorithm.md)).
 Default: abort-on-conflict — exit 5, list conflicting files/fields, write nothing.
 `merge` writes git-style markers and records conflicts. `--force` ≡ theirs everywhere.
-Prints change summary (added/modified/deleted issues, changed fields).
-JSON: `{"schema":"jired/pull/1","updated":[…],"created":[…],"deleted":[…],"conflicts":[{"key":"PROJ-1","fields":["description"]}]}`.
+Prints a change summary: one line per issue, then one line per field with its
+before and after — body text and comments as counts rather than quoted content,
+custom fields named individually (by the instance's own field name where it has
+one). `jired diff` remains the way to see the full text.
+
+```
+  updated   PROJ-142
+              status             In Progress → In Review
+              labels             auth, backend → auth, backend, sso
+              custom.Team        Platform → Engineering
+              description        +3 -1
+              comments           +1
+```
+
+JSON: `{"schema":"jired/pull/1","updated":[{"key":"PROJ-1","fields":["status"],
+"changes":[{"field":"status","from":"In Progress","to":"In Review"}]}],…}`.
+`fields` stays at merge granularity (`custom` covers every custom field);
+`changes` is the per-field detail.
 Agent example: `jired pull --no-input --json || test $? -eq 5`
+
+Custom fields are written into the file in their editable form — a select list
+as `Platform`, a multi-select as a YAML list, a user as `@[Name](id)` — and the
+Jira wrapper (`{"value": …}`, `{"name": …}`, `{"accountId": …}`) is rebuilt on
+push from the shape the server last sent, falling back to the field's schema.
+Values that do not collapse unambiguously (cascading selects, rich text, plugin
+structures) stay in their raw shape and are sent back verbatim. Deleting an entry
+under `custom:` clears that field.
 
 ### `jired push`
 `jired push [ISSUE…] [--dry-run] [--force] [--allow-lossy] [--allow-comment-delete] [--resume]`

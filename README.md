@@ -17,7 +17,7 @@ mkdir my-sprint && cd my-sprint
 jired init               # asks for the URL, who you are, and which project
 
 jired status            # what's dirty, behind, or conflicted
-jired pull              # write issue files
+jired pull              # write issue files, and say what changed
 $EDITOR "PROJ-0142. Fix login flow.md"
 jired diff              # confirm only the intended changes
 jired push --dry-run    # exact API calls, nothing sent

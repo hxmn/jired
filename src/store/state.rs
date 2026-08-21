@@ -12,6 +12,7 @@ use crate::store::{migrate, now_rfc3339, open_db, Migration};
 use crate::workspace::Workspace;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::BTreeMap;
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -728,9 +729,17 @@ impl StateStore {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM field_meta", [])?;
         for f in fields {
+            // The column has always been called schema_json; it now holds the
+            // whole schema rather than only its type. Older rows hold the bare
+            // type string and are read back as such.
+            let schema = match (&f.schema_type, &f.items) {
+                (None, _) => None,
+                (Some(t), None) => Some(serde_json::json!({ "type": t }).to_string()),
+                (Some(t), Some(i)) => Some(serde_json::json!({"type": t, "items": i}).to_string()),
+            };
             tx.execute(
                 "INSERT INTO field_meta (field_id, name, schema_json) VALUES (?1, ?2, ?3)",
-                params![f.id, f.name, f.schema_type],
+                params![f.id, f.name, schema],
             )?;
         }
         tx.commit()?;
@@ -743,14 +752,26 @@ impl StateStore {
             .prepare("SELECT field_id, name, schema_json FROM field_meta ORDER BY field_id")?;
         let rows = stmt.query_map([], |r| {
             let id: String = r.get(0)?;
+            let (schema_type, items) = parse_schema(r.get::<_, Option<String>>(2)?);
             Ok(crate::api::FieldMeta {
                 custom: id.starts_with("customfield_"),
                 id,
                 name: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                schema_type: r.get(2)?,
+                schema_type,
+                items,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Cached field definitions by id, for the code that has to know a field's
+    /// shape rather than its name.
+    pub fn field_meta_by_id(&self) -> Result<BTreeMap<String, crate::api::FieldMeta>> {
+        Ok(self
+            .field_meta()?
+            .into_iter()
+            .map(|f| (f.id.clone(), f))
+            .collect())
     }
 
     pub fn field_map(&self) -> Result<crate::api::normalize::FieldMap> {
@@ -955,6 +976,23 @@ fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
 }
 
 /// Content hash used for change detection (decision D18).
+/// Read back what `save_field_meta` wrote, tolerating the bare type string that
+/// databases written by earlier versions hold.
+fn parse_schema(stored: Option<String>) -> (Option<String>, Option<String>) {
+    let Some(text) = stored else {
+        return (None, None);
+    };
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(serde_json::Value::Object(map)) => (
+            map.get("type").and_then(|v| v.as_str()).map(str::to_string),
+            map.get("items")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        ),
+        _ => (Some(text), None),
+    }
+}
+
 pub fn content_hash(text: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();

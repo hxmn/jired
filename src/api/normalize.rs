@@ -362,18 +362,21 @@ mod tests {
                 name: "Story Points".into(),
                 custom: true,
                 schema_type: Some("number".into()),
+                items: None,
             },
             FieldMeta {
                 id: "customfield_10014".into(),
                 name: "Epic Link".into(),
                 custom: true,
                 schema_type: Some("any".into()),
+                items: None,
             },
             FieldMeta {
                 id: "customfield_10020".into(),
                 name: "Sprint".into(),
                 custom: true,
                 schema_type: Some("array".into()),
+                items: Some("json".into()),
             },
         ])
     }

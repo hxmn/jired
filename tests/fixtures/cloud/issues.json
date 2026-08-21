@@ -4,13 +4,33 @@
     "key": "PROJ-142",
     "fields": {
       "summary": "Fix login flow",
-      "issuetype": { "name": "Story" },
-      "status": { "id": "3", "name": "In Progress" },
-      "priority": { "name": "High" },
-      "labels": ["auth", "backend"],
-      "components": [{ "name": "web" }],
-      "assignee": { "accountId": "5b10a2ilya", "displayName": "Ilya A" },
-      "reporter": { "accountId": "5b1af9jane", "displayName": "Jane D" },
+      "issuetype": {
+        "name": "Story"
+      },
+      "status": {
+        "id": "3",
+        "name": "In Progress"
+      },
+      "priority": {
+        "name": "High"
+      },
+      "labels": [
+        "auth",
+        "backend"
+      ],
+      "components": [
+        {
+          "name": "web"
+        }
+      ],
+      "assignee": {
+        "accountId": "5b10a2ilya",
+        "displayName": "Ilya A"
+      },
+      "reporter": {
+        "accountId": "5b1af9jane",
+        "displayName": "Jane D"
+      },
       "created": "2026-08-01T09:12:00.000+0000",
       "updated": "2026-08-16T12:03:00.000+0000",
       "description": {
@@ -20,37 +40,83 @@
           {
             "type": "paragraph",
             "content": [
-              { "type": "text", "text": "Login fails when SSO is enabled. See " },
-              { "type": "text", "text": "PROJ-99", "marks": [{ "type": "link", "attrs": { "href": "https://fixture.invalid/browse/PROJ-99" } }] },
-              { "type": "text", "text": " for background." }
+              {
+                "type": "text",
+                "text": "Login fails when SSO is enabled. See "
+              },
+              {
+                "type": "text",
+                "text": "PROJ-99",
+                "marks": [
+                  {
+                    "type": "link",
+                    "attrs": {
+                      "href": "https://fixture.invalid/browse/PROJ-99"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": " for background."
+              }
             ]
           },
           {
             "type": "panel",
-            "attrs": { "panelType": "warning" },
+            "attrs": {
+              "panelType": "warning"
+            },
             "content": [
               {
                 "type": "paragraph",
-                "content": [{ "type": "text", "text": "Do not deploy before the cert rotation." }]
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Do not deploy before the cert rotation."
+                  }
+                ]
               }
             ]
           },
           {
             "type": "paragraph",
-            "content": [{ "type": "text", "text": "Steps to reproduce are below." }]
+            "content": [
+              {
+                "type": "text",
+                "text": "Steps to reproduce are below."
+              }
+            ]
           }
         ]
       },
-      "fixVersions": [{ "name": "2.4.0" }],
+      "fixVersions": [
+        {
+          "name": "2.4.0"
+        }
+      ],
       "versions": [],
       "customfield_10016": 5,
       "customfield_10014": "PROJ-90",
-      "customfield_10020": [{ "id": 42, "name": "Sprint 42", "state": "active" }],
-      "customfield_10456": { "value": "Platform" },
+      "customfield_10020": [
+        {
+          "id": 42,
+          "name": "Sprint 42",
+          "state": "active"
+        }
+      ],
+      "customfield_10456": {
+        "value": "Platform"
+      },
       "issuelinks": [
         {
-          "type": { "outward": "blocks", "inward": "is blocked by" },
-          "outwardIssue": { "key": "PROJ-150" }
+          "type": {
+            "outward": "blocks",
+            "inward": "is blocked by"
+          },
+          "outwardIssue": {
+            "key": "PROJ-150"
+          }
         }
       ],
       "subtasks": [
@@ -58,14 +124,24 @@
           "key": "PROJ-143",
           "fields": {
             "summary": "Add integration test",
-            "status": { "name": "To Do", "statusCategory": { "key": "new" } }
+            "status": {
+              "name": "To Do",
+              "statusCategory": {
+                "key": "new"
+              }
+            }
           }
         },
         {
           "key": "PROJ-144",
           "fields": {
             "summary": "Update runbook",
-            "status": { "name": "Done", "statusCategory": { "key": "done" } }
+            "status": {
+              "name": "Done",
+              "statusCategory": {
+                "key": "done"
+              }
+            }
           }
         }
       ],
@@ -73,7 +149,10 @@
         "comments": [
           {
             "id": "10812",
-            "author": { "accountId": "5b1af9jane", "displayName": "Jane D" },
+            "author": {
+              "accountId": "5b1af9jane",
+              "displayName": "Jane D"
+            },
             "created": "2026-08-15T10:32:00.000+0000",
             "updated": "2026-08-15T10:32:00.000+0000",
             "body": {
@@ -82,7 +161,12 @@
               "content": [
                 {
                   "type": "paragraph",
-                  "content": [{ "type": "text", "text": "Repro confirmed on staging." }]
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Repro confirmed on staging."
+                    }
+                  ]
                 }
               ]
             }
@@ -96,8 +180,15 @@
           "size": 2200000,
           "mimeType": "application/json",
           "created": "2026-08-15T10:00:00.000+0000",
-          "author": { "displayName": "Jane D" },
+          "author": {
+            "displayName": "Jane D"
+          },
           "content": "https://fixture.invalid/secure/attachment/5001/login-trace.har"
+        }
+      ],
+      "customfield_10205": [
+        {
+          "value": "Payments"
         }
       ]
     }
@@ -107,9 +198,16 @@
     "key": "PROJ-143",
     "fields": {
       "summary": "Add integration test",
-      "issuetype": { "name": "Sub-task" },
-      "status": { "id": "1", "name": "To Do" },
-      "priority": { "name": "Medium" },
+      "issuetype": {
+        "name": "Sub-task"
+      },
+      "status": {
+        "id": "1",
+        "name": "To Do"
+      },
+      "priority": {
+        "name": "Medium"
+      },
       "labels": [],
       "components": [],
       "created": "2026-08-02T09:00:00.000+0000",
@@ -118,12 +216,24 @@
         "type": "doc",
         "version": 1,
         "content": [
-          { "type": "paragraph", "content": [{ "type": "text", "text": "Cover the SAML tenant." }] }
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Cover the SAML tenant."
+              }
+            ]
+          }
         ]
       },
-      "parent": { "key": "PROJ-142" },
+      "parent": {
+        "key": "PROJ-142"
+      },
       "subtasks": [],
-      "comment": { "comments": [] },
+      "comment": {
+        "comments": []
+      },
       "attachment": []
     }
   },
@@ -132,10 +242,19 @@
     "key": "PROJ-150",
     "fields": {
       "summary": "Rotate IdP certificate",
-      "issuetype": { "name": "Task" },
-      "status": { "id": "1", "name": "To Do" },
-      "priority": { "name": "Highest" },
-      "labels": ["ops"],
+      "issuetype": {
+        "name": "Task"
+      },
+      "status": {
+        "id": "1",
+        "name": "To Do"
+      },
+      "priority": {
+        "name": "Highest"
+      },
+      "labels": [
+        "ops"
+      ],
       "components": [],
       "created": "2026-08-03T09:00:00.000+0000",
       "updated": "2026-08-12T11:00:00.000+0000",
@@ -146,9 +265,21 @@
           {
             "type": "paragraph",
             "content": [
-              { "type": "text", "text": "Coordinate with " },
-              { "type": "mention", "attrs": { "id": "5b1af9jane", "text": "@Jane D" } },
-              { "type": "text", "text": " before the window." }
+              {
+                "type": "text",
+                "text": "Coordinate with "
+              },
+              {
+                "type": "mention",
+                "attrs": {
+                  "id": "5b1af9jane",
+                  "text": "@Jane D"
+                }
+              },
+              {
+                "type": "text",
+                "text": " before the window."
+              }
             ]
           },
           {
@@ -157,13 +288,29 @@
               {
                 "type": "listItem",
                 "content": [
-                  { "type": "paragraph", "content": [{ "type": "text", "text": "Announce downtime" }] }
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Announce downtime"
+                      }
+                    ]
+                  }
                 ]
               },
               {
                 "type": "listItem",
                 "content": [
-                  { "type": "paragraph", "content": [{ "type": "text", "text": "Swap the cert" }] }
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Swap the cert"
+                      }
+                    ]
+                  }
                 ]
               }
             ]
@@ -171,7 +318,9 @@
         ]
       },
       "subtasks": [],
-      "comment": { "comments": [] },
+      "comment": {
+        "comments": []
+      },
       "attachment": []
     }
   }

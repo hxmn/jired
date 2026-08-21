@@ -217,6 +217,11 @@ impl Ws {
     }
 
     /// Change an issue on the "server" so the next fetch sees it move.
+    ///
+    /// The `updated` stamp is set to now rather than to a date written into the
+    /// test: a fetch is incremental against the last one, so a fixed timestamp
+    /// stops being "after the last fetch" the moment the calendar passes it, and
+    /// the test quietly starts asserting nothing.
     fn mutate_remote(&self, key: &str, f: impl Fn(&mut Value)) {
         let path = self.fixtures.join("issues.json");
         let mut issues: Value =
@@ -224,6 +229,7 @@ impl Ws {
         for issue in issues.as_array_mut().unwrap() {
             if issue["key"] == key {
                 f(issue);
+                issue["fields"]["updated"] = jired::store::now_rfc3339().into();
             }
         }
         std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
@@ -435,6 +441,103 @@ fn re_pulling_an_unchanged_project_touches_nothing() {
     );
 }
 
+/// A pull has to say what it brought in, not just that something moved.
+#[test]
+fn pull_reports_what_changed_field_by_field() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["status"] = serde_json::json!({"id": "4", "name": "In Review"});
+        issue["fields"]["labels"] = serde_json::json!(["auth", "backend", "sso"]);
+        issue["fields"]["customfield_10456"] = serde_json::json!({"value": "Engineering"});
+        issue["fields"]["description"]["content"][0]["content"][0]["text"] = "Rewritten.".into();
+    });
+
+    let report = ws.json(&["pull"]);
+    let updated = &report["updated"][0];
+    assert_eq!(updated["key"], "PROJ-142");
+
+    let changes: std::collections::HashMap<&str, &Value> = updated["changes"]
+        .as_array()
+        .expect("per-field changes")
+        .iter()
+        .map(|c| (c["field"].as_str().unwrap(), c))
+        .collect();
+
+    let status = changes["status"];
+    assert_eq!(status["from"], "In Progress");
+    assert_eq!(status["to"], "In Review");
+
+    let labels = changes["labels"];
+    assert_eq!(labels["from"], "auth, backend");
+    assert_eq!(labels["to"], "auth, backend, sso");
+
+    // Custom fields are named individually, with the instance's own label.
+    let team = changes["custom.customfield_10456"];
+    assert_eq!(team["label"], "Team");
+    assert_eq!(team["from"], "Platform");
+    assert_eq!(team["to"], "Engineering");
+
+    // Body text is counted, not quoted.
+    let body = changes["description"];
+    assert!(body["added"].as_u64().unwrap() > 0, "{body}");
+    assert!(
+        body["from"].is_null(),
+        "a body diff carries no values: {body}"
+    );
+
+    // The coarse field list is still there for anything that reads it.
+    let names: Vec<&str> = updated["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"status"), "{names:?}");
+    assert!(names.contains(&"custom"), "{names:?}");
+
+    // And the human output shows the same thing.
+    let out = ws.cmd(&["pull"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("unchanged"), "{text}");
+}
+
+/// A new comment is a change worth reporting, without printing the comment.
+#[test]
+fn pull_counts_new_comments_rather_than_quoting_them() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    ws.mutate_remote("PROJ-142", |issue| {
+        let comments = issue["fields"]["comment"]["comments"]
+            .as_array_mut()
+            .unwrap();
+        comments.push(serde_json::json!({
+            "id": "10999",
+            "author": {"accountId": "5b1af9", "displayName": "Jane D"},
+            "created": "2026-08-20T10:00:00.000+0000",
+            "updated": "2026-08-20T10:00:00.000+0000",
+            "body": {"type": "doc", "version": 1, "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "One more thing."}]}
+            ]}
+        }));
+    });
+
+    let report = ws.json(&["pull"]);
+    let change = report["updated"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["field"] == "comments")
+        .expect("a comments change")
+        .clone();
+    assert_eq!(change["added"], 1);
+    assert_eq!(change["removed"], 0);
+}
+
 #[test]
 fn a_remote_summary_change_renames_the_file_and_keeps_the_key() {
     let ws = Ws::new();
@@ -443,7 +546,6 @@ fn a_remote_summary_change_renames_the_file_and_keeps_the_key() {
 
     ws.mutate_remote("PROJ-142", |issue| {
         issue["fields"]["summary"] = "Fix the SSO login flow".into();
-        issue["fields"]["updated"] = "2026-08-18T09:00:00.000+0000".into();
     });
 
     let report = ws.json(&["pull"]);
@@ -693,7 +795,6 @@ fn push_refuses_a_stale_issue_with_exit_5() {
     // Someone else edits the same issue on the server.
     ws.mutate_remote("PROJ-142", |issue| {
         issue["fields"]["priority"] = serde_json::json!({ "name": "Low" });
-        issue["fields"]["updated"] = "2026-08-19T09:00:00.000+0000".into();
     });
 
     let out = ws.cmd(&["push", "--json"]).output().unwrap();
@@ -727,7 +828,6 @@ fn a_field_changed_on_both_sides_makes_pull_exit_5_and_write_nothing() {
 
     ws.mutate_remote("PROJ-142", |issue| {
         issue["fields"]["summary"] = "Theirs".into();
-        issue["fields"]["updated"] = "2026-08-19T09:00:00.000+0000".into();
     });
 
     let out = ws.cmd(&["pull", "--json"]).output().unwrap();
@@ -764,7 +864,6 @@ fn a_non_conflicting_remote_change_merges_into_a_dirty_file() {
 
     ws.mutate_remote("PROJ-142", |issue| {
         issue["fields"]["priority"] = serde_json::json!({ "name": "Lowest" });
-        issue["fields"]["updated"] = "2026-08-19T09:00:00.000+0000".into();
     });
 
     let report = ws.json(&["pull"]);
@@ -797,7 +896,6 @@ fn strategy_merge_writes_conflict_markers() {
             .as_array_mut()
             .unwrap();
         content[2]["content"][0]["text"] = "Their version of the steps.".into();
-        issue["fields"]["updated"] = "2026-08-19T09:00:00.000+0000".into();
     });
 
     let out = ws
@@ -1224,7 +1322,6 @@ fn a_conflict_aborts_the_pull_on_both_deployments() {
 
         ws.mutate_remote(ws.deployment.key(), |issue| {
             issue["fields"]["priority"] = serde_json::json!({ "name": "Highest" });
-            issue["fields"]["updated"] = "2026-08-20T09:00:00.000+0000".into();
         });
 
         let out = ws.cmd(&["pull", "--json"]).output().unwrap();
@@ -1637,7 +1734,6 @@ fn conflicted(ws: &Ws) {
 
     ws.mutate_remote("PROJ-142", |issue| {
         issue["fields"]["summary"] = "Theirs".into();
-        issue["fields"]["updated"] = "2026-08-20T09:00:00.000+0000".into();
     });
 
     let out = ws.cmd(&["pull", "--json"]).output().unwrap();
@@ -1727,7 +1823,6 @@ fn resolve_done_refuses_a_file_that_still_has_markers() {
             .as_array_mut()
             .unwrap();
         content[2]["content"][0]["text"] = "Their steps.".into();
-        issue["fields"]["updated"] = "2026-08-20T09:00:00.000+0000".into();
     });
     let out = ws
         .cmd(&["pull", "--strategy", "merge", "--json"])
@@ -1883,6 +1978,103 @@ fn clean_leaves_a_healthy_workspace_alone() {
     let report = ws.json(&["clean", "--yes"]);
     assert!(report["removed"].as_array().unwrap().is_empty());
     assert!(ws.path().join(ISSUE_FILE).is_file());
+}
+
+// ---------------------------------------------------------------------------
+// Custom fields [M2.3]
+// ---------------------------------------------------------------------------
+
+/// A select list arrives as `{"value": "Platform"}`; the file shows `Platform`,
+/// because nobody should have to write Jira's wire format into YAML.
+#[test]
+fn custom_fields_are_written_in_a_form_a_person_can_edit() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(ISSUE_FILE);
+    assert!(text.contains("customfield_10456: Platform"), "{text}");
+    assert!(
+        text.contains("customfield_10205:\n  - Payments"),
+        "a multi-select becomes a list:\n{text}"
+    );
+    // And an untouched file is not an edit.
+    let push = ws.json(&["push", "--dry-run"]);
+    assert!(push["results"].as_array().unwrap().is_empty(), "{push}");
+}
+
+/// The other half: what the file says has to go back as the shape Jira wants.
+#[test]
+fn editing_a_custom_field_pushes_the_shape_jira_expects() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace(
+            "customfield_10456: Platform",
+            "customfield_10456: Engineering",
+        )
+        .replace(
+            "customfield_10205:\n  - Payments",
+            "customfield_10205:\n  - Payments\n  - Identity",
+        );
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let body = &dry["results"][0]["ops"][0]["request"]["body"]["fields"];
+    assert_eq!(
+        body["customfield_10456"],
+        serde_json::json!({"value": "Engineering"})
+    );
+    assert_eq!(
+        body["customfield_10205"],
+        serde_json::json!([{"value": "Payments"}, {"value": "Identity"}]),
+        "a multi-select goes back as a list of options"
+    );
+
+    // A real push leaves the workspace clean.
+    ws.json(&["push"]);
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// Deleting the entry is how a file says "clear this field".
+#[test]
+fn removing_a_custom_field_entry_clears_it_on_the_server() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("  customfield_10456: Platform\n", "");
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let body = &dry["results"][0]["ops"][0]["request"]["body"]["fields"];
+    assert!(body["customfield_10456"].is_null(), "{body}");
+}
+
+/// Someone who keeps the raw Jira shape must not have it rewritten under them.
+#[test]
+fn a_custom_field_left_in_its_raw_shape_is_sent_verbatim() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(ISSUE_FILE).replace(
+        "customfield_10456: Platform",
+        "customfield_10456:\n    value: Engineering\n    id: '99'",
+    );
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let body = &dry["results"][0]["ops"][0]["request"]["body"]["fields"];
+    assert_eq!(
+        body["customfield_10456"],
+        serde_json::json!({"value": "Engineering", "id": "99"})
+    );
 }
 
 // ---------------------------------------------------------------------------

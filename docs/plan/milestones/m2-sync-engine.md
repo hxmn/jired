@@ -43,6 +43,13 @@ with a block marker becoming a table or list.
 - [ ] `summary` change → rename intent; heading/frontmatter divergence warning (D6)
 - **Done when:** dirty scan of 1k files completes < 1s and reports exactly the edited fields.
 
+### M2.3a Editable custom fields
+- [x] Custom-field values are collapsed to their simple form in the file (`{"value": X}` → `X`, arrays of options → a YAML list, user objects → `@[Name](id)`)
+- [x] Push rebuilds the wire shape from the value the server last sent, falling back to the field's cached schema (`type`/`items`); anything ambiguous round-trips verbatim
+- [x] Deleting an entry under `custom:` clears the field; a locally created issue sends its custom fields too
+- [x] Comparison is shape-insensitive, so a file written before this change does not read as an edit
+- **Done when:** a select list, a multi-select, a user picker and a plain-text custom field all survive pull → edit → push against both deployments.
+
 ### M2.3 Three-way merge (fields + body)
 - [x] Field-level merge per pseudocode in [sync-algorithm.md](../sync-algorithm.md)
 - [x] Body hunk merge: base→remote and base→working diffs (`similar`), non-overlapping auto-merge, overlap → conflict
@@ -55,6 +62,7 @@ with a block marker becoming a table or list.
 ### M2.4 Full `jired pull`
 - [x] Wire merge into pull; abort-before-any-write guarantee (all-or-nothing per run)
 - [x] Change summary output (added/modified/deleted, changed fields) + `jired/pull/1` JSON
+- [x] Per-field short diff for every updated issue: before → after for scalars, line counts for the body, one line per custom field (`changes` in the JSON)
 - [x] Remote rename + local-edit preservation (KEY-prefix matching) under merge
 - [x] E2E fixture tests for the two acceptance scenarios
 - **Done when:** acceptance scenarios 1–2 pass end-to-end.

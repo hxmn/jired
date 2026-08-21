@@ -1,7 +1,39 @@
 [
-  { "id": "summary", "name": "Summary", "custom": false, "schema_type": "string" },
-  { "id": "customfield_10016", "name": "Story Points", "custom": true, "schema_type": "number" },
-  { "id": "customfield_10014", "name": "Epic Link", "custom": true, "schema_type": "any" },
-  { "id": "customfield_10020", "name": "Sprint", "custom": true, "schema_type": "array" },
-  { "id": "customfield_10456", "name": "Team", "custom": true, "schema_type": "option" }
+  {
+    "id": "summary",
+    "name": "Summary",
+    "custom": false,
+    "schema_type": "string"
+  },
+  {
+    "id": "customfield_10016",
+    "name": "Story Points",
+    "custom": true,
+    "schema_type": "number"
+  },
+  {
+    "id": "customfield_10014",
+    "name": "Epic Link",
+    "custom": true,
+    "schema_type": "any"
+  },
+  {
+    "id": "customfield_10020",
+    "name": "Sprint",
+    "custom": true,
+    "schema_type": "array"
+  },
+  {
+    "id": "customfield_10456",
+    "name": "Team",
+    "custom": true,
+    "schema_type": "option"
+  },
+  {
+    "id": "customfield_10205",
+    "name": "Teams",
+    "custom": true,
+    "schema_type": "array",
+    "items": "option"
+  }
 ]

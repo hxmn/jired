@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod cloud;
+pub mod custom;
 pub mod datacenter;
 pub mod fixture;
 pub mod http;

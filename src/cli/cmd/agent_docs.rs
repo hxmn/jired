@@ -71,6 +71,7 @@ pub fn render() -> String {
     s.push_str("## Safe workflow\n\n```sh\n");
     s.push_str("jired status --json            # what is dirty, behind, or conflicted\n");
     s.push_str("jired pull --json              # exit 5 means conflicts; nothing was written\n");
+    s.push_str("#   `updated[].changes` says what each issue's pull brought in\n");
     s.push_str("#   ... edit the .md files ...\n");
     s.push_str("jired diff --json              # confirm only intended changes\n");
     s.push_str("jired push --dry-run --json    # exact API calls, nothing sent\n");
@@ -101,6 +102,18 @@ pub fn render() -> String {
          ignored with a warning.\n\n",
     );
     s.push_str("Frontmatter `summary` wins over the `# ` heading if they disagree.\n\n");
+
+    s.push_str("## Custom fields\n\n");
+    s.push_str(
+        "`custom:` holds fields keyed by their Jira id, written in their simple \
+         form: a select list as `Platform`, a multi-select as a YAML list, a user \
+         as `@[Name](id)`. Edit those values directly — push rebuilds the shape \
+         Jira wants (`{\"value\": …}`, `{\"name\": …}`, `{\"accountId\": …}`) from what \
+         the server last sent for that field. A value that could not be \
+         simplified is shown as raw JSON and is sent back verbatim; leave it \
+         alone unless you know the field's format. Deleting an entry clears that \
+         field on the next push.\n\n",
+    );
 
     s.push_str("## Comments\n\n");
     s.push_str("- Existing: `### [c-10812] Jane Doe — 2026-08-15T10:32:00Z`. Edit the body below it to update the comment.\n");

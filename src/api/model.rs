@@ -236,6 +236,10 @@ pub struct FieldMeta {
     pub custom: bool,
     #[serde(default)]
     pub schema_type: Option<String>,
+    /// Element type of an array field — `option`, `user`, `string`, … — which
+    /// is what decides how one of its values has to be written back.
+    #[serde(default)]
+    pub items: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
