@@ -191,9 +191,12 @@ source of truth).
 
 ### `jired doctor [--dry-run] [--regroup]`
 Checks a workspace over and repairs what it can: `.jired/` layout and permissions,
-missing config defaults, credentials that are unreadable or no longer where
+missing config defaults, settings that changed name (`checklist.done_transition` →
+`children.done_transition`), credentials that are unreadable or no longer where
 `creds.storage` says they belong (it moves them), filenames that predate a naming
-convention (this is the migration path for zero-padded issue numbers), database rows
+convention (this is the migration path for zero-padded issue numbers), issue files
+whose sections predate one — subtasks written under `## Checklist` move to
+`## Children`, and the checklist comes back from the last snapshot — database rows
 pointing at the wrong file, the `.gitignore` block, and the generated agent docs.
 Renaming files re-links the grouping folders automatically; `--regroup` rebuilds them
 even when nothing was renamed. Idempotent. Exit 1 when something needs a human.

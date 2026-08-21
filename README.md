@@ -173,9 +173,10 @@ jired doctor             # fix it
 ```
 
 It checks the `.jired/` layout and permissions, the config file, the stored
-credentials, filenames that predate a naming convention, database rows pointing at
-the wrong file, the `.gitignore` block and the generated agent docs — and repairs
-what it can. Run it after upgrading jired.
+credentials, filenames that predate a naming convention, issue files whose sections
+predate one (subtasks still under `## Checklist` move to `## Children`), database
+rows pointing at the wrong file, the `.gitignore` block and the generated agent
+docs — and repairs what it can. Run it after upgrading jired.
 
 ## Documentation
 

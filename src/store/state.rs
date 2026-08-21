@@ -393,6 +393,19 @@ impl StateStore {
         rows.map(|r| r?).collect()
     }
 
+    /// Record a new hash for a file whose text was rewritten without its
+    /// meaning changing — a `doctor` repair, not a sync.
+    ///
+    /// Without this, reformatting a clean file would make every later `pull`
+    /// treat it as locally edited.
+    pub fn set_base_md_hash(&self, key: &str, hash: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE issue SET base_md_hash = ?2 WHERE key = ?1 AND base_raw IS NOT NULL",
+            params![key, hash],
+        )?;
+        Ok(())
+    }
+
     pub fn set_file_path(&self, key: &str, path: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE issue SET file_path = ?2 WHERE key = ?1",

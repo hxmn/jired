@@ -156,10 +156,12 @@ pub fn render() -> String {
 
     s.push_str("## Repairing a workspace\n\n");
     s.push_str(
-        "`jired doctor` checks the layout, the config file, the credentials, the filenames \
-         and the database, and repairs what it can; `jired doctor --dry-run` reports without \
-         changing anything. It is also the migration path when a naming convention changes, \
-         so run it after upgrading jired. It exits 1 when something needs a human.\n\n",
+        "`jired doctor` checks the layout, the config file, the credentials, the filenames, \
+         the sections inside each issue file and the database, and repairs what it can; \
+         `jired doctor --dry-run` reports without changing anything. It is the migration \
+         path when a convention changes — a filename shape, a section heading, a renamed \
+         setting — so run it after upgrading jired. It exits 1 when something needs a \
+         human.\n\n",
     );
 
     s.push_str("## Lossy regions\n\n");

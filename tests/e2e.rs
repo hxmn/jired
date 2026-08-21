@@ -2675,6 +2675,99 @@ fn editing_the_checklist_section_is_reported_and_then_undone_by_a_pull() {
     );
 }
 
+/// A workspace pulled before the split has its subtasks under `## Checklist`
+/// and no `## Children` at all. Doctor is the only thing that can tell the two
+/// layouts apart, so it is where the migration lives.
+#[test]
+fn doctor_moves_an_old_checklist_section_into_children() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = Deployment::DataCenter.issue_file();
+    let current = ws.read(file);
+
+    // What the same issue looked like when `## Checklist` meant the subtasks.
+    let head = current.find("## Checklist").unwrap();
+    let tail = current.find("## Comments").unwrap();
+    let old = format!(
+        "{}## Checklist\n\n- [ ] DC-79 Update the connector config\n\n{}",
+        &current[..head],
+        &current[tail..]
+    );
+    ws.write(file, &old);
+
+    // A dry run says what it would do and leaves the file alone.
+    let dry = ws.json(&["doctor", "--dry-run"]);
+    let check = dry["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "sections")
+        .expect("doctor checks the sections");
+    assert_eq!(check["status"], "would_fix", "{dry}");
+    assert_eq!(check["changes"][0]["from"], file);
+    assert!(
+        check["changes"][0]["to"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Children"),
+        "{check}"
+    );
+    assert_eq!(ws.read(file), old);
+
+    // The repair reproduces exactly what this build writes: the subtask under
+    // `## Children`, and the plugin's checklist back from the last snapshot.
+    ws.json(&["doctor"]);
+    assert_eq!(ws.read(file), current);
+
+    // Byte-identical means in sync, so nothing is left looking edited.
+    let status = ws.json(&["status"]);
+    assert!(
+        status["dirty"].as_array().unwrap().is_empty(),
+        "the migrated file should not read as edited: {status}"
+    );
+
+    // And running it again is a no-op.
+    let again = ws.json(&["doctor"]);
+    let check = again["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "sections")
+        .unwrap();
+    assert_eq!(check["status"], "ok", "{again}");
+}
+
+/// A setting that changed name is worse than a missing one: it reads as
+/// configured and does nothing.
+#[test]
+fn doctor_renames_the_old_done_transition_setting() {
+    let ws = Ws::new();
+    ws.init();
+    let config = ws.path().join(".jired").join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        format!("{text}\n[checklist]\ndone_transition = \"Done\"\n"),
+    )
+    .unwrap();
+
+    ws.json(&["doctor"]);
+
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(!text.contains("[checklist]"), "{text}");
+    assert!(text.contains("[children]"), "{text}");
+
+    let listed = ws.json(&["config", "list", "--all"]);
+    let value = listed["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["key"] == "children.done_transition")
+        .expect("the renamed setting is resolvable");
+    assert_eq!(value["value"], "Done", "{listed}");
+}
+
 /// Text between one heading and the next.
 fn section<'a>(text: &'a str, heading: &str) -> &'a str {
     let body = text

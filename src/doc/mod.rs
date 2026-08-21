@@ -240,6 +240,24 @@ impl IssueDoc {
     }
 }
 
+/// The `## ` headings a file actually carries, in order.
+///
+/// [`IssueDoc::parse`] cannot answer this: a section that is missing and one
+/// that is present but empty both parse to nothing. `doctor` needs the
+/// difference to tell a file written before a section existed from one written
+/// after it.
+pub fn section_headings(text: &str) -> Vec<String> {
+    let Ok((_, body)) = split_frontmatter(text) else {
+        return Vec::new();
+    };
+    ScanLines::new(&body)
+        .filter_map(|line| match line {
+            Scanned::Heading { level: 2, text, .. } => Some(text.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Comment headings that sit outside `## Comments` and will therefore be
 /// ignored on push.
 ///
@@ -731,6 +749,27 @@ mod tests {
         assert!(doc.description.contains("## Comments"));
         assert_eq!(doc.comments.len(), 1);
         assert_eq!(doc.comments[0].id, CommentId::Existing("9".into()));
+    }
+
+    /// Doctor tells an old file from a new one by which headings it carries, so
+    /// an empty section must not read as a missing one.
+    #[test]
+    fn heading_scan_reports_sections_even_when_they_are_empty() {
+        let doc = IssueDoc::parse(&sample()).unwrap();
+        assert_eq!(
+            section_headings(&doc.render().unwrap()),
+            vec![
+                SECTION_DESCRIPTION,
+                SECTION_CHECKLIST,
+                SECTION_CHILDREN,
+                SECTION_COMMENTS,
+                SECTION_ATTACHMENTS
+            ]
+        );
+
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Checklist\n\n- [ ] PROJ-143 Add test\n\n```\n## Children\n```\n");
+        assert_eq!(section_headings(&s), vec![SECTION_CHECKLIST]);
     }
 
     #[test]

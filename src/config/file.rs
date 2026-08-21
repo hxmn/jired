@@ -124,17 +124,33 @@ impl ConfigFile {
     pub fn unset(&mut self, key: &str) -> bool {
         let parts: Vec<&str> = key.split('.').collect();
         let (last, tables) = parts.split_last().expect("non-empty key");
-        let mut item: &mut Item = self.doc.as_item_mut();
-        for part in tables {
-            match item.get_mut(part) {
-                Some(next) => item = next,
-                None => return false,
-            }
-        }
-        match item.as_table_like_mut() {
+        let Some(item) = walk_mut(self.doc.as_item_mut(), tables) else {
+            return false;
+        };
+        let removed = match item.as_table_like_mut() {
             Some(t) => t.remove(last).is_some(),
             None => false,
+        };
+
+        // `[attachments]` with nothing under it is a heading for content that is
+        // gone, and reads like a setting that is still there.
+        for depth in (0..tables.len()).rev() {
+            let (name, parents) = tables[..=depth].split_last().expect("non-empty path");
+            let Some(parent) = walk_mut(self.doc.as_item_mut(), parents) else {
+                break;
+            };
+            let empty = parent
+                .get(name)
+                .and_then(Item::as_table_like)
+                .is_some_and(|t| t.is_empty());
+            if !empty {
+                break;
+            }
+            if let Some(table) = parent.as_table_like_mut() {
+                table.remove(name);
+            }
         }
+        removed
     }
 
     pub fn to_toml(&self) -> String {
@@ -157,6 +173,14 @@ impl ConfigFile {
         self.path = Some(path.to_path_buf());
         self.save()
     }
+}
+
+/// Follow a dotted path to the item it names.
+fn walk_mut<'a>(mut item: &'a mut Item, path: &[&str]) -> Option<&'a mut Item> {
+    for part in path {
+        item = item.get_mut(part)?;
+    }
+    Some(item)
 }
 
 /// Wrap documentation into `#` comment lines short enough to read in an editor.
@@ -286,5 +310,21 @@ mod tests {
         assert!(cfg.unset("server.url"));
         assert!(cfg.get("server.url").is_none());
         assert!(!cfg.unset("server.url"));
+    }
+
+    /// A leftover `[server]` reads like a setting that is still configured.
+    #[test]
+    fn unset_takes_the_table_with_it_when_nothing_is_left() {
+        let mut cfg =
+            ConfigFile::from_toml("[server]\nurl = \"https://a\"\ndeployment = \"cloud\"\n")
+                .unwrap();
+        assert!(cfg.unset("server.url"));
+        assert!(
+            cfg.to_toml().contains("[server]"),
+            "the table is still used"
+        );
+
+        assert!(cfg.unset("server.deployment"));
+        assert!(!cfg.to_toml().contains("[server]"), "{}", cfg.to_toml());
     }
 }

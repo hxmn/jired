@@ -1,10 +1,10 @@
 //! `jired doctor` — check a workspace over and repair what can be repaired.
 //!
 //! Two things age badly in a workspace: files a human moved or renamed, and
-//! conventions jired itself changed between versions — the zero-padded issue
-//! numbers in filenames being the first of those. Rather than making every
-//! command defensive about both, the repairs live here, run on demand, and say
-//! exactly what they did.
+//! conventions jired itself changed between versions — zero-padded issue
+//! numbers in filenames, the section headings inside a file, the name of a
+//! setting. Rather than making every command defensive about all of them, the
+//! repairs live here, run on demand, and say exactly what they did.
 //!
 //! Every check is idempotent, so running `doctor` twice is the same as running
 //! it once, and `--dry-run` reports without touching anything.
@@ -85,6 +85,9 @@ pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
         ctx.lock()?;
     }
 
+    // Section repairs rewrite files where they stand, so they run before
+    // anything moves them.
+    let sections = check_sections(&mut ctx, args)?;
     // The filename pass decides where every issue ends up, so the database
     // check works from its result rather than from what is on disk right now —
     // otherwise a dry run would report the two repairs undoing each other.
@@ -97,6 +100,7 @@ pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
         check_layout(&ctx, args)?,
         check_config(&mut ctx, args)?,
         check_credentials(&mut ctx, args, g)?,
+        sections,
         filenames,
         check_state_paths(&ctx, args, &final_paths)?,
         check_gitignore(&ctx, args)?,
@@ -248,23 +252,52 @@ fn check_config(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
         ));
     }
 
+    // A setting that changed name is not a setting that stopped mattering: left
+    // alone it reads as configured and does nothing.
+    let renamed: Vec<(&str, &str, String)> = RENAMED_KEYS
+        .iter()
+        .filter_map(|(old, new)| Some((*old, *new, cfg.get(old)?)))
+        .collect();
+
     let missing: Vec<&(&str, &str)> = crate::config::DEFAULTS
         .iter()
         .filter(|(key, _)| cfg.get(key).is_none())
+        .filter(|(key, _)| !renamed.iter().any(|(_, new, _)| new == key))
         .collect();
-    if missing.is_empty() {
+    if missing.is_empty() && renamed.is_empty() {
         return Ok(ok("config", "every setting is spelled out"));
     }
-    let detail = format!(
-        "writing defaults for {}",
-        missing
-            .iter()
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+
+    let mut detail = Vec::new();
+    if !renamed.is_empty() {
+        detail.push(format!(
+            "renaming {}",
+            renamed
+                .iter()
+                .map(|(old, new, _)| format!("{old} → {new}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !missing.is_empty() {
+        detail.push(format!(
+            "writing defaults for {}",
+            missing
+                .iter()
+                .map(|(k, _)| *k)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let detail = detail.join("; ");
     if args.dry_run {
         return Ok(repaired("config", true, detail));
+    }
+    for (old, new, value) in &renamed {
+        if cfg.get(new).is_none() {
+            cfg.set_documented(new, value)?;
+        }
+        cfg.unset(old);
     }
     for (key, value) in missing {
         cfg.set_documented(key, value)?;
@@ -272,6 +305,9 @@ fn check_config(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     cfg.save_to(&path)?;
     Ok(repaired("config", false, detail))
 }
+
+/// Settings that changed name between versions, old → new.
+const RENAMED_KEYS: [(&str, &str); 1] = [("checklist.done_transition", "children.done_transition")];
 
 /// There is an account, its token can still be read back, and it is kept where
 /// `creds.storage` says it should be.
@@ -408,6 +444,144 @@ fn check_filenames(
     );
     check.changes = changes;
     Ok((check, final_paths))
+}
+
+/// Every issue file carries the sections this build writes.
+///
+/// `## Checklist` used to hold the subtasks. They live under `## Children` now,
+/// because they are issues of their own, and `## Checklist` belongs to the
+/// checklist plugin — so a file written before the split has its subtasks under
+/// the wrong heading and no `## Children` at all. Moving them is a repair only
+/// doctor can make: `pull` would see a hand-edited file and merge into the
+/// confusion rather than out of it.
+fn check_sections(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
+    use crate::doc::{ChecklistEntry, ChildItem, SECTION_CHECKLIST, SECTION_CHILDREN};
+
+    let projector = crate::project::Projector::new(ctx.workspace.root());
+    let files = projector.scan()?;
+    let state = StateStore::open(&ctx.workspace)?;
+    // The checklist is server-owned, so the last snapshot is where its current
+    // contents come from. Without a readable account there is none, which costs
+    // the checklist but not the move.
+    let engine = crate::sync::Engine::open(ctx).ok();
+    let field_map = match &engine {
+        Some(engine) => engine.field_map().ok(),
+        None => None,
+    };
+
+    let mut changes = Vec::new();
+    let mut blocked = Vec::new();
+    for (key, file) in &files {
+        let Ok(text) = projector.read_raw(&file.relative) else {
+            continue;
+        };
+        let headings = crate::doc::section_headings(&text);
+        let has = |name: &str| headings.iter().any(|h| h == name);
+        if has(SECTION_CHILDREN) && has(SECTION_CHECKLIST) {
+            continue;
+        }
+        let mut doc = match projector.read(&file.relative) {
+            Ok(doc) => doc,
+            Err(e) => {
+                blocked.push(format!("{}: {}", file.relative, e.message));
+                continue;
+            }
+        };
+
+        // Anything under the old `## Checklist` was a subtask line, key-prefixed
+        // or written by hand for push to create.
+        let moved = if has(SECTION_CHILDREN) {
+            0
+        } else {
+            doc.children = std::mem::take(&mut doc.checklist)
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    ChecklistEntry::Item(item) => {
+                        let (key, title) = crate::doc::split_leading_key(&item.title);
+                        Some(ChildItem {
+                            checked: item.checked,
+                            key,
+                            title: title.to_string(),
+                        })
+                    }
+                    ChecklistEntry::Header(_) => None,
+                })
+                .collect();
+            doc.children.len()
+        };
+        doc.checklist = base_checklist(&state, field_map.as_ref(), engine.as_ref(), key);
+
+        let rewritten = doc.render()?;
+        if rewritten == text {
+            continue;
+        }
+        if !args.dry_run {
+            std::fs::write(projector.path_of(&file.relative), &rewritten)?;
+            // A file that was in sync stays in sync: nothing about the issue
+            // changed, only the shape of the file holding it.
+            if was_in_sync(&state, key, &text)? {
+                state.set_base_md_hash(key, &crate::store::state::content_hash(&rewritten))?;
+            }
+        }
+        changes.push(Change {
+            from: file.relative.clone(),
+            to: match moved {
+                0 => format!("restoring `## {SECTION_CHECKLIST}`"),
+                n => format!("{n} subtask(s) moved under `## {SECTION_CHILDREN}`"),
+            },
+        });
+    }
+
+    if !blocked.is_empty() {
+        let mut check = problem("sections", blocked.join("; "));
+        check.changes = changes;
+        return Ok(check);
+    }
+    if changes.is_empty() {
+        return Ok(ok(
+            "sections",
+            format!("{} file(s) have the current sections", files.len()),
+        ));
+    }
+    let mut check = repaired(
+        "sections",
+        args.dry_run,
+        format!(
+            "rewriting {} file(s) to the current sections",
+            changes.len()
+        ),
+    );
+    check.changes = changes;
+    Ok(check)
+}
+
+/// What the checklist plugin held for this issue the last time jired looked.
+fn base_checklist(
+    state: &StateStore,
+    field_map: Option<&crate::api::normalize::FieldMap>,
+    engine: Option<&crate::sync::Engine>,
+    key: &str,
+) -> Vec<crate::doc::ChecklistEntry> {
+    let (Some(field_map), Some(engine)) = (field_map, engine) else {
+        return Vec::new();
+    };
+    let Ok(Some(row)) = state.issue(key) else {
+        return Vec::new();
+    };
+    let Some(base) = row.base else {
+        return Vec::new();
+    };
+    crate::api::normalize::issue_from_json(&base.raw, engine.markup(), field_map)
+        .map(|issue| issue.fields.checklist)
+        .unwrap_or_default()
+}
+
+/// True when the file on disk is exactly what jired last wrote for this issue.
+fn was_in_sync(state: &StateStore, key: &str, text: &str) -> Result<bool> {
+    Ok(state
+        .issue(key)?
+        .and_then(|row| row.base)
+        .is_some_and(|base| base.md_hash == crate::store::state::content_hash(text)))
 }
 
 /// The database agrees with the working copy about where each issue lives.
