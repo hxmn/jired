@@ -11,10 +11,35 @@ use crate::json::Out;
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
+/// What `-V` prints: the release, the commit it was built from, and when.
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("JIRED_COMMIT"),
+    " ",
+    env!("JIRED_BUILD_TIME"),
+    ")"
+);
+
+/// What `--version` prints: the same, plus what a bug report always ends up
+/// asking for next.
+pub const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "\ncommit:  ",
+    env!("JIRED_COMMIT"),
+    "\nbuilt:   ",
+    env!("JIRED_BUILD_TIME"),
+    "\nrustc:   ",
+    env!("JIRED_RUSTC"),
+    "\ntarget:  ",
+    env!("JIRED_TARGET")
+);
+
 #[derive(Parser, Debug)]
 #[command(
     name = "jired",
-    version,
+    version = VERSION,
+    long_version = LONG_VERSION,
     about = "Work with Jira issues as Markdown files, offline-first",
     long_about = None,
     disable_help_subcommand = true

@@ -239,6 +239,66 @@ impl Ws {
 const ISSUE_FILE: &str = "PROJ-0142. Fix login flow.md";
 
 // ---------------------------------------------------------------------------
+// version
+// ---------------------------------------------------------------------------
+
+/// A bug report needs to name the exact binary, so `--version` carries the
+/// commit and the build time, not just the release number.
+#[test]
+fn version_names_the_commit_and_when_it_was_built() {
+    let short = Command::cargo_bin("jired")
+        .unwrap()
+        .arg("-V")
+        .output()
+        .unwrap();
+    let line = String::from_utf8(short.stdout).unwrap();
+    let line = line.trim();
+
+    // jired <semver> (<commit> <timestamp>)
+    let (name_version, rest) = line.split_once(" (").unwrap_or_else(|| panic!("{line}"));
+    assert!(name_version.starts_with("jired "), "{line}");
+    let (commit, timestamp) = rest
+        .trim_end_matches(')')
+        .split_once(' ')
+        .unwrap_or_else(|| panic!("{line}"));
+    assert!(!commit.is_empty(), "{line}");
+    assert_timestamp(timestamp);
+
+    let long = Command::cargo_bin("jired")
+        .unwrap()
+        .arg("--version")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(long.stdout).unwrap();
+    for expected in ["commit:", "built:", "rustc:", "target:"] {
+        assert!(text.contains(expected), "{expected} missing from\n{text}");
+    }
+    assert!(
+        text.contains(commit),
+        "the two forms disagree:\n{line}\n{text}"
+    );
+}
+
+/// `2026-08-21T10:49:39Z`, checked by shape rather than by parsing: the point is
+/// that it is a machine-readable instant, not that today is a particular day.
+fn assert_timestamp(value: &str) {
+    let bytes = value.as_bytes();
+    assert_eq!(value.len(), 20, "not an RFC 3339 second: {value}");
+    for (i, b) in bytes.iter().enumerate() {
+        let ok = match i {
+            4 | 7 => *b == b'-',
+            10 => *b == b'T',
+            13 | 16 => *b == b':',
+            19 => *b == b'Z',
+            _ => b.is_ascii_digit(),
+        };
+        assert!(ok, "unexpected byte at {i} in {value}");
+    }
+    let year: u32 = value[..4].parse().unwrap();
+    assert!((2020..2100).contains(&year), "{value}");
+}
+
+// ---------------------------------------------------------------------------
 // init
 // ---------------------------------------------------------------------------
 

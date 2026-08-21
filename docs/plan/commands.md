@@ -191,6 +191,12 @@ at set time; `list --all` prints each setting's documentation.
 ### `jired whoami` · `jired projects|boards|sprints list [--refresh]`
 Cached + `--refresh`; table / JSON.
 
+### `jired --version` / `-V`
+`-V` is one line — `jired 0.1.0 (9212430 2026-08-21T10:49:39Z)`; `--version` adds
+the compiler and target. The commit carries a `-dirty` suffix when the tree had
+uncommitted changes, and reads `unknown` when built from a tarball with no git.
+`SOURCE_DATE_EPOCH` fixes the timestamp for reproducible builds.
+
 ### `jired completion <shell>`
 Via `clap_complete`.
 

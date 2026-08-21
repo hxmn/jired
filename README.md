@@ -135,6 +135,23 @@ jired doctor                                          # move the existing one th
 See [docs/security.md](docs/security.md), which is explicit about what each
 store does and does not protect against.
 
+## Reporting a problem
+
+`jired --version` names the exact binary — release, commit, build time, compiler
+and target — so a report says which source produced the behaviour:
+
+```
+$ jired --version
+jired 0.1.0
+commit:  9212430
+built:   2026-08-21T10:49:39Z
+rustc:   rustc 1.97.1 (8bab26f4f 2026-07-14)
+target:  x86_64-unknown-linux-gnu
+```
+
+`-V` is the same thing on one line. A `-dirty` suffix on the commit means the
+binary was built from a tree with uncommitted changes.
+
 ## Repairing a workspace
 
 ```sh
