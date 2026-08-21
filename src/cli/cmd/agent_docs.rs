@@ -165,10 +165,14 @@ pub fn render() -> String {
 
     s.push_str("## Sprints\n\n");
     s.push_str(
-        "`sprint:` names the sprint an issue sits in; removing the line puts it \
-         in the backlog. Push turns a change into a board move rather than a \
-         field update, resolving the name against the sprints the workspace has \
-         fetched — so a sprint nobody has pulled cannot be moved into.\n\n",
+        "`sprint:` names the sprints an issue belongs to, oldest first — one as \
+         a string, several as a list, because an issue that rolls over stays in \
+         the sprint it came from. The last one is where it is now; removing them \
+         all puts it in the backlog. Push turns a change to that last one into a \
+         board move rather than a field update, resolving the name against the \
+         sprints the workspace has fetched. The earlier entries are the server's \
+         record of what happened and cannot be edited: changing them is reported \
+         and not sent.\n\n",
     );
 
     s.push_str("## Repairing a workspace\n\n");

@@ -34,8 +34,9 @@ pub struct Edits {
     pub assignee: Option<String>,
     pub labels: Vec<String>,
     pub components: Vec<String>,
-    /// The sprint the issue sits in; `None` is the backlog.
-    pub sprint: Option<String>,
+    /// Sprints the issue belongs to, oldest first; empty is the backlog. Only
+    /// the last one is somewhere a push can move it to — the rest is history.
+    pub sprint: Vec<String>,
     pub story_points: Option<f64>,
     pub parent: Option<String>,
     pub description: String,
@@ -103,8 +104,9 @@ const LABELS_LABEL: &str = "Labels";
 const COMPONENTS_LABEL: &str = "Components";
 const SPRINT_LABEL: &str = "Sprint";
 const POINTS_LABEL: &str = "Points";
-/// What the empty sprint value is called, because "—" does not say it.
-const BACKLOG: &str = "Backlog";
+/// What an empty sprint field means, said in the placeholder rather than left
+/// blank: an issue in no sprint is in the backlog, which is a place.
+const BACKLOG: &str = "Backlog — in no sprint";
 const PARENT_LABEL: &str = "Parent";
 const DESCRIPTION_LABEL: &str = "Description";
 
@@ -113,6 +115,7 @@ const HELP: &[(&str, &str)] = &[
     ("↑ ↓", "move between fields"),
     ("← →", "change a choice"),
     ("^p or f2", "open the field as a list"),
+    ("space", "tick a sprint in the list"),
     ("tab", "take the suggestion, where there is one"),
     ("⏎", "save to the file"),
     ("^s", "save from the description"),
@@ -163,11 +166,15 @@ impl EditScreen {
 
         // The issue's own values belong in every list, whether or not the rest
         // of the workspace happens to use them.
-        // The backlog is one of the options rather than the absence of one:
-        // "no sprint" is a place an issue can be moved to, and a form that
-        // spelled it "—" would not say so.
-        let mut sprints = with_current(&catalog.sprints, current.sprint.as_deref());
-        sprints.push(BACKLOG.to_string());
+        // Every sprint the issue is in belongs among the options, closed ones
+        // included: an issue that rolled over has been through sprints nobody
+        // can move it into any more, and the list has to show where it has been.
+        let mut sprints = catalog.sprints.clone();
+        for name in &current.sprint {
+            if !sprints.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                sprints.insert(0, name.clone());
+            }
+        }
 
         let statuses = with_current(&catalog.statuses, Some(&current.status));
         let types = with_current(&catalog.types, Some(&current.issue_type));
@@ -189,8 +196,10 @@ impl EditScreen {
             Field::line(COMPONENTS_LABEL, "none")
                 .with_items(catalog.components.iter().map(Item::new).collect())
                 .with_hint("comma-separated"),
-            Field::choice(SPRINT_LABEL, sprints, false)
-                .with_hint("the sprint it moves into when you push"),
+            Field::line(SPRINT_LABEL, BACKLOG)
+                .with_items(sprints.iter().map(Item::new).collect())
+                .multiple()
+                .with_hint("^p to tick sprints; the last one is where it moves to"),
             Field::line(POINTS_LABEL, "none").with_hint("a number, or empty to clear"),
             Field::line(PARENT_LABEL, "none")
                 .with_items(issues)
@@ -210,7 +219,7 @@ impl EditScreen {
         fields[ASSIGNEE].set(current.assignee.as_deref());
         fields[LABELS].set(Some(&current.labels.join(", ")));
         fields[COMPONENTS].set(Some(&current.components.join(", ")));
-        fields[SPRINT].set(Some(current.sprint.as_deref().unwrap_or(BACKLOG)));
+        fields[SPRINT].set(Some(&current.sprint.join(", ")));
         fields[POINTS].set(current.story_points.map(format_points).as_deref());
         fields[PARENT].set(current.parent.as_deref());
         fields[DESCRIPTION].set(Some(&current.description));
@@ -236,9 +245,7 @@ impl EditScreen {
             assignee: self.fields[ASSIGNEE].filled().map(str::to_string),
             labels: split_list(self.fields[LABELS].text()),
             components: split_list(self.fields[COMPONENTS].text()),
-            sprint: Some(self.fields[SPRINT].text())
-                .filter(|s| *s != BACKLOG && !s.trim().is_empty())
-                .map(str::to_string),
+            sprint: split_list(self.fields[SPRINT].text()),
             story_points: parse_points(self.fields[POINTS].text()),
             parent: self.fields[PARENT].filled().map(|p| p.to_uppercase()),
             description: self.fields[DESCRIPTION].text().trim_end().to_string(),
@@ -333,9 +340,15 @@ impl EditScreen {
         if !field.openable() {
             return;
         }
-        let mut picker = Picker::new(field.label, field.items.clone(), field.optional);
-        if let Some(current) = field.filled() {
-            picker.select(current);
+        let mut picker = if field.multiple {
+            Picker::multi(field.label, field.items.clone(), split_list(field.text()))
+        } else {
+            Picker::new(field.label, field.items.clone(), field.optional)
+        };
+        if !field.multiple {
+            if let Some(current) = field.filled() {
+                picker.select(current);
+            }
         }
         self.overlay = Some(Overlay::Pick {
             field: self.focus,
@@ -355,6 +368,11 @@ impl EditScreen {
                     self.overlay = Some(Overlay::Pick { field, picker });
                 }
                 picker::Outcome::Cancel => self.overlay = None,
+                picker::Outcome::ChoseMany(values) => {
+                    self.fields[field].set(Some(&values.join(", ")));
+                    self.error = None;
+                    self.overlay = None;
+                }
                 picker::Outcome::Chose(value) => {
                     // A list of several values adds to what is there rather
                     // than replacing it: picking two labels should give two.
@@ -626,7 +644,7 @@ mod tests {
             assignee: Some("@[Ilya A](5b10a2)".into()),
             labels: vec!["auth".into(), "backend".into()],
             components: vec!["web".into()],
-            sprint: Some("Sprint 42".into()),
+            sprint: vec!["Sprint 42".into()],
             story_points: Some(5.0),
             parent: Some("PROJ-100".into()),
             description: "Login fails when SSO is enabled.".into(),
@@ -729,39 +747,51 @@ mod tests {
         assert_eq!(screen.error.as_deref(), Some("a summary is required"));
     }
 
-    /// The three places an issue can go: the sprint running now, one queued
-    /// behind it, or out of all of them.
+    /// An issue can be in several sprints, so the field is a ticked list.
     #[test]
-    fn the_sprint_field_offers_the_open_sprints_and_the_backlog() {
+    fn sprints_are_ticked_from_a_list_and_several_can_be_held_at_once() {
         let mut screen = screen();
         assert_eq!(screen.fields[SPRINT].text(), "Sprint 42");
 
         screen.focus = SPRINT;
-        screen.handle(key(KeyCode::Right));
-        assert_eq!(screen.fields[SPRINT].text(), "Sprint 43");
+        screen.handle(ctrl('p'));
+        screen.handle(key(KeyCode::Down));
+        screen.handle(key(KeyCode::Char(' ')));
+        screen.handle(key(KeyCode::Enter));
+        assert_eq!(screen.fields[SPRINT].text(), "Sprint 42, Sprint 43");
+
         let edits = done(screen.handle(key(KeyCode::Enter)));
-        assert_eq!(edits.sprint.as_deref(), Some("Sprint 43"));
+        assert_eq!(edits.sprint, ["Sprint 42", "Sprint 43"]);
     }
 
     #[test]
-    fn choosing_the_backlog_clears_the_sprint() {
+    fn unticking_every_sprint_puts_the_issue_in_the_backlog() {
         let mut screen = screen();
         screen.focus = SPRINT;
-        // Backlog is the last option, so one step back from the first reaches it.
-        screen.handle(key(KeyCode::Left));
-        assert_eq!(screen.fields[SPRINT].text(), "Backlog");
+        screen.handle(ctrl('p'));
+        screen.handle(key(KeyCode::Char(' '))); // untick the one it is in
+        screen.handle(key(KeyCode::Enter));
+        assert_eq!(screen.fields[SPRINT].filled(), None);
+
         let edits = done(screen.handle(key(KeyCode::Enter)));
-        assert_eq!(edits.sprint, None, "the backlog is no sprint at all");
+        assert!(edits.sprint.is_empty(), "the backlog is no sprint at all");
     }
 
-    /// An issue sitting in a closed sprint still has to show where it is.
+    /// An issue that rolled over has been through sprints nobody can move it
+    /// into any more; the list still has to show where it has been.
     #[test]
     fn a_sprint_that_is_no_longer_open_is_still_shown() {
         let mut current = current();
-        current.sprint = Some("Sprint 7".into());
+        current.sprint = vec!["Sprint 7".into(), "Sprint 42".into()];
         let mut screen = EditScreen::new("PROJ-142", &catalog(), &current);
-        assert_eq!(screen.fields[SPRINT].text(), "Sprint 7");
-        // And saving without touching it leaves the issue where it is.
+        assert_eq!(screen.fields[SPRINT].text(), "Sprint 7, Sprint 42");
+        assert!(
+            screen.fields[SPRINT]
+                .items
+                .iter()
+                .any(|i| i.value == "Sprint 7"),
+            "a closed sprint the issue is in is still an option"
+        );
         assert_eq!(
             done(screen.handle(key(KeyCode::Enter))).sprint,
             current.sprint
@@ -769,11 +799,13 @@ mod tests {
     }
 
     #[test]
-    fn an_issue_with_no_sprint_starts_on_the_backlog() {
+    fn an_issue_with_no_sprint_shows_the_backlog_as_its_placeholder() {
         let mut current = current();
-        current.sprint = None;
-        let screen = EditScreen::new("PROJ-142", &catalog(), &current);
-        assert_eq!(screen.fields[SPRINT].text(), "Backlog");
+        current.sprint = Vec::new();
+        let mut screen = EditScreen::new("PROJ-142", &catalog(), &current);
+        assert_eq!(screen.fields[SPRINT].filled(), None);
+        let lines = render_lines(&mut screen, 80, 26).join("\n");
+        assert!(lines.contains("Backlog"), "{lines}");
     }
 
     /// The mention is an id nobody can type, so typing a name has to be enough.
@@ -944,7 +976,7 @@ mod tests {
                 status: "In Progress".into(),
                 issue_type: "Story".into(),
                 labels: vec!["auth".into()],
-                sprint: Some("Sprint 42".into()),
+                sprint: vec!["Sprint 42".into()],
                 epic: Some("PROJ-90".into()),
                 custom: [(
                     "customfield_10456".to_string(),
@@ -987,7 +1019,7 @@ mod tests {
         assert_eq!(doc.heading, "Fix the SSO login flow", "the heading follows");
         assert_eq!(doc.frontmatter.status, "In Review");
         // Untouched by the form, and still here.
-        assert_eq!(doc.frontmatter.sprint.as_deref(), Some("Sprint 42"));
+        assert_eq!(doc.frontmatter.sprint, ["Sprint 42"]);
         assert_eq!(doc.frontmatter.epic.as_deref(), Some("PROJ-90"));
         assert_eq!(doc.frontmatter.custom.len(), 1);
         assert_eq!(doc.comments.len(), 1);
@@ -1003,6 +1035,12 @@ mod tests {
     #[ignore]
     fn preview() {
         let mut s = screen();
+        for l in render_lines(&mut s, 90, 26) {
+            println!("|{l}");
+        }
+        println!();
+        s.focus = SPRINT;
+        s.handle(ctrl('p'));
         for l in render_lines(&mut s, 90, 26) {
             println!("|{l}");
         }

@@ -67,8 +67,14 @@ pub struct Frontmatter {
     pub created: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sprint: Option<String>,
+    /// Sprints the issue belongs to, oldest first; empty is the backlog.
+    #[serde(
+        default,
+        with = "sprint_field",
+        skip_serializing_if = "Vec::is_empty",
+        alias = "sprints"
+    )]
+    pub sprint: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,6 +170,37 @@ impl Frontmatter {
     }
 }
 
+/// `sprint:` holds one name or several.
+///
+/// An issue that rolls over belongs to the sprint it came from as well as the
+/// one it moved to — Jira's own field is a list for exactly that reason. One
+/// sprint is still written as a plain string, so a file that has only ever seen
+/// one reads exactly as it always did.
+mod sprint_field {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &[String], s: S) -> Result<S::Ok, S::Error> {
+        match value {
+            [one] => s.serialize_str(one),
+            many => s.collect_seq(many),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OneOrMany {
+            One(String),
+            Many(Vec<String>),
+        }
+        Ok(match Option::<OneOrMany>::deserialize(d)? {
+            None => Vec::new(),
+            Some(OneOrMany::One(one)) => vec![one],
+            Some(OneOrMany::Many(many)) => many,
+        })
+    }
+}
+
 /// Render a mention the way the file format spells it: `@[Name](id)`.
 pub fn format_user(user: Option<&crate::api::UserRef>) -> Option<String> {
     user.map(|u| format!("@[{}]({})", u.display_name, u.id))
@@ -244,6 +281,31 @@ jired:
             fm.custom.get("customfield_10456"),
             Some(&serde_json::json!({"value": "Platform"}))
         );
+    }
+
+    /// The field is a list, but a file with one sprint has to keep reading the
+    /// way it was written; and a file with several has to survive a round trip.
+    #[test]
+    fn one_sprint_stays_a_string_and_several_stay_a_list() {
+        let fm = Frontmatter::parse(SAMPLE).unwrap();
+        assert_eq!(fm.sprint, ["Sprint 42"]);
+        assert!(
+            fm.to_yaml().unwrap().contains("sprint: Sprint 42"),
+            "{}",
+            fm.to_yaml().unwrap()
+        );
+
+        let many = SAMPLE.replace("sprint: Sprint 42", "sprint:\n  - Sprint 41\n  - Sprint 42");
+        let fm = Frontmatter::parse(&many).unwrap();
+        assert_eq!(fm.sprint, ["Sprint 41", "Sprint 42"]);
+        let back = Frontmatter::parse(&fm.to_yaml().unwrap()).unwrap();
+        assert_eq!(back.sprint, ["Sprint 41", "Sprint 42"]);
+
+        // No sprint at all is the backlog, and writes nothing.
+        let none = SAMPLE.replace("sprint: Sprint 42\n", "");
+        let fm = Frontmatter::parse(&none).unwrap();
+        assert!(fm.sprint.is_empty());
+        assert!(!fm.to_yaml().unwrap().contains("sprint"));
     }
 
     #[test]

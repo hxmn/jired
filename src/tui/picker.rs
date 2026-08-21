@@ -41,12 +41,17 @@ pub enum Outcome {
     Continue,
     /// The user chose a row; `None` means they chose the "no value" row.
     Chose(Option<String>),
+    /// A multi-select list was confirmed, with everything ticked in it.
+    ChoseMany(Vec<String>),
     Cancel,
 }
 
 pub struct Picker {
     pub title: String,
     items: Vec<Item>,
+    /// Values ticked, for a list that takes several answers. `None` for the
+    /// single-answer lists, which is most of them.
+    ticked: Option<Vec<String>>,
     /// Offered as the first row when the field is allowed to have no value.
     clearable: bool,
     filter: TextInput,
@@ -65,6 +70,7 @@ impl Picker {
         let mut picker = Self {
             title: title.into(),
             items,
+            ticked: None,
             clearable,
             filter: TextInput::line(""),
             matches: Vec::new(),
@@ -73,6 +79,49 @@ impl Picker {
         };
         picker.refilter();
         picker
+    }
+
+    /// A list that answers with several values rather than one.
+    ///
+    /// Space ticks a row, enter confirms the lot. Used where the underlying
+    /// field genuinely holds a set — the sprints an issue has been through —
+    /// rather than one value out of many.
+    pub fn multi(title: impl Into<String>, items: Vec<Item>, ticked: Vec<String>) -> Self {
+        let mut picker = Self::new(title, items, false);
+        picker.ticked = Some(ticked);
+        picker
+    }
+
+    pub fn is_multi(&self) -> bool {
+        self.ticked.is_some()
+    }
+
+    /// Whether a row is ticked, for the renderer to draw its box.
+    pub fn is_ticked(&self, item: &Item) -> bool {
+        self.ticked
+            .as_ref()
+            .is_some_and(|t| t.iter().any(|v| v == &item.value))
+    }
+
+    fn toggle(&mut self) {
+        let Some(&index) = self.matches.get(self.selected) else {
+            return;
+        };
+        if index == CLEAR {
+            return;
+        }
+        let value = self.items[index].value.clone();
+        let Some(ticked) = self.ticked.as_mut() else {
+            return;
+        };
+        match ticked.iter().position(|v| v == &value) {
+            Some(at) => {
+                ticked.remove(at);
+            }
+            // Kept in the order they were ticked, which for sprints is the
+            // order they happened.
+            None => ticked.push(value),
+        }
     }
 
     pub fn filter(&self) -> &TextInput {
@@ -133,6 +182,24 @@ impl Picker {
     }
 
     pub fn handle(&mut self, key: KeyEvent) -> Outcome {
+        // A multi-select answers with everything ticked, and space is what ticks.
+        if let Some(ticked) = &self.ticked {
+            match key.code {
+                KeyCode::Esc => return Outcome::Cancel,
+                KeyCode::Enter => return Outcome::ChoseMany(ticked.clone()),
+                KeyCode::Char(' ') if self.filter.is_empty() => {
+                    self.toggle();
+                    return Outcome::Continue;
+                }
+                KeyCode::Tab => {
+                    // With a filter typed, space belongs to the filter; tab is
+                    // the way to tick without clearing what was typed.
+                    self.toggle();
+                    return Outcome::Continue;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Esc => return Outcome::Cancel,
             KeyCode::Enter => {
@@ -344,6 +411,54 @@ mod tests {
             Picker::new("Parent", issues(), false).handle(key(KeyCode::Esc)),
             Outcome::Cancel
         ));
+    }
+
+    /// Sprints are a set, so the list that edits them has to be one too.
+    #[test]
+    fn a_multi_select_ticks_rows_and_answers_with_all_of_them() {
+        let items = vec![
+            Item::new("Sprint 42"),
+            Item::new("Sprint 43"),
+            Item::new("Sprint 44"),
+        ];
+        let mut picker = Picker::multi("Sprints", items, vec!["Sprint 42".into()]);
+        assert!(picker.is_multi());
+        assert!(picker.is_ticked(&Item::new("Sprint 42")));
+        assert!(!picker.is_ticked(&Item::new("Sprint 43")));
+
+        // Space ticks the selected row; the list stays open.
+        picker.handle(key(KeyCode::Down));
+        assert!(matches!(
+            picker.handle(key(KeyCode::Char(' '))),
+            Outcome::Continue
+        ));
+        match picker.handle(key(KeyCode::Enter)) {
+            Outcome::ChoseMany(values) => assert_eq!(values, ["Sprint 42", "Sprint 43"]),
+            _ => panic!("a multi-select answers with every ticked value"),
+        }
+
+        // Ticking something already ticked takes it off again.
+        picker.handle(key(KeyCode::Up));
+        picker.handle(key(KeyCode::Char(' ')));
+        match picker.handle(key(KeyCode::Enter)) {
+            Outcome::ChoseMany(values) => assert_eq!(values, ["Sprint 43"]),
+            _ => panic!("a multi-select answers with every ticked value"),
+        }
+    }
+
+    /// Space types a space while filtering, so tab is what ticks then.
+    #[test]
+    fn a_typed_filter_keeps_the_space_bar_and_tab_ticks_instead() {
+        let items = vec![Item::new("Sprint 42"), Item::new("Sprint 43")];
+        let mut picker = Picker::multi("Sprints", items, Vec::new());
+        typed(&mut picker, "sprint 4");
+        assert_eq!(picker.filter().value(), "sprint 4");
+
+        picker.handle(key(KeyCode::Tab));
+        match picker.handle(key(KeyCode::Enter)) {
+            Outcome::ChoseMany(values) => assert_eq!(values, ["Sprint 42"]),
+            _ => panic!("tab ticks while a filter is typed"),
+        }
     }
 
     #[test]

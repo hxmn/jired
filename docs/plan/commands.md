@@ -118,10 +118,14 @@ Per-issue concurrency check (D8): stale → that issue fails (exit-5 contributio
 "pull first"), others proceed. Partial failure → exit 1 with per-issue results; base
 advances only for confirmed issues (durable `pending_op` journal). Lossy-region edit
 without `--allow-lossy` → exit 6.
-A sprint change is a board call (`POST /rest/agile/1.0/sprint/{id}/issue`, or
-`…/backlog/issue`), not a field update: the Sprint field is read-only on most
-instances. The name is resolved against the cached sprints, preferring an open
-one; a name no board knows is reported and not guessed at.
+`sprint:` is a list — an issue that rolls over stays in the sprint it came from
+— written as a plain string when there is only one. Its last entry is where the
+issue is now, and the only part a push can act on: a change to it is a board call
+(`POST /rest/agile/1.0/sprint/{id}/issue`, or `…/backlog/issue`), not a field
+update, because the Sprint field is read-only on most instances. The name is
+resolved against the cached sprints, preferring an open one; a name no board
+knows is reported and not guessed at, and an edit to the earlier entries is
+reported as history that cannot be rewritten.
 JSON: `{"schema":"jired/push/1","results":[{"key":"PROJ-1","ok":true,"ops":[…]},{"key":"NEW-x7f3a2","ok":true,"new_key":"PROJ-201"}]}`.
 
 ### `jired diff`
@@ -169,9 +173,10 @@ components, sprint, story points, parent, description — the fields a push can
 actually send, and no others, so nothing offered is silently dropped. The
 assignee field completes as you type: a name becomes the `@[Name](id)` mention
 the file wants, tab takes the suggestion, and saving a name that matches nobody
-is refused rather than sent. The sprint field offers the sprint running now, the
-ones queued behind it, and the backlog; whichever sprint the issue is already in
-is always among them, even if it has closed. Options come from
+is refused rather than sent. The sprint field is a ticked list — space toggles, or tab while
+filtering — offering the sprint running now, the ones queued behind it, and
+whichever sprints the issue is already in, closed ones included. Ticking none of
+them is the backlog. Options come from
 the workspace's own snapshots (statuses and types it uses, people it has seen,
 its issues as parents), never from the network. Saving writes the file, renaming
 it when the summary changed; the change then behaves like any other local edit —

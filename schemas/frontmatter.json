@@ -4,36 +4,139 @@
   "title": "jired issue frontmatter",
   "description": "YAML header of an issue Markdown file. Fields marked readOnly are informational; local edits to them are ignored with a warning, except key and id which are an error to change.",
   "type": "object",
-  "required": ["key", "id", "type", "status", "summary", "url", "jired"],
+  "required": [
+    "key",
+    "id",
+    "type",
+    "status",
+    "summary",
+    "url",
+    "jired"
+  ],
   "properties": {
-    "key": { "type": "string", "readOnly": true, "examples": ["PROJ-142"] },
-    "id": { "type": "string", "readOnly": true },
-    "type": { "type": "string" },
-    "status": { "type": "string" },
-    "priority": { "type": ["string", "null"] },
-    "summary": { "type": "string" },
-    "labels": { "type": "array", "items": { "type": "string" } },
-    "components": { "type": "array", "items": { "type": "string" } },
-    "assignee": { "type": ["string", "null"] },
-    "reporter": { "type": ["string", "null"], "readOnly": true },
-    "created": { "type": "string", "format": "date-time", "readOnly": true },
-    "updated": { "type": "string", "format": "date-time", "readOnly": true },
-    "sprint": { "type": ["string", "null"] },
-    "parent": { "type": ["string", "null"] },
-    "epic": { "type": ["string", "null"] },
-    "fix_versions": { "type": "array", "items": { "type": "string" } },
-    "affects_versions": { "type": "array", "items": { "type": "string" } },
+    "key": {
+      "type": "string",
+      "readOnly": true,
+      "examples": [
+        "PROJ-142"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "readOnly": true
+    },
+    "type": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "priority": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assignee": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reporter": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "readOnly": true
+    },
+    "created": {
+      "type": "string",
+      "format": "date-time",
+      "readOnly": true
+    },
+    "updated": {
+      "type": "string",
+      "format": "date-time",
+      "readOnly": true
+    },
+    "sprint": {
+      "description": "Sprints the issue belongs to, oldest first. One sprint is written as a string, several as a list; absent means the backlog.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parent": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "epic": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fix_versions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "affects_versions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "links": {
       "type": "array",
       "description": "Typed issue links as single-entry maps of link type to issue key",
       "items": {
         "type": "object",
         "minProperties": 1,
-        "additionalProperties": { "type": "string" }
+        "additionalProperties": {
+          "type": "string"
+        }
       }
     },
-    "url": { "type": "string", "readOnly": true },
-    "story_points": { "type": ["number", "null"] },
+    "url": {
+      "type": "string",
+      "readOnly": true
+    },
+    "story_points": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "custom": {
       "type": "object",
       "description": "Unmapped custom fields keyed by field id; round-tripped untouched",
@@ -42,12 +145,29 @@
     "jired": {
       "type": "object",
       "readOnly": true,
-      "required": ["base_updated", "content_hash", "lossy"],
+      "required": [
+        "base_updated",
+        "content_hash",
+        "lossy"
+      ],
       "properties": {
-        "base_updated": { "type": "string", "format": "date-time" },
-        "base_version": { "type": ["integer", "null"] },
-        "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-        "lossy": { "type": "boolean" }
+        "base_updated": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "base_version": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "lossy": {
+          "type": "boolean"
+        }
       }
     }
   }

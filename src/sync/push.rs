@@ -538,7 +538,7 @@ fn create_issue(
     // A sprint is not part of the create call: the field is read-only on most
     // instances, so the issue is created first and moved second. A move that
     // fails is worth saying out loud but not worth failing a created issue for.
-    if let Some(name) = &doc.frontmatter.sprint {
+    if let Some(name) = doc.frontmatter.sprint.last() {
         match sprint_target(Some(name), &sprints) {
             Ok(target) => {
                 if let Err(e) = crate::api::block_on(
@@ -797,39 +797,54 @@ fn plan(
 
     // A sprint is not a field on most instances — the Sprint custom field is
     // read-only — so moving between sprints is its own board call.
+    //
+    // The list is a history: the sprints an issue has been through, the last of
+    // them being where it is now. A board move can only change that last one,
+    // which is the only part of the list a person can act on anyway.
     if bf.sprint != wf.sprint {
-        match sprint_target(wf.sprint.as_deref(), sprints) {
-            Ok(target) => {
-                let (path, label) = match &target {
-                    Some(id) => (
-                        format!("/rest/agile/1.0/sprint/{id}/issue"),
-                        wf.sprint.clone().unwrap_or_default(),
-                    ),
-                    None => (
-                        "/rest/agile/1.0/backlog/issue".to_string(),
-                        "the backlog".to_string(),
-                    ),
-                };
-                ops.push(Op {
-                    kind: "move_sprint",
-                    summary: format!(
-                        "{} → {label}",
-                        bf.sprint.as_deref().unwrap_or("the backlog")
-                    ),
-                    request: json!({"method": "POST", "path": path,
-                                    "body": {"issues": ["{key}"]}}),
-                    action: Action::MoveSprint { sprint: target },
-                });
-            }
-            Err(known) => warnings.push(format!(
-                "`{}` is not a sprint this workspace knows{}; the change was not sent",
-                wf.sprint.as_deref().unwrap_or(""),
-                if known.is_empty() {
-                    String::new()
-                } else {
-                    format!(" (it has {})", known.join(", "))
+        let (before, after) = (bf.sprint.last(), wf.sprint.last());
+        if before != after {
+            match sprint_target(after.map(String::as_str), sprints) {
+                Ok(target) => {
+                    let (path, label) = match &target {
+                        Some(id) => (
+                            format!("/rest/agile/1.0/sprint/{id}/issue"),
+                            after.cloned().unwrap_or_default(),
+                        ),
+                        None => (
+                            "/rest/agile/1.0/backlog/issue".to_string(),
+                            "the backlog".to_string(),
+                        ),
+                    };
+                    ops.push(Op {
+                        kind: "move_sprint",
+                        summary: format!(
+                            "{} → {label}",
+                            before.map(String::as_str).unwrap_or("the backlog")
+                        ),
+                        request: json!({"method": "POST", "path": path,
+                                        "body": {"issues": ["{key}"]}}),
+                        action: Action::MoveSprint { sprint: target },
+                    });
                 }
-            )),
+                Err(known) => warnings.push(format!(
+                    "`{}` is not a sprint this workspace knows{}; the change was not sent",
+                    after.map(String::as_str).unwrap_or(""),
+                    if known.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (it has {})", known.join(", "))
+                    }
+                )),
+            }
+        } else {
+            // Only the earlier entries moved. Which sprints an issue has been
+            // through is the server's record of what happened, and no API lets
+            // it be rewritten.
+            warnings.push(format!(
+                "{}: sprint history cannot be changed; only the sprint it is in now",
+                bf.key
+            ));
         }
     }
 

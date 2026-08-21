@@ -67,7 +67,8 @@ impl Screen for PickScreen {
         }
         match self.picker.handle(key) {
             Outcome::Continue => Flow::Continue,
-            Outcome::Cancel | Outcome::Chose(None) => Flow::Cancel,
+            // One issue is being chosen, so the many-value answer cannot arrive.
+            Outcome::Cancel | Outcome::Chose(None) | Outcome::ChoseMany(_) => Flow::Cancel,
             // A filter that matched nothing is taken at face value by the
             // picker; the caller decides whether such a key exists.
             Outcome::Chose(Some(value)) => Flow::Done(value),

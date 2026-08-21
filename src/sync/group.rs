@@ -87,7 +87,9 @@ pub fn regroup(engine: &Engine, root: &Path, options: &GroupOptions) -> Result<G
         if let Some(parent) = issue.fields.parent.or(issue.fields.epic) {
             by_parent.entry(parent).or_default().push(row.key.clone());
         }
-        if let Some(sprint) = issue.fields.sprint {
+        // An issue that rolled over is in both sprints, and belongs in both
+        // folders: the one it is in now, and the one someone is looking back at.
+        for sprint in issue.fields.sprint {
             by_sprint.entry(sprint).or_default().push(row.key.clone());
         }
     }

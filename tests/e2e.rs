@@ -2238,6 +2238,79 @@ fn clearing_the_sprint_moves_the_issue_to_the_backlog() {
     );
 }
 
+/// Jira's Sprint field is a list, and an issue that rolls over stays in the
+/// sprint it came from as well as the one it moved to.
+#[test]
+fn an_issue_in_several_sprints_keeps_all_of_them() {
+    let ws = Ws::new();
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["customfield_10020"] = serde_json::json!([
+            {"id": 41, "name": "Sprint 41", "state": "closed"},
+            {"id": 42, "name": "Sprint 42", "state": "active"},
+        ]);
+    });
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(ISSUE_FILE);
+    assert!(text.contains("sprint:\n- Sprint 41\n- Sprint 42"), "{text}");
+
+    // Both folders exist once closed sprints are asked for; only the open one
+    // before that.
+    assert!(ws.path().join("sprints/Sprint 42").is_dir());
+    assert!(!ws.path().join("sprints/Sprint 41").exists());
+    ws.json(&["config", "set", "sprints.include_closed", "true"]);
+    ws.json(&["clean", "--regroup"]);
+    assert!(
+        ws.path()
+            .join("sprints/Sprint 41")
+            .join(ISSUE_FILE)
+            .exists(),
+        "a rolled-over issue belongs in the sprint it came from too"
+    );
+
+    // Moving it on acts on the last sprint, which is where it is now.
+    let text = text.replace(
+        "sprint:\n- Sprint 41\n- Sprint 42",
+        "sprint:\n- Sprint 41\n- Sprint 42\n- Sprint 43",
+    );
+    ws.write(ISSUE_FILE, &text);
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = &dry["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "move_sprint");
+    assert_eq!(op["request"]["path"], "/rest/agile/1.0/sprint/43/issue");
+    assert_eq!(op["summary"], "Sprint 42 → Sprint 43");
+}
+
+/// Which sprints an issue has been through is the server's record of what
+/// happened; no API rewrites it, so nothing is sent and it is said out loud.
+#[test]
+fn editing_sprint_history_is_reported_rather_than_attempted() {
+    let ws = Ws::new();
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["customfield_10020"] = serde_json::json!([
+            {"id": 41, "name": "Sprint 41", "state": "closed"},
+            {"id": 42, "name": "Sprint 42", "state": "active"},
+        ]);
+    });
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(ISSUE_FILE).replace("- Sprint 41\n", "");
+    ws.write(ISSUE_FILE, &text);
+
+    let report = ws.json(&["push"]);
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("history")),
+        "{report}"
+    );
+    assert!(report["results"].as_array().unwrap().is_empty());
+}
+
 /// A name no board knows cannot be resolved to an id, and guessing would move
 /// the issue somewhere nobody asked for.
 #[test]

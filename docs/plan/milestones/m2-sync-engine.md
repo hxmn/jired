@@ -47,6 +47,8 @@ with a block marker becoming a table or list.
 - [x] A `sprint:` change is pushed as a board move (`/rest/agile/1.0/sprint/{id}/issue`), and clearing it moves the issue to the backlog
 - [x] The name is resolved against the cached sprints, preferring an open one over a closed one of the same name; an unknown name is reported rather than guessed
 - [x] A locally created issue that names a sprint is moved into it after it is created, since the field cannot be set on the create call
+- [x] `sprint:` holds every sprint the issue belongs to, oldest first — one as a string, several as a list — so an issue that rolled over reads correctly and appears in both sprint folders
+- [x] Only the last entry can be pushed; editing the earlier ones is reported as history that no API rewrites
 - **Done when:** a sprint change round-trips through push and pull on both deployments.
 
 ### M2.3a Editable custom fields

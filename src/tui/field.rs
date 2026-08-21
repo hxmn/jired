@@ -102,6 +102,8 @@ pub struct Field {
     pub detail: Option<String>,
     /// Marked in the label when the value no longer matches what was loaded.
     pub changed: bool,
+    /// Whether the field holds several values, ticked from its list.
+    pub multiple: bool,
     /// Whether typing offers the best matching item as a completion.
     ///
     /// For a field whose values are opaque — an assignee is stored as
@@ -122,6 +124,7 @@ impl Field {
             hint: String::new(),
             detail: None,
             changed: false,
+            multiple: false,
             suggest: false,
         }
     }
@@ -137,6 +140,7 @@ impl Field {
             hint: String::new(),
             detail: None,
             changed: false,
+            multiple: false,
             suggest: false,
         }
     }
@@ -153,6 +157,7 @@ impl Field {
             hint: String::new(),
             detail: None,
             changed: false,
+            multiple: false,
             suggest: false,
         }
     }
@@ -169,6 +174,12 @@ impl Field {
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = hint.into();
+        self
+    }
+
+    /// Hold several of the field's items rather than one of them.
+    pub fn multiple(mut self) -> Self {
+        self.multiple = true;
         self
     }
 

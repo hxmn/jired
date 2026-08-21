@@ -151,7 +151,9 @@ pub struct IssueFields {
     pub reporter: Option<UserRef>,
     pub created: Option<DateTime<Utc>>,
     pub updated: Option<DateTime<Utc>>,
-    pub sprint: Option<String>,
+    /// Sprints the issue belongs to, oldest first. Jira's field is a list: an
+    /// issue that rolls over stays in the sprint it came from.
+    pub sprint: Vec<String>,
     pub parent: Option<String>,
     pub epic: Option<String>,
     pub fix_versions: Vec<String>,

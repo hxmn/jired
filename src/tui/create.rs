@@ -243,7 +243,8 @@ impl CreateScreen {
                 picker::Outcome::Continue => {
                     self.overlay = Some(Overlay::Pick { field, picker });
                 }
-                picker::Outcome::Cancel => self.overlay = None,
+                // No field here takes several values, so this cannot arrive.
+                picker::Outcome::Cancel | picker::Outcome::ChoseMany(_) => self.overlay = None,
                 picker::Outcome::Chose(value) => {
                     self.fields[field].set(value.as_deref());
                     self.error = None;

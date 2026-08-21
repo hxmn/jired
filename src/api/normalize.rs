@@ -154,7 +154,8 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
             .sprint
             .as_ref()
             .and_then(|id| f.get(id))
-            .and_then(sprint_name),
+            .map(sprint_names)
+            .unwrap_or_default(),
         parent: f
             .get("parent")
             .and_then(|p| p.get("key"))
@@ -281,16 +282,22 @@ fn epic_key(f: &Value, map: &FieldMap) -> Option<String> {
         .flatten()
 }
 
+/// Every sprint the field names, in the order Jira lists them — oldest first,
+/// so the last one is where the issue is now.
+fn sprint_names(v: &Value) -> Vec<String> {
+    match v {
+        Value::Array(a) => a.iter().filter_map(sprint_name).collect(),
+        Value::Null => Vec::new(),
+        other => sprint_name(other).into_iter().collect(),
+    }
+}
+
 /// Data Center returns sprints as `...Sprint@1[id=5,name=Sprint 42,...]`.
 fn sprint_name(v: &Value) -> Option<String> {
-    let last = match v {
-        Value::Array(a) => a.last()?,
-        other => other,
-    };
-    if let Some(name) = last.get("name").and_then(Value::as_str) {
+    if let Some(name) = v.get("name").and_then(Value::as_str) {
         return Some(name.to_string());
     }
-    let s = last.as_str()?;
+    let s = v.as_str()?;
     let start = s.find("name=")? + 5;
     let rest = &s[start..];
     let end = rest.find(',').unwrap_or(rest.len());
@@ -536,7 +543,7 @@ mod tests {
         assert_eq!(issue.fields.assignee.unwrap().display_name, "Ilya A");
         assert_eq!(issue.fields.story_points, Some(5.0));
         assert_eq!(issue.fields.epic.as_deref(), Some("PROJ-90"));
-        assert_eq!(issue.fields.sprint.as_deref(), Some("Sprint 42"));
+        assert_eq!(issue.fields.sprint, ["Sprint 42"]);
         assert_eq!(issue.fields.fix_versions, ["2.4.0"]);
         assert_eq!(issue.comments.len(), 1);
         assert_eq!(issue.attachments[0].filename, "trace.har");
@@ -558,6 +565,26 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// An issue that rolled over belongs to both, and the one it is in now is
+    /// the last of them.
+    #[test]
+    fn every_sprint_the_issue_belongs_to_is_kept_in_order() {
+        let v = json!([
+            {"id": 41, "name": "Sprint 41", "state": "closed"},
+            {"id": 42, "name": "Sprint 42", "state": "active"}
+        ]);
+        assert_eq!(sprint_names(&v), ["Sprint 41", "Sprint 42"]);
+
+        // Data Center says the same thing in its own stringified way.
+        let dc = json!([
+            "com.atlassian...Sprint@1[id=41,state=CLOSED,name=Sprint 41,startDate=x]",
+            "com.atlassian...Sprint@2[id=42,state=ACTIVE,name=Sprint 42,startDate=y]"
+        ]);
+        assert_eq!(sprint_names(&dc), ["Sprint 41", "Sprint 42"]);
+
+        assert!(sprint_names(&json!(null)).is_empty());
     }
 
     #[test]
@@ -629,7 +656,7 @@ mod tests {
     #[test]
     fn data_center_stringified_sprint_is_parsed() {
         let v = json!(["com.atlassian.greenhopper.service.sprint.Sprint@6f2a[id=5,rapidViewId=3,state=ACTIVE,name=Sprint 42,startDate=2026-08-01]"]);
-        assert_eq!(sprint_name(&v).as_deref(), Some("Sprint 42"));
+        assert_eq!(sprint_names(&v), ["Sprint 42"]);
     }
 
     #[test]

@@ -473,7 +473,15 @@ pub fn render_picker(frame: &mut Frame, card: Rect, picker: &mut Picker) {
         };
         let line = match item {
             Some(item) => Line::from(vec![
-                Span::styled(format!(" {:<12}", item.label), style),
+                Span::styled(
+                    match (picker.is_multi(), picker.is_ticked(item)) {
+                        (false, _) => " ".to_string(),
+                        (true, true) => " [x] ".to_string(),
+                        (true, false) => " [ ] ".to_string(),
+                    },
+                    if *selected { style } else { theme::key() },
+                ),
+                Span::styled(format!("{:<12}", item.label), style),
                 Span::styled(
                     item.detail.clone(),
                     if *selected { style } else { theme::dim() },
