@@ -104,6 +104,13 @@ Values that do not collapse unambiguously (cascading selects, rich text, plugin
 structures) stay in their raw shape and are sent back verbatim. Deleting an entry
 under `custom:` clears that field.
 
+A field listed in `ignored_custom_fields` — by id or by the name the instance
+gives it — is left out of the file altogether rather than written empty, which
+would read as a clearing edit. Nothing is discarded: the value stays in the
+payload and in `state.db`, so the setting is reversible. `push` skips (and reports)
+an ignored field a file still carries, and `jired doctor` is what brings the files
+into line in either direction.
+
 ### `jired push`
 `jired push [ISSUE…] [--dry-run] [--force] [--allow-lossy] [--allow-comment-delete] [--resume]`
 Plans ops (D23 order), `--dry-run` prints exact API calls + diffs (human and JSON).
@@ -212,17 +219,25 @@ missing config defaults, settings that changed name (`checklist.done_transition`
 `creds.storage` says they belong (it moves them), filenames that predate a naming
 convention (this is the migration path for zero-padded issue numbers), issue files
 whose sections predate one — subtasks written under `## Checklist` move to
-`## Children`, and the checklist comes back from the last snapshot — database rows
-pointing at the wrong file, the `.gitignore` block, and the generated agent docs.
+`## Children`, and the checklist comes back from the last snapshot — custom fields
+that disagree with `ignored_custom_fields` (dropped from every file; restored from
+the last snapshot for a file that is still in sync, since after un-ignoring one it
+is the file that would read as having cleared the field), database rows pointing at
+the wrong file, the `.gitignore` block, and the generated agent docs.
 Renaming files re-links the grouping folders automatically; `--regroup` rebuilds them
 even when nothing was renamed. Idempotent. Exit 1 when something needs a human.
 JSON: `{"schema":"jired/doctor/1","checks":[{"name":"filenames","status":"fixed","detail":"…","changes":[{"from":"PROJ-9. x.md","to":"PROJ-0009. x.md"}]}],"fixed":1,"pending":0,"problems":0}`.
 
-### `jired config get|set|list [--global]`
+### `jired config get|set|add|remove|unset|list [--global]`
 TOML round-trip preserving comments (`toml_edit`); refuses to store secrets
 (points at `init`). Values with a fixed vocabulary (`creds.storage`,
 `server.deployment`, `auth.kind`, `links.mode`) are validated and canonicalised
-at set time; `list --all` prints each setting's documentation.
+at set time; `list --all` prints each setting's documentation. `add`/`remove`
+edit one value of a setting that holds a list (only `ignored_custom_fields`
+today), written as a TOML array and read back — and given in an environment
+variable — comma-separated; they build the new list from the file being edited,
+never from the resolved value, so a workspace list never silently absorbs the
+global one. `unset` drops the key, and the table it leaves empty with it.
 
 ### `jired whoami` · `jired projects|boards|sprints list [--refresh]`
 Cached + `--refresh`; table / JSON.

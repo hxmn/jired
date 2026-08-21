@@ -319,6 +319,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             &RenderContext {
                 markup,
                 base_url: &base_url,
+                ignored_custom: &fields.ignored,
             },
         )?
         .doc;
@@ -350,6 +351,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             &working,
             &base.raw,
             &field_meta,
+            &fields.ignored,
             fields.story_points.as_deref(),
             &sprints,
             markup,
@@ -575,11 +577,6 @@ fn create_issue(
     })
 }
 
-/// Plan the custom-field half of an update.
-///
-/// Comparison is done on the simplified form of both sides, so a file written
-/// before jired started collapsing these values does not read as an edit; and
-/// what goes out is rebuilt from the shape the server last sent.
 /// The sprint id to move into, `None` for the backlog, or the names this
 /// workspace does know when the one asked for is not among them.
 fn sprint_target(
@@ -610,18 +607,36 @@ fn sprint_target(
     }
 }
 
+/// Plan the custom-field half of an update.
+///
+/// Comparison is done on the simplified form of both sides, so a file written
+/// before jired started collapsing these values does not read as an edit; and
+/// what goes out is rebuilt from the shape the server last sent.
+#[allow(clippy::too_many_arguments)]
 fn plan_custom_fields(
     bf: &crate::doc::Frontmatter,
     wf: &crate::doc::Frontmatter,
     base_raw: &Value,
     field_meta: &std::collections::BTreeMap<String, crate::api::FieldMeta>,
+    ignored: &std::collections::BTreeSet<String>,
     engine: &Engine,
     fields: &mut serde_json::Map<String, Value>,
+    warnings: &mut Vec<String>,
 ) {
     let deployment = engine.account.deployment;
     let raw_of = |id: &str| base_raw.get("fields").and_then(|f| f.get(id));
 
     for (id, value) in &wf.custom {
+        // An ignored field is missing from base, so every push would otherwise
+        // read the file's leftover copy as a new value and send it back.
+        if ignored.contains(id) {
+            warnings.push(format!(
+                "{}: `{id}` is in ignored_custom_fields and was not pushed — \
+                 run `jired doctor` to take it out of the file",
+                bf.key
+            ));
+            continue;
+        }
         let before = bf.custom.get(id).map(crate::api::custom::simplify);
         if before.as_ref() == Some(&crate::api::custom::simplify(value)) {
             continue;
@@ -635,7 +650,7 @@ fn plan_custom_fields(
     // Deleting the entry is how a file says "clear this field"; leaving the
     // server value in place would make the file lie about the issue.
     for id in bf.custom.keys() {
-        if !wf.custom.contains_key(id) {
+        if !wf.custom.contains_key(id) && !ignored.contains(id) {
             fields.insert(id.clone(), Value::Null);
         }
     }
@@ -650,6 +665,7 @@ fn plan(
     // original shape of each custom field still exists.
     base_raw: &Value,
     field_meta: &std::collections::BTreeMap<String, crate::api::FieldMeta>,
+    ignored: &std::collections::BTreeSet<String>,
     story_points_field: Option<&str>,
     sprints: &[crate::store::state::SprintRow],
     markup: Markup,
@@ -747,7 +763,16 @@ fn plan(
             ),
         }
     }
-    plan_custom_fields(bf, wf, base_raw, field_meta, engine, &mut fields);
+    plan_custom_fields(
+        bf,
+        wf,
+        base_raw,
+        field_meta,
+        ignored,
+        engine,
+        &mut fields,
+        warnings,
+    );
 
     if !fields.is_empty() {
         let payload = Value::Object(fields);
@@ -1186,7 +1211,17 @@ fn rewrite_after_push(
     markup: Markup,
     base_url: &str,
 ) -> Result<()> {
-    let rendered = render_issue(issue, &RenderContext { markup, base_url })?;
+    // The issue just came back from the client, whose field map knows nothing
+    // about this workspace's config, so the ignore list is applied here.
+    let ignored = engine.field_map()?.ignored;
+    let rendered = render_issue(
+        issue,
+        &RenderContext {
+            markup,
+            base_url,
+            ignored_custom: &ignored,
+        },
+    )?;
     let mut doc = rendered.doc;
     doc.frontmatter.jired.content_hash = String::new();
     let provisional = doc.render()?;

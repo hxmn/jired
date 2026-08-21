@@ -25,6 +25,8 @@ pub struct FieldMap {
     pub checklist_text: Option<String>,
     pub checklist_progress: Option<String>,
     pub names: BTreeMap<String, String>,
+    /// Field ids the workspace has asked to keep out of issue files.
+    pub ignored: std::collections::BTreeSet<String>,
 }
 
 impl FieldMap {
@@ -59,7 +61,42 @@ impl FieldMap {
         map
     }
 
-    fn is_well_known(&self, id: &str) -> bool {
+    /// Note which fields `ignored_custom_fields` names.
+    ///
+    /// Entries are ids or display names, because an id is unmemorable and a
+    /// name is what the person reading the issue actually sees. Nothing is
+    /// dropped from the database by this — only from the file — so removing an
+    /// entry brings the field back on the next write.
+    pub fn ignore(&mut self, entries: &[String]) {
+        for entry in entries {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            self.ignored.extend(
+                self.names
+                    .iter()
+                    .filter(|(id, name)| {
+                        id.as_str() == entry || name.trim().eq_ignore_ascii_case(entry)
+                    })
+                    .map(|(id, _)| id.clone()),
+            );
+            // An id the instance never reported is still worth honouring: the
+            // field metadata may simply be older than the config.
+            if entry.starts_with("customfield_") {
+                self.ignored.insert(entry.to_string());
+            }
+        }
+    }
+
+    pub fn is_ignored(&self, id: &str) -> bool {
+        self.ignored.contains(id)
+    }
+
+    /// True when this field has a home of its own in the file — `story_points`,
+    /// `sprint`, `epic`, the checklist section — so it never belongs under
+    /// `custom:`, whatever an older jired wrote there.
+    pub fn is_well_known(&self, id: &str) -> bool {
         [
             &self.story_points,
             &self.epic_link,
@@ -549,6 +586,30 @@ mod tests {
         );
         assert!(!issue.fields.custom.contains_key("customfield_10205"));
         assert!(!issue.fields.custom.contains_key("customfield_10207"));
+    }
+
+    /// An id is unmemorable and a name is what the issue actually shows, so
+    /// `ignored_custom_fields` accepts either.
+    #[test]
+    fn fields_can_be_ignored_by_id_or_by_name() {
+        let mut map = field_map();
+        map.ignore(&[
+            "customfield_10456".into(),
+            "checklist progress".into(),
+            "customfield_19999".into(),
+            "  ".into(),
+        ]);
+        assert!(map.is_ignored("customfield_10456"));
+        // Matched by display name, case-insensitively.
+        assert!(map.is_ignored("customfield_10207"));
+        // An id this instance never reported: the config may outlive a rename.
+        assert!(map.is_ignored("customfield_19999"));
+        assert!(!map.is_ignored("customfield_10016"));
+
+        // Ignoring is about the file, not the payload: `custom` still carries
+        // the value, and only rendering leaves it out.
+        let issue = issue_from_json(&cloud_issue(), Markup::Adf, &map).unwrap();
+        assert!(issue.fields.custom.contains_key("customfield_10456"));
     }
 
     #[test]

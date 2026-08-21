@@ -47,7 +47,7 @@ pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
     ctx.lock()?;
     let key = crate::project::naming::key_from_input(&args.issue);
 
-    let engine = Engine::open(&ctx)?;
+    let engine = Engine::open(&mut ctx)?;
     let max_upload = ctx
         .resolver
         .get_u64("attachments.max_upload")?
@@ -109,8 +109,8 @@ pub fn run_attachments(g: &GlobalArgs, cmd: &AttachmentsCmd, out: Out) -> Result
 }
 
 fn list(g: &GlobalArgs, args: &AttachmentsListArgs, out: Out) -> Result<ExitCode> {
-    let ctx = Context::open(g, out)?;
-    let engine = Engine::open(&ctx)?;
+    let mut ctx = Context::open(g, out)?;
+    let engine = Engine::open(&mut ctx)?;
     let files = engine.projector.scan()?;
     let wanted: Vec<String> = args
         .issues
@@ -154,7 +154,7 @@ fn pull(g: &GlobalArgs, args: &AttachmentsPullArgs, out: Out) -> Result<ExitCode
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
 
-    let engine = Engine::open(&ctx)?;
+    let engine = Engine::open(&mut ctx)?;
     let client = engine.client(&mut ctx)?;
     let files = engine.projector.scan()?;
     let wanted: Vec<String> = args

@@ -175,6 +175,20 @@ pub const KEYS: &[KeyDef] = &[
               ticked (disabled when unset)",
     },
     KeyDef {
+        key: "ignored_custom_fields",
+        env: "JIRED_IGNORED_CUSTOM_FIELDS",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        doc: "Custom fields to keep out of issue files entirely, by id \
+              (customfield_10000) or by the name the instance gives them. A \
+              list in a config file, comma-separated in the environment; edit \
+              it with `jired config add`/`remove`. The values are still \
+              fetched and still in the database, so un-ignoring a field brings \
+              it back; `jired doctor` removes an ignored field from files that \
+              already carry it",
+    },
+    KeyDef {
         key: "links.mode",
         env: "JIRED_LINKS_MODE",
         flag: None,
@@ -196,12 +210,22 @@ pub const KEYS: &[KeyDef] = &[
     },
 ];
 
+/// Settings that hold several values rather than one.
+///
+/// They are the only keys `jired config add` and `remove` accept, and the only
+/// ones written to a config file as a TOML array.
+pub const LIST_KEYS: &[&str] = &["ignored_custom_fields"];
+
 pub fn lookup(key: &str) -> Option<&'static KeyDef> {
     KEYS.iter().find(|k| k.key == key)
 }
 
 pub fn is_secret(key: &str) -> bool {
     lookup(key).is_some_and(|k| k.sensitivity == Sensitivity::Secret)
+}
+
+pub fn is_list(key: &str) -> bool {
+    LIST_KEYS.contains(&key)
 }
 
 #[cfg(test)]
@@ -218,6 +242,15 @@ mod tests {
             assert!(envs.insert(k.env), "duplicate env var {}", k.env);
             assert!(k.env.starts_with("JIRED_"), "{} lacks JIRED_ prefix", k.env);
         }
+    }
+
+    #[test]
+    fn every_list_key_is_a_real_key() {
+        for key in LIST_KEYS {
+            assert!(lookup(key).is_some(), "{key} is not in KEYS");
+            assert!(is_list(key));
+        }
+        assert!(!is_list("server.url"));
     }
 
     #[test]

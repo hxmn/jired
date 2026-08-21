@@ -33,7 +33,7 @@ struct Orphan {
 pub fn run(g: &GlobalArgs, args: &CleanArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
-    let engine = Engine::open(&ctx)?;
+    let engine = Engine::open(&mut ctx)?;
 
     if args.regroup {
         // Grouping folders are views: throwing them away and rebuilding from

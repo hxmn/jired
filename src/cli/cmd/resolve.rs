@@ -38,7 +38,7 @@ pub struct ResolveArgs {
 
 pub fn run(g: &GlobalArgs, args: &ResolveArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let engine = Engine::open(&ctx)?;
+    let engine = Engine::open(&mut ctx)?;
 
     let wanted: Vec<String> = args
         .issues

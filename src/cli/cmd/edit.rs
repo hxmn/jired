@@ -42,7 +42,7 @@ pub fn run(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
 
-    let engine = Engine::open(&ctx)?;
+    let engine = Engine::open(&mut ctx)?;
     let wanted = match &args.issue {
         Some(issue) => issue.clone(),
         // Nothing named: let them find it. Typing a key from memory is the

@@ -3,7 +3,7 @@
 use crate::config::keys;
 use crate::error::{JiredError, Result};
 use std::path::{Path, PathBuf};
-use toml_edit::{DocumentMut, Item, Table, Value};
+use toml_edit::{Array, Decor, DocumentMut, Item, Table, Value};
 
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
@@ -62,6 +62,14 @@ impl ConfigFile {
             Item::Value(Value::Integer(i)) => Some(i.value().to_string()),
             Item::Value(Value::Boolean(b)) => Some(b.value().to_string()),
             Item::Value(Value::Float(f)) => Some(f.value().to_string()),
+            // A list reads back in the same comma-separated spelling its
+            // environment variable uses, so every layer agrees on one form.
+            Item::Value(Value::Array(a)) => Some(
+                a.iter()
+                    .filter_map(scalar_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
             _ => None,
         }
     }
@@ -91,6 +99,33 @@ impl ConfigFile {
         Ok(())
     }
 
+    /// Write a dotted key that holds several values, as a TOML array.
+    ///
+    /// A root-level key lands above the first table, which is where TOML needs
+    /// it to stay a root-level key.
+    pub fn set_list(&mut self, key: &str, values: &[String]) -> Result<()> {
+        let parts: Vec<&str> = key.split('.').collect();
+        let (last, tables) = parts.split_last().expect("non-empty key");
+        let mut item: &mut Item = self.doc.as_item_mut();
+        for part in tables {
+            if item.get(part).is_none() {
+                item[*part] = Item::Table(Table::new());
+            }
+            item = item.get_mut(part).expect("just inserted");
+        }
+        let mut array = Array::new();
+        for value in values {
+            array.push(value.as_str());
+        }
+        let mut value = Value::Array(array);
+        // A blank line after it, so a root-level list does not read as part of
+        // the table that follows it.
+        *value.decor_mut() = Decor::new(" ", "\n");
+        item[*last] = Item::Value(value);
+        self.document(key);
+        Ok(())
+    }
+
     /// Write a key and, unless it already carries one, prefix it with the
     /// setting's own documentation as a comment.
     ///
@@ -99,18 +134,20 @@ impl ConfigFile {
     /// change one value.
     pub fn set_documented(&mut self, key: &str, value: &str) -> Result<()> {
         self.set(key, value)?;
+        self.document(key);
+        Ok(())
+    }
+
+    /// Prefix a key already in the document with its own documentation.
+    fn document(&mut self, key: &str) {
         let Some(doc) = keys::lookup(key).map(|d| d.doc) else {
-            return Ok(());
+            return;
         };
         let parts: Vec<&str> = key.split('.').collect();
         let (last, tables) = parts.split_last().expect("non-empty key");
-        let mut item: &mut Item = self.doc.as_item_mut();
-        for part in tables {
-            match item.get_mut(part) {
-                Some(next) => item = next,
-                None => return Ok(()),
-            }
-        }
+        let Some(item) = walk_mut(self.doc.as_item_mut(), tables) else {
+            return;
+        };
         if let Some(mut key) = item.as_table_mut().and_then(|t| t.key_mut(last)) {
             let decor = key.leaf_decor_mut();
             let existing = decor.prefix().and_then(|p| p.as_str()).unwrap_or("");
@@ -118,7 +155,6 @@ impl ConfigFile {
                 decor.set_prefix(comment_block(doc, existing.starts_with('\n')));
             }
         }
-        Ok(())
     }
 
     pub fn unset(&mut self, key: &str) -> bool {
@@ -172,6 +208,17 @@ impl ConfigFile {
     pub fn save_to(&mut self, path: &Path) -> Result<()> {
         self.path = Some(path.to_path_buf());
         self.save()
+    }
+}
+
+/// The text of an array element, for the scalars a setting can hold.
+fn scalar_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.value().clone()),
+        Value::Integer(i) => Some(i.value().to_string()),
+        Value::Boolean(b) => Some(b.value().to_string()),
+        Value::Float(f) => Some(f.value().to_string()),
+        _ => None,
     }
 }
 
@@ -310,6 +357,41 @@ mod tests {
         assert!(cfg.unset("server.url"));
         assert!(cfg.get("server.url").is_none());
         assert!(!cfg.unset("server.url"));
+    }
+
+    /// A list is a TOML array in the file and a comma-separated string
+    /// everywhere else, so an environment variable and a config file can hold
+    /// the same setting without either side knowing which it came from.
+    #[test]
+    fn a_list_setting_writes_an_array_and_reads_back_comma_separated() {
+        let mut cfg = ConfigFile::from_toml("[server]\nurl = \"https://a\"\n").unwrap();
+        cfg.set_list(
+            "ignored_custom_fields",
+            &["customfield_10000".into(), "customfield_10001".into()],
+        )
+        .unwrap();
+
+        let text = cfg.to_toml();
+        assert!(
+            text.contains("ignored_custom_fields = [\"customfield_10000\", \"customfield_10001\"]"),
+            "{text}"
+        );
+        // A root key has to stay above the first table to remain a root key.
+        assert!(
+            text.find("ignored_custom_fields").unwrap() < text.find("[server]").unwrap(),
+            "{text}"
+        );
+        assert_eq!(
+            cfg.get("ignored_custom_fields").as_deref(),
+            Some("customfield_10000,customfield_10001")
+        );
+        // And it survives being written and read back.
+        let again = ConfigFile::from_toml(&text).unwrap();
+        assert_eq!(
+            again.get("ignored_custom_fields"),
+            cfg.get("ignored_custom_fields")
+        );
+        assert_eq!(again.get("server.url").as_deref(), Some("https://a"));
     }
 
     /// A leftover `[server]` reads like a setting that is still configured.

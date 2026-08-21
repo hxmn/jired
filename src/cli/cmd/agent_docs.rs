@@ -114,6 +114,14 @@ pub fn render() -> String {
          alone unless you know the field's format. Deleting an entry clears that \
          field on the next push.\n\n",
     );
+    s.push_str(
+        "A field nobody here works with can be left out of the files entirely: \
+         `jired config add ignored_custom_fields customfield_10000` (an id or the \
+         field's name), then `jired doctor` to take it out of the files that already \
+         carry it. Ignoring hides a field, it does not clear it — the value stays on \
+         the server and in the database, `push` refuses to send one, and removing the \
+         entry plus another `jired doctor` brings it back.\n\n",
+    );
 
     s.push_str("## Comments\n\n");
     s.push_str("- Existing: `### [c-10812] Jane Doe — 2026-08-15T10:32:00Z`. Edit the body below it to update the comment.\n");

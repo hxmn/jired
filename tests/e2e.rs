@@ -2820,13 +2820,18 @@ fn doctor_moves_an_old_checklist_section_into_children() {
     let file = Deployment::DataCenter.issue_file();
     let current = ws.read(file);
 
-    // What the same issue looked like when `## Checklist` meant the subtasks.
+    // What the same issue looked like when `## Checklist` meant the subtasks
+    // and the plugin's own field was just another opaque `custom:` entry.
     let head = current.find("## Checklist").unwrap();
     let tail = current.find("## Comments").unwrap();
     let old = format!(
         "{}## Checklist\n\n- [ ] DC-79 Update the connector config\n\n{}",
         &current[..head],
         &current[tail..]
+    )
+    .replace(
+        "custom:\n",
+        "custom:\n  customfield_10205: Checklist(id=793, issueId=20501, _items=[])\n",
     );
     ws.write(file, &old);
 
@@ -2850,8 +2855,10 @@ fn doctor_moves_an_old_checklist_section_into_children() {
     assert_eq!(ws.read(file), old);
 
     // The repair reproduces exactly what this build writes: the subtask under
-    // `## Children`, and the plugin's checklist back from the last snapshot.
+    // `## Children`, the plugin's checklist back from the last snapshot, and no
+    // `custom:` entry for a field that now has a section of its own.
     ws.json(&["doctor"]);
+    assert!(!ws.read(file).contains("customfield_10205"));
     assert_eq!(ws.read(file), current);
 
     // Byte-identical means in sync, so nothing is left looking edited.
@@ -2870,6 +2877,130 @@ fn doctor_moves_an_old_checklist_section_into_children() {
         .find(|c| c["name"] == "sections")
         .unwrap();
     assert_eq!(check["status"], "ok", "{again}");
+}
+
+/// A field nobody in this workspace cares about is noise in every file and a
+/// value every push has to reason about. `ignored_custom_fields` takes it out.
+#[test]
+fn an_ignored_custom_field_leaves_the_files_and_stays_out() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = Deployment::DataCenter.issue_file();
+    assert!(ws.read(file).contains("customfield_10300"));
+
+    let added = ws.json(&[
+        "config",
+        "add",
+        "ignored_custom_fields",
+        "customfield_10300",
+    ]);
+    assert_eq!(added["values"][0], "customfield_10300");
+    assert_eq!(added["changed"], true);
+
+    // The config file keeps it as a list, above the first table where a
+    // root-level key has to live.
+    let config = std::fs::read_to_string(ws.path().join(".jired").join("config.toml")).unwrap();
+    assert!(
+        config.contains("ignored_custom_fields = [\"customfield_10300\"]"),
+        "{config}"
+    );
+
+    // Doctor takes it out of the file that already carries it.
+    let report = ws.json(&["doctor"]);
+    let check = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "custom-fields")
+        .expect("doctor checks the ignored fields");
+    assert_eq!(check["status"], "fixed", "{report}");
+    assert_eq!(check["changes"][0]["from"], file);
+    assert!(!ws.read(file).contains("customfield_10300"));
+
+    // Removing it from the file is not an edit anyone has to push, and the
+    // field does not come back on the next pull either.
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+    ws.json(&["pull"]);
+    assert!(!ws.read(file).contains("customfield_10300"));
+
+    // Un-ignoring brings it back, because nothing was thrown away: the value
+    // was in the database the whole time. Doctor has to be the one to do it —
+    // otherwise the file would read as having deleted the field, and push
+    // would clear it on the server.
+    let removed = ws.json(&[
+        "config",
+        "remove",
+        "ignored_custom_fields",
+        "customfield_10300",
+    ]);
+    assert_eq!(removed["values"].as_array().unwrap().len(), 0);
+    ws.json(&["doctor"]);
+    assert!(
+        ws.read(file).contains("customfield_10300"),
+        "{}",
+        ws.read(file)
+    );
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+}
+
+/// Between ignoring a field and running doctor, the file still holds a copy
+/// that base no longer has. Push must not read that as an edit to send.
+#[test]
+fn an_ignored_field_left_in_a_file_is_reported_rather_than_pushed() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = Deployment::DataCenter.issue_file();
+
+    ws.json(&[
+        "config",
+        "add",
+        "ignored_custom_fields",
+        "customfield_10300",
+    ]);
+
+    // Push only looks at a file it has a reason to look at, so the leftover
+    // field only matters alongside a real edit — which is exactly when it would
+    // have been sent.
+    let text = ws.read(file).replace("priority: High", "priority: Low");
+    ws.write(file, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let warning = dry["warnings"][0].as_str().unwrap_or_default();
+    assert!(warning.contains("customfield_10300"), "{dry}");
+    assert!(warning.contains("ignored_custom_fields"), "{dry}");
+    let sent = dry["results"][0]["ops"][0]["request"]["body"]["fields"].clone();
+    assert!(sent.get("priority").is_some(), "{sent}");
+    assert!(sent.get("customfield_10300").is_none(), "{sent}");
+
+    // And once doctor has taken it out of the file there is nothing to warn
+    // about; the real edit still goes.
+    ws.json(&["doctor"]);
+    assert!(!ws.read(file).contains("customfield_10300"));
+    let dry = ws.json(&["push", "--dry-run"]);
+    assert!(dry["warnings"].as_array().unwrap().is_empty(), "{dry}");
+    let sent = dry["results"][0]["ops"][0]["request"]["body"]["fields"].clone();
+    assert!(sent.get("priority").is_some(), "{sent}");
+}
+
+/// `add` is for lists; saying it to a single-valued setting is a mistake worth
+/// catching where the typo is still on screen.
+#[test]
+fn config_add_refuses_a_setting_that_holds_one_value() {
+    let ws = Ws::new();
+    ws.init();
+    let err = ws.json_err(&["config", "add", "server.url", "https://x"], 2);
+    assert!(err["message"].as_str().unwrap().contains("single value"));
+    assert!(err["hint"].as_str().unwrap().contains("config set"));
+
+    let err = ws.json_err(&["config", "add", "nonsense.key", "x"], 2);
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("unknown config key"));
 }
 
 /// A setting that changed name is worse than a missing one: it reads as

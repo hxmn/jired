@@ -26,7 +26,7 @@ pub struct LogArgs {
 
 pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let engine = Engine::open(&ctx)?;
+    let engine = Engine::open(&mut ctx)?;
     let key = crate::project::naming::key_from_input(&args.issue);
 
     if engine.state.issue(&key)?.is_none() {

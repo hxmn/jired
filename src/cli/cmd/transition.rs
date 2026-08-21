@@ -31,7 +31,7 @@ pub fn run(g: &GlobalArgs, args: &TransitionArgs, out: Out) -> Result<ExitCode> 
 
     // Transitions depend on the issue's current status and the workflow, so
     // they can only come from the server.
-    let engine = Engine::open(&ctx)?;
+    let engine = Engine::open(&mut ctx)?;
     let client = engine.client(&mut ctx)?;
     let available = crate::api::block_on(client.transitions(&key))?;
 

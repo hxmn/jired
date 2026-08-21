@@ -147,6 +147,22 @@ impl Resolver {
             .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")))
     }
 
+    /// Resolve a setting that holds several values.
+    ///
+    /// One spelling everywhere: a TOML array in a config file, a
+    /// comma-separated string in an environment variable, and the same string
+    /// in `jired config get`. Precedence is unchanged — a list in the workspace
+    /// config replaces the global one rather than adding to it, because a
+    /// setting that silently accumulates across layers cannot be reasoned about
+    /// from any one file.
+    pub fn get_list(&mut self, key: &str) -> Result<Vec<String>> {
+        Ok(self
+            .get_value(key)?
+            .as_deref()
+            .map(split_list)
+            .unwrap_or_default())
+    }
+
     pub fn get_u64(&mut self, key: &str) -> Result<Option<u64>> {
         match self.get_value(key)? {
             Some(v) => v.parse::<u64>().map(Some).map_err(|_| {
@@ -285,6 +301,16 @@ impl ResolverBuilder {
     }
 }
 
+/// Split the comma-separated form of a list setting.
+pub fn split_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Settings that have a working value nobody needs to be asked for.
 ///
 /// `init` writes these into the workspace config verbatim, so the file spells
@@ -326,6 +352,36 @@ mod tests {
         fn prompt(&mut self, _k: &str, _d: &str, _s: bool) -> Result<Option<String>> {
             Ok(Some(self.0.to_string()))
         }
+    }
+
+    /// A setting that holds several values still has one spelling per layer.
+    #[test]
+    fn a_list_setting_resolves_from_either_spelling() {
+        let local = ConfigFile::from_toml(
+            "ignored_custom_fields = [\"customfield_10000\", \"customfield_10001\"]\n",
+        )
+        .unwrap();
+        let mut r = Resolver::builder().local(local).build();
+        assert_eq!(
+            r.get_list("ignored_custom_fields").unwrap(),
+            ["customfield_10000", "customfield_10001"]
+        );
+
+        // The environment says the same thing in the shape a shell can write.
+        let mut r = Resolver::builder()
+            .env_map(env(&[(
+                "JIRED_IGNORED_CUSTOM_FIELDS",
+                "customfield_10000, customfield_10001",
+            )]))
+            .build();
+        assert_eq!(
+            r.get_list("ignored_custom_fields").unwrap(),
+            ["customfield_10000", "customfield_10001"]
+        );
+
+        // Unset is an empty list, not an error: nothing is ignored by default.
+        let mut r = Resolver::builder().build();
+        assert!(r.get_list("ignored_custom_fields").unwrap().is_empty());
     }
 
     /// Each rung of the chain must win over every rung below it.

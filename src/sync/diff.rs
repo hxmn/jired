@@ -113,6 +113,7 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
     let rctx = RenderContext {
         markup,
         base_url: &base_url,
+        ignored_custom: &fields.ignored,
     };
     let files = engine.projector.scan()?;
     let wanted: Vec<String> = args

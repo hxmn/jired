@@ -248,6 +248,7 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
             &crate::sync::render::RenderContext {
                 markup: engine.markup(),
                 base_url: engine.base_url(),
+                ignored_custom: &field_map.ignored,
             },
         )?;
 

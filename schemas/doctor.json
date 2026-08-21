@@ -30,7 +30,7 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "layout, config, credentials, sections, filenames, state, gitignore, agent-docs, groups"
+            "description": "layout, config, credentials, sections, custom-fields, filenames, state, gitignore, agent-docs, groups"
           },
           "status": {
             "type": "string",

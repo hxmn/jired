@@ -144,7 +144,7 @@ links:                   # editable (typed issue links)
 url: https://x.atlassian.net/browse/PROJ-142   # RO
 story_points: 5          # editable (well-known custom field)
 custom:                  # unknown customs, round-trip untouched; edits pushed as-is
-  customfield_10456: {value: "Platform"}
+  customfield_10456: {value: "Platform"}   # unless listed in ignored_custom_fields
 jired:                   # RO sync block — local edits ignored with a warning
   base_updated: 2026-08-16T14:03:00Z
   base_version: 7

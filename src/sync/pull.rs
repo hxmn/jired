@@ -190,6 +190,7 @@ pub fn run_scoped(
     let render_ctx = RenderContext {
         markup,
         base_url: &base_url,
+        ignored_custom: &fields.ignored,
     };
 
     let files = engine.projector.scan()?;

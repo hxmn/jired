@@ -12,7 +12,7 @@ use crate::doc::{
 };
 use crate::error::Result;
 use crate::project::naming;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The document plus the lossy regions that must be stored alongside it.
 pub struct Rendered {
@@ -27,6 +27,18 @@ pub struct Rendered {
 pub struct RenderContext<'a> {
     pub markup: Markup,
     pub base_url: &'a str,
+    /// Custom-field ids `ignored_custom_fields` names. They are left out of the
+    /// file entirely — not emptied, which would push a clearing edit — while
+    /// the values stay in the database and in the server payload.
+    pub ignored_custom: &'a BTreeSet<String>,
+}
+
+impl RenderContext<'_> {
+    /// A context that ignores nothing, for callers with no workspace config.
+    pub fn none_ignored() -> &'static BTreeSet<String> {
+        static NONE: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+        NONE.get_or_init(BTreeSet::new)
+    }
 }
 
 /// Build the file contents for a freshly fetched issue.
@@ -139,6 +151,7 @@ fn build_frontmatter(issue: &RemoteIssue, ctx: &RenderContext<'_>, lossy: bool) 
         custom: f
             .custom
             .iter()
+            .filter(|(id, _)| !ctx.ignored_custom.contains(*id))
             .map(|(id, v)| (id.clone(), crate::api::custom::simplify(v)))
             .collect(),
         jired: SyncMeta {
@@ -262,6 +275,7 @@ mod tests {
         RenderContext {
             markup: Markup::Wiki,
             base_url: "https://x.atlassian.net",
+            ignored_custom: RenderContext::none_ignored(),
         }
     }
 
@@ -324,6 +338,39 @@ mod tests {
             ".PROJ-0142. Fix login flow/trace.har"
         );
         assert_eq!(r.doc.attachments[0].note, "2.1 MiB");
+    }
+
+    /// An ignored field is absent from the file, not present and empty: an
+    /// empty value would be read as "clear this field" on the next push.
+    #[test]
+    fn an_ignored_custom_field_never_reaches_the_file() {
+        let mut issue = issue();
+        issue
+            .fields
+            .custom
+            .insert("customfield_10456".into(), json!({"value": "Platform"}));
+        issue
+            .fields
+            .custom
+            .insert("customfield_10300".into(), json!("2026-08-20"));
+
+        let ignored: BTreeSet<String> = ["customfield_10456".to_string()].into_iter().collect();
+        let r = render_issue(
+            &issue,
+            &RenderContext {
+                markup: Markup::Wiki,
+                base_url: "https://x.atlassian.net",
+                ignored_custom: &ignored,
+            },
+        )
+        .unwrap();
+
+        assert!(!r.doc.frontmatter.custom.contains_key("customfield_10456"));
+        assert_eq!(
+            r.doc.frontmatter.custom.get("customfield_10300"),
+            Some(&json!("2026-08-20"))
+        );
+        assert!(!r.doc.render().unwrap().contains("customfield_10456"));
     }
 
     #[test]

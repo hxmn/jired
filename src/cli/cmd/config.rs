@@ -1,4 +1,4 @@
-//! `jired config get|set|list|unset` [M1.3].
+//! `jired config get|set|add|remove|list|unset` [M1.3].
 
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
@@ -6,6 +6,7 @@ use crate::config::keys;
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use clap::{Args, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCmd {
@@ -13,6 +14,10 @@ pub enum ConfigCmd {
     Get(GetArgs),
     /// Write a key to the workspace (or global) config file
     Set(SetArgs),
+    /// Append a value to a setting that holds a list
+    Add(AddArgs),
+    /// Take one value back out of a setting that holds a list
+    Remove(AddArgs),
     /// Remove a key from a config file
     Unset(UnsetArgs),
     /// Show every setting, its value, and where it came from
@@ -29,6 +34,15 @@ pub struct SetArgs {
     pub key: String,
     pub value: String,
     /// Write to the user-wide config instead of this workspace
+    #[arg(long)]
+    pub global: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AddArgs {
+    pub key: String,
+    pub value: String,
+    /// Edit the user-wide config instead of this workspace
     #[arg(long)]
     pub global: bool,
 }
@@ -93,20 +107,9 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
             // is still on screen, rather than at the next command that reads them.
             let value = normalize(&a.key, &a.value)?;
             let ctx = Context::open(g, out)?;
-            let mut file = if a.global {
-                ctx.global_config_file()?
-            } else {
-                ctx.local_config()?
-            };
+            let (mut file, path) = target_file(&ctx, a.global)?;
             file.set(&a.key, &value)?;
-            if a.global {
-                let path = ctx
-                    .global_config_path()
-                    .ok_or_else(|| JiredError::generic("no user config directory available"))?;
-                file.save_to(&path)?;
-            } else {
-                file.save_to(&ctx.workspace.config_path())?;
-            }
+            file.save_to(&path)?;
             out.say(format!("{} = {}", a.key, value));
             if a.key == "creds.storage" {
                 out.say("run `jired doctor` to move the stored credential there");
@@ -117,17 +120,12 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
                     if a.global {"global"} else {"local"}}),
             );
         }
+        ConfigCmd::Add(a) => edit_list(g, out, a, true)?,
+        ConfigCmd::Remove(a) => edit_list(g, out, a, false)?,
         ConfigCmd::Unset(a) => {
             check_key(&a.key)?;
             let ctx = Context::open(g, out)?;
-            let (mut file, path) = if a.global {
-                let path = ctx
-                    .global_config_path()
-                    .ok_or_else(|| JiredError::generic("no user config directory available"))?;
-                (ctx.global_config_file()?, path)
-            } else {
-                (ctx.local_config()?, ctx.workspace.config_path())
-            };
+            let (mut file, path) = target_file(&ctx, a.global)?;
             let removed = file.unset(&a.key);
             file.save_to(&path)?;
             out.say(if removed {
@@ -176,6 +174,94 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::Success)
+}
+
+/// The config file a write is aimed at, and where it will be saved.
+fn target_file(ctx: &Context, global: bool) -> Result<(crate::config::file::ConfigFile, PathBuf)> {
+    if global {
+        let path = ctx
+            .global_config_path()
+            .ok_or_else(|| JiredError::generic("no user config directory available"))?;
+        return Ok((ctx.global_config_file()?, path));
+    }
+    Ok((ctx.local_config()?, ctx.workspace.config_path()))
+}
+
+/// Add or remove one value of a list setting.
+///
+/// The file being edited is what the new list is built from, never the resolved
+/// value: adding a field to the workspace list must not silently copy the
+/// global one into it.
+fn edit_list(g: &GlobalArgs, out: Out, a: &AddArgs, add: bool) -> Result<()> {
+    check_key(&a.key)?;
+    if !keys::is_list(&a.key) {
+        return Err(
+            JiredError::usage(format!("`{}` holds a single value", a.key))
+                .with_detail("key", a.key.clone())
+                .with_hint(format!("use `jired config set {} <value>`", a.key)),
+        );
+    }
+    let value = a.value.trim().to_string();
+    if value.is_empty() || value.contains(',') {
+        return Err(
+            JiredError::usage("a list value cannot be empty or contain a comma")
+                .with_detail("value", a.value.clone())
+                .with_hint("add one value per command"),
+        );
+    }
+
+    let ctx = Context::open(g, out)?;
+    let (mut file, path) = target_file(&ctx, a.global)?;
+    let mut values = file
+        .get(&a.key)
+        .as_deref()
+        .map(crate::config::split_list)
+        .unwrap_or_default();
+
+    let changed = if add {
+        let missing = !values.contains(&value);
+        if missing {
+            values.push(value.clone());
+        }
+        missing
+    } else {
+        let before = values.len();
+        values.retain(|v| v != &value);
+        before != values.len()
+    };
+
+    file.set_list(&a.key, &values)?;
+    file.save_to(&path)?;
+
+    out.say(format!(
+        "{} = {}",
+        a.key,
+        if values.is_empty() {
+            "(empty)".to_string()
+        } else {
+            values.join(", ")
+        }
+    ));
+    if !changed {
+        out.say(if add {
+            format!("`{value}` was already there")
+        } else {
+            format!("`{value}` was not there")
+        });
+    } else if a.key == "ignored_custom_fields" {
+        out.say("run `jired doctor` to bring the issue files into line");
+    }
+    out.emit(
+        "config",
+        &serde_json::json!({
+            "key": a.key,
+            "value": values.join(","),
+            "values": values,
+            "changed": changed,
+            "scope": if a.global {"global"} else {"local"},
+        }),
+    );
+    Ok(())
 }
 
 /// Validate a value against the vocabulary its setting accepts, returning the

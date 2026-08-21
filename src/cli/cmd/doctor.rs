@@ -88,6 +88,7 @@ pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
     // Section repairs rewrite files where they stand, so they run before
     // anything moves them.
     let sections = check_sections(&mut ctx, args)?;
+    let custom_fields = check_custom_fields(&mut ctx, args)?;
     // The filename pass decides where every issue ends up, so the database
     // check works from its result rather than from what is on disk right now —
     // otherwise a dry run would report the two repairs undoing each other.
@@ -101,6 +102,7 @@ pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
         check_config(&mut ctx, args)?,
         check_credentials(&mut ctx, args, g)?,
         sections,
+        custom_fields,
         filenames,
         check_state_paths(&ctx, args, &final_paths)?,
         check_gitignore(&ctx, args)?,
@@ -553,6 +555,143 @@ fn check_sections(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     );
     check.changes = changes;
     Ok(check)
+}
+
+/// Every issue file carries exactly the custom fields this workspace tracks.
+///
+/// `ignored_custom_fields` decides what gets written, and cannot reach back into
+/// files already on disk. Left as they are, those files are worse than untidy:
+/// base no longer has the field, so `push` reads the leftover copy as a value
+/// someone typed — and after a field is *un*-ignored the file is the one missing
+/// it, which reads as "clear this field on the server".
+///
+/// For a file that is exactly what jired last wrote, `custom:` is derived data
+/// and any disagreement with base is jired's own doing, so it is replaced
+/// outright — which also clears out fields a later version of jired learned to
+/// model elsewhere, such as the checklist plugin's. A file with local edits gets
+/// the safe half: an ignored field is removed, because it must not be pushed
+/// either way, and nothing is written over an edit that may have been meant.
+fn check_custom_fields(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
+    let projector = crate::project::Projector::new(ctx.workspace.root());
+    let files = projector.scan()?;
+    let state = StateStore::open(&ctx.workspace)?;
+    let Ok(engine) = crate::sync::Engine::open(ctx) else {
+        return Ok(ok("custom-fields", "no account yet"));
+    };
+    let field_map = engine.field_map()?;
+    let render_ctx = crate::sync::render::RenderContext {
+        markup: engine.markup(),
+        base_url: engine.base_url(),
+        ignored_custom: &field_map.ignored,
+    };
+
+    let mut changes = Vec::new();
+    for (key, file) in &files {
+        let (Ok(text), Ok(mut doc)) = (
+            projector.read_raw(&file.relative),
+            projector.read(&file.relative),
+        ) else {
+            continue;
+        };
+        let in_sync = was_in_sync(&state, key, &text)?;
+
+        let wanted = if in_sync {
+            base_custom(&state, &render_ctx, engine.markup(), &field_map, key)?
+        } else {
+            let mut kept = doc.frontmatter.custom.clone();
+            // An ignored field must not be pushed, and a field that has a home
+            // of its own in the file was never a `custom:` entry a person
+            // wrote — both are safe to drop even from an edited file.
+            kept.retain(|id, _| !field_map.is_ignored(id) && !field_map.is_well_known(id));
+            kept
+        };
+        if wanted == doc.frontmatter.custom {
+            continue;
+        }
+
+        let dropped: Vec<&String> = doc
+            .frontmatter
+            .custom
+            .keys()
+            .filter(|id| !wanted.contains_key(*id))
+            .collect();
+        let restored: Vec<&String> = wanted
+            .keys()
+            .filter(|id| !doc.frontmatter.custom.contains_key(*id))
+            .collect();
+        let mut what = Vec::new();
+        if !dropped.is_empty() {
+            what.push(format!("dropping {}", join(&dropped)));
+        }
+        if !restored.is_empty() {
+            what.push(format!("restoring {}", join(&restored)));
+        }
+        if what.is_empty() {
+            // Same fields, different values: the file was in sync, so base is
+            // what it should have been showing.
+            what.push("refreshing the values".to_string());
+        }
+        doc.frontmatter.custom = wanted;
+
+        let rewritten = doc.render()?;
+        if !args.dry_run {
+            std::fs::write(projector.path_of(&file.relative), &rewritten)?;
+            if in_sync {
+                state.set_base_md_hash(key, &crate::store::state::content_hash(&rewritten))?;
+            }
+        }
+        changes.push(Change {
+            from: file.relative.clone(),
+            to: what.join("; "),
+        });
+    }
+
+    if changes.is_empty() {
+        return Ok(ok(
+            "custom-fields",
+            match engine.ignored_custom_fields.len() {
+                0 => format!("{} file(s) track every custom field", files.len()),
+                n => format!(
+                    "{} file(s) agree with the {n} ignored field(s)",
+                    files.len()
+                ),
+            },
+        ));
+    }
+    let mut check = repaired(
+        "custom-fields",
+        args.dry_run,
+        format!("correcting the custom fields of {} file(s)", changes.len()),
+    );
+    check.changes = changes;
+    Ok(check)
+}
+
+fn join(ids: &[&String]) -> String {
+    ids.iter()
+        .map(|id| id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The custom fields the last snapshot renders to, ignore list applied.
+fn base_custom(
+    state: &StateStore,
+    render_ctx: &crate::sync::render::RenderContext<'_>,
+    markup: crate::api::Markup,
+    field_map: &crate::api::normalize::FieldMap,
+    key: &str,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>> {
+    let Some(base) = state.issue(key)?.and_then(|row| row.base) else {
+        return Ok(Default::default());
+    };
+    let Ok(issue) = crate::api::normalize::issue_from_json(&base.raw, markup, field_map) else {
+        return Ok(Default::default());
+    };
+    Ok(crate::sync::render::render_issue(&issue, render_ctx)?
+        .doc
+        .frontmatter
+        .custom)
 }
 
 /// What the checklist plugin held for this issue the last time jired looked.

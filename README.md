@@ -145,6 +145,18 @@ jired config set creds.storage user_config --global   # one credential, every wo
 jired doctor                                          # move the existing one there
 ```
 
+A custom field nobody here works with can be kept out of the files entirely:
+
+```sh
+jired config add ignored_custom_fields customfield_10000   # an id, or the field's name
+jired doctor                                               # take it out of the files that have it
+```
+
+Ignoring hides a field; it never clears one. The value stays on the server and
+in the database, `push` refuses to send a copy left in a file, and
+`jired config remove ignored_custom_fields customfield_10000` followed by another
+`jired doctor` brings it back.
+
 See [docs/security.md](docs/security.md), which is explicit about what each
 store does and does not protect against.
 
@@ -174,9 +186,10 @@ jired doctor             # fix it
 
 It checks the `.jired/` layout and permissions, the config file, the stored
 credentials, filenames that predate a naming convention, issue files whose sections
-predate one (subtasks still under `## Checklist` move to `## Children`), database
-rows pointing at the wrong file, the `.gitignore` block and the generated agent
-docs — and repairs what it can. Run it after upgrading jired.
+predate one (subtasks still under `## Checklist` move to `## Children`), custom
+fields that disagree with `ignored_custom_fields`, database rows pointing at the
+wrong file, the `.gitignore` block and the generated agent docs — and repairs what
+it can. Run it after upgrading jired, and after changing what is ignored.
 
 ## Documentation
 

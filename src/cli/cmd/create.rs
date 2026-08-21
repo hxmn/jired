@@ -49,7 +49,7 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
 
-    let engine = Engine::open(&ctx)?;
+    let engine = Engine::open(&mut ctx)?;
     let key = new_key(&engine)?;
     // The template is the starting point for both the form and the flags-only
     // path, so it is read before either decides anything.

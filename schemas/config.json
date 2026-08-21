@@ -29,6 +29,17 @@
     },
     "removed": {
       "type": "boolean"
+    },
+    "values": {
+      "type": "array",
+      "description": "Every value of a list setting, after `config add`/`remove`",
+      "items": {
+        "type": "string"
+      }
+    },
+    "changed": {
+      "type": "boolean",
+      "description": "Whether `config add`/`remove` actually altered the list"
     }
   }
 }

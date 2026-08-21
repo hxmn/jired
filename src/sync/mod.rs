@@ -22,16 +22,20 @@ pub struct Engine {
     pub state: StateStore,
     pub projector: Projector,
     pub account: Account,
+    /// `ignored_custom_fields` as configured — ids or names, resolved against
+    /// the instance's field metadata by [`Engine::field_map`].
+    pub ignored_custom_fields: Vec<String>,
 }
 
 impl Engine {
-    pub fn open(ctx: &Context) -> Result<Self> {
+    pub fn open(ctx: &mut Context) -> Result<Self> {
         let session = SessionStore::open(&ctx.workspace)?;
         let account = session.require_account()?;
         Ok(Self {
             state: StateStore::open(&ctx.workspace)?,
             projector: Projector::new(ctx.workspace.root()),
             account,
+            ignored_custom_fields: ctx.resolver.get_list("ignored_custom_fields")?,
         })
     }
 
@@ -39,12 +43,16 @@ impl Engine {
         self.account.deployment.markup()
     }
 
-    /// Field definitions cached by the last fetch.
+    /// Field definitions cached by the last fetch, plus this workspace's
+    /// ignore list resolved against them.
     ///
     /// Every path that re-parses a stored snapshot must use this, or
-    /// instance-specific custom fields decay into unmapped `custom:` entries.
+    /// instance-specific custom fields decay into unmapped `custom:` entries
+    /// and ignored ones come back.
     pub fn field_map(&self) -> Result<crate::api::normalize::FieldMap> {
-        self.state.field_map()
+        let mut map = self.state.field_map()?;
+        map.ignore(&self.ignored_custom_fields);
+        Ok(map)
     }
 
     pub fn base_url(&self) -> &str {
