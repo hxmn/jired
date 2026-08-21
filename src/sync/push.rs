@@ -418,7 +418,7 @@ fn create_issue(
     let project = engine
         .state
         .new_issue_project(temp_key)?
-        .or_else(|| ctx.resolver.get_value("workspace.project").ok().flatten())
+        .or_else(|| ctx.resolver.get_quiet("workspace.project").ok().flatten())
         .ok_or_else(|| {
             JiredError::missing_value(format!("{temp_key} has no project"))
                 .with_hint("set workspace.project, or recreate the issue with --project")

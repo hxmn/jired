@@ -13,6 +13,7 @@ pub mod model;
 pub mod normalize;
 pub mod rest;
 pub mod scrub;
+pub mod tls;
 
 pub use client::{FieldSet, JiraApi, SearchPage, SearchQuery};
 pub use http::TlsOptions;
@@ -238,7 +239,7 @@ pub fn build_client(
         ca_path: account
             .tls_ca_path
             .clone()
-            .or(ctx.resolver.get_value("tls.ca_cert")?)
+            .or(ctx.resolver.get_quiet("tls.ca_cert")?)
             .map(Into::into),
         insecure: account.tls_insecure || ctx.resolver.get_bool("tls.insecure")?.unwrap_or(false),
     };

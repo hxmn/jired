@@ -11,9 +11,12 @@
 `JIRED_INSECURE`, plus standard `HTTPS_PROXY`/`NO_PROXY`.
 
 **Resolution chain (highest first):** CLI flag → `JIRED_*` env → `.jired/config.toml`
-→ `$XDG_CONFIG_HOME/jired/config.toml` → TUI prompt. `--no-input` (or non-TTY)
-disables the last rung; a missing required value then exits 7 with a JSON error on
-stderr.
+→ `$XDG_CONFIG_HOME/jired/config.toml` → built-in default → prompt. `--no-input` (or
+non-TTY) disables the last rung; a missing required value then exits 7 with a JSON
+error on stderr. Only `server.url`, `auth.email`, `auth.token` and
+`workspace.project` are ever prompted for: a setting with a default is answered by
+that default rather than by a question, so no command interrogates the user about
+TLS, link style or attachment limits.
 
 **Exit codes:** `0` ok · `1` generic · `2` usage · `3` auth · `4` network ·
 `5` conflict · `6` lossy blocked · `7` missing value (non-interactive) · `8` locked ·
@@ -30,11 +33,28 @@ their result document instead. Ordering is deterministic in all outputs.
 ## Commands
 
 ### `jired init`
-`jired init [--url U] [--auth api-token|pat|basic] [--project KEY] [--no-pull]`
-Auth → `GET /myself` verify → project picker (TUI) or `--project` → write `.jired/`,
-`config.toml`, `.gitignore` entry, `CLAUDE.md`/`AGENTS.md` → optional initial pull.
+`jired init [--url U] [--auth api-token|pat|basic] [--project KEY] [--no-pull] [--force]`
+Interactively a three-question wizard — URL, identity, project — and nothing else:
+
+* the URL decides the deployment (`*.atlassian.net`/`*.jira.com` → Cloud, anything
+  else → Data Center) and the deployment decides the credential (Cloud: email + API
+  token; Data Center: personal access token). The server's own `serverInfo` corrects
+  the guess before anything is written.
+* the token prompt links to the page that mints one, and offers to open it.
+* a failed sign-in re-asks rather than aborting: re-enter the token, switch
+  deployment, change the URL, or stop.
+* an untrusted TLS certificate is fetched and shown — subject, issuer, validity,
+  SHA-256 fingerprint — and pinned to `.jired/trusted-ca.pem` if the user accepts it
+  (trust-on-first-use). An expired or wrong-hostname certificate is reported as
+  unpinnable rather than half-trusted. Later runs reuse the pinned file silently.
+* the project picker lists keys, filters on typing, and accepts an empty answer as
+  "every project I can see".
+
+Then: `GET /myself` verify → `.jired/`, a fully documented `config.toml` (every
+setting, including the ones at their default), `.gitignore` entry,
+`CLAUDE.md`/`AGENTS.md` → optional initial pull.
 Errors: 3 bad creds; 7 missing url/token with `--no-input`.
-JSON: `{"schema":"jired/init/1","account":{…},"project":"PROJ"}`.
+JSON: `{"schema":"jired/init/1","account":{…,"tls":{…}},"workspace":{…},"pulled":{…}}`.
 Agent example:
 `jired init --url https://x.atlassian.net --email a@b.c --token "$JIRED_TOKEN" --project PROJ --no-input --json`
 
@@ -109,6 +129,15 @@ requires explicit flags, else exit 7.
 Removes orphaned files/symlinks/stubs (never dirty files without `--force`);
 `--regroup` rebuilds all grouping folders from `state.db` (they are never the
 source of truth).
+
+### `jired doctor [--dry-run] [--regroup]`
+Checks a workspace over and repairs what it can: `.jired/` layout and permissions,
+missing config defaults, readable credentials, filenames that predate a naming
+convention (this is the migration path for zero-padded issue numbers), database rows
+pointing at the wrong file, the `.gitignore` block, and the generated agent docs.
+Renaming files re-links the grouping folders automatically; `--regroup` rebuilds them
+even when nothing was renamed. Idempotent. Exit 1 when something needs a human.
+JSON: `{"schema":"jired/doctor/1","checks":[{"name":"filenames","status":"fixed","detail":"…","changes":[{"from":"PROJ-9. x.md","to":"PROJ-0009. x.md"}]}],"fixed":1,"pending":0,"problems":0}`.
 
 ### `jired config get|set|list [--global]`
 TOML round-trip preserving comments (`toml_edit`); refuses to store secrets

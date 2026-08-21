@@ -34,8 +34,14 @@ init → pull → edit → status/diff → push --dry-run → push
 ```
 
 plus `comment`, `transition`, `assign`, `create`, `attach`,
-`attachments pull`, `log`, `search`, `resolve`, `clean`, `config`, `whoami`,
-`projects`/`boards`/`sprints`, `open`, `completion`, `schema` and `agent-docs`.
+`attachments pull`, `log`, `search`, `resolve`, `clean`, `doctor`, `config`,
+`whoami`, `projects`/`boards`/`sprints`, `open`, `completion`, `schema` and
+`agent-docs`.
+
+`init` is a line-based wizard rather than the planned TUI screen: it guesses the
+deployment from the URL, the credential from the deployment, offers to pin an
+untrusted TLS certificate after showing it, and writes a config file documenting
+every setting — so no later command has to ask the user anything.
 
 Guards that hold the design in place, each verified rather than asserted:
 

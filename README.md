@@ -14,12 +14,11 @@ markup) behind one interface.
 ```sh
 mkdir my-sprint && cd my-sprint
 
-jired init --url https://acme.atlassian.net \
-           --email you@acme.com --token "$JIRA_TOKEN" --project PROJ
+jired init               # asks for the URL, who you are, and which project
 
 jired status            # what's dirty, behind, or conflicted
 jired pull              # write issue files
-$EDITOR "PROJ-142. Fix login flow.md"
+$EDITOR "PROJ-0142. Fix login flow.md"
 jired diff              # confirm only the intended changes
 jired push --dry-run    # exact API calls, nothing sent
 jired push              # apply
@@ -83,11 +82,14 @@ Repro confirmed on staging.
 
 ## Attachments
 
-- [login-trace.har](.PROJ-142. Fix login flow/login-trace.har) (2.1 MiB)
+- [login-trace.har](.PROJ-0142. Fix login flow/login-trace.har) (2.1 MiB)
 ````
 
-The `PROJ-142.` prefix is the issue's identity; the rest of the filename is
-cosmetic and follows the summary. Blocks between `<!--jired:raw:…-->` markers are
+The `PROJ-0142.` prefix is the issue's identity; the rest of the filename is
+cosmetic and follows the summary. Issue numbers are zero-padded in filenames only,
+so a listing sorts `PROJ-0009` before `PROJ-0010`; the key everywhere else — the
+frontmatter, the CLI, the API — stays `PROJ-142`. `jired doctor` renames files that
+were written before this convention. Blocks between `<!--jired:raw:…-->` markers are
 Jira content Markdown cannot represent (panels, macros, media): leave them alone
 and they push back byte-identical; edit one and `push` stops with exit code 6.
 
@@ -110,7 +112,10 @@ and they push back byte-identical; edit one and `push` stops with exit code 6.
 ## Configuration
 
 Resolution order, highest first: CLI flag → `JIRED_*` environment variable →
-`.jired/config.toml` → `$XDG_CONFIG_HOME/jired/config.toml` → interactive prompt.
+`.jired/config.toml` → `$XDG_CONFIG_HOME/jired/config.toml` → built-in default →
+interactive prompt. `init` writes every setting into `.jired/config.toml` with its
+documentation as a comment, so the file is the whole picture; only the four values a
+person actually has to supply — URL, email, token, project — are ever prompted for.
 Run `jired config list --all` to see every setting, its value, and where it came
 from.
 
@@ -118,6 +123,18 @@ Credentials go to the OS keychain. Headless environments set `JIRED_SECRET_KEY`
 to a passphrase and jired stores an encrypted blob instead — see
 [docs/security.md](docs/security.md), which is explicit about what that does and
 does not protect against.
+
+## Repairing a workspace
+
+```sh
+jired doctor --dry-run   # what is wrong
+jired doctor             # fix it
+```
+
+It checks the `.jired/` layout and permissions, the config file, the stored
+credentials, filenames that predate a naming convention, database rows pointing at
+the wrong file, the `.gitignore` block and the generated agent docs — and repairs
+what it can. Run it after upgrading jired.
 
 ## Documentation
 

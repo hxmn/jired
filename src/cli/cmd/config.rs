@@ -158,11 +158,37 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
                     s.value.as_deref().unwrap_or("-"),
                     s.source
                 ));
+                // `--all` is what someone runs to find out what a setting is
+                // for, so that listing carries the documentation with it.
+                if a.all {
+                    for line in wrap(s.doc, 72) {
+                        out.say(format!("    {line}"));
+                    }
+                }
             }
             out.emit("config-list", &serde_json::json!({ "settings": settings }));
         }
     }
     Ok(ExitCode::Success)
+}
+
+/// Break documentation into lines that fit an ordinary terminal.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn check_key(key: &str) -> Result<()> {

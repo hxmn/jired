@@ -63,6 +63,7 @@ dirs = "6"
 walkdir = "2"
 unicode-segmentation = "1"
 is-terminal = "0.4"
+x509-parser = "0.18"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

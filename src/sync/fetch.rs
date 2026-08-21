@@ -65,7 +65,7 @@ pub fn run_with(
 
     // Boards and sprints drive the grouping folders; caching them here is what
     // lets `clean --regroup` rebuild without a network round trip.
-    if let Some(project) = ctx.resolver.get_value("workspace.project")? {
+    if let Some(project) = ctx.resolver.get_quiet("workspace.project")? {
         if let Err(e) = cache_agile(engine, client, &project) {
             tracing::debug!("agile metadata unavailable: {}", e.message);
         }
@@ -187,9 +187,11 @@ pub fn build_jql(
     } else if let Some(jql) = &args.jql {
         clauses.push(format!("({jql})"));
     } else {
+        // No prompt here: the error below names the flag and the setting, which
+        // is more use to both a person and a script than a bare `key:` prompt.
         let project = ctx
             .resolver
-            .get_value("workspace.project")?
+            .get_quiet("workspace.project")?
             .ok_or_else(|| {
                 JiredError::missing_value("no project or query to fetch")
                     .with_detail("key", "workspace.project")

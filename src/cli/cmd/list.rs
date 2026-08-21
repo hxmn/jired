@@ -55,7 +55,7 @@ pub fn run_boards(g: &GlobalArgs, args: &BoardsArgs, out: Out) -> Result<ExitCod
     let client = crate::api::build_client(&mut ctx, &account)?;
     let project = match &args.project {
         Some(p) => Some(p.clone()),
-        None => ctx.resolver.get_value("workspace.project")?,
+        None => ctx.resolver.get_quiet("workspace.project")?,
     };
     let boards = crate::api::block_on(client.boards(project.as_deref()))?;
     for b in &boards {

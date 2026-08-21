@@ -2,18 +2,20 @@
 
 ## File naming
 
-- `KEY. Summary.md`, e.g. `PROJ-142. Fix login flow.md`.
+- `KEY. Summary.md` with the issue number zero-padded to four digits,
+  e.g. `PROJ-0142. Fix login flow.md`, so a directory listing sorts numerically.
+  The padding is a filename convention only; the key stays `PROJ-142`.
 - Sanitization: strip `/\:*?"<>|` and control chars, collapse whitespace, trim
   trailing dots/spaces (Windows), cap at 120 chars with `…`.
 - Identity is the `KEY.` prefix (fallback: frontmatter `key`) — never the full name.
   Rename detection on pull/push matches by prefix so edits survive renames.
-- Attachments live in a hidden sibling folder: `.PROJ-142. Fix login flow/`;
+- Attachments live in a hidden sibling folder: `.PROJ-0142. Fix login flow/`;
   the folder rename tracks file renames.
 - Grouping folders (`by-parent/`, `sprints/`, `boards/`) are visible and can never
   collide with dot-prefixed attachment folders (D13). Sprint/board name collisions
   disambiguate with ` (id)`.
 
-## Example file — `PROJ-142. Fix login flow.md`
+## Example file — `PROJ-0142. Fix login flow.md`
 
 ````markdown
 ---
@@ -53,8 +55,8 @@ Fixed by rotating the IdP cert — see attached HAR.
 
 ## Attachments
 
-- [login-trace.har](.PROJ-142. Fix login flow/login-trace.har) (2.1 MiB)
-- [screenshot.png](.PROJ-142. Fix login flow/screenshot.png) (stub — run `jired attachments pull PROJ-142`)
+- [login-trace.har](.PROJ-0142. Fix login flow/login-trace.har) (2.1 MiB)
+- [screenshot.png](.PROJ-0142. Fix login flow/screenshot.png) (stub — run `jired attachments pull PROJ-142`)
 ````
 
 Fixed section order, parseable by heading: `# summary` → `## Description` →

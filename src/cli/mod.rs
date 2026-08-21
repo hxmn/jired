@@ -135,6 +135,8 @@ pub enum Command {
     Resolve(cmd::resolve::ResolveArgs),
     /// Remove orphaned files and regenerate grouping folders
     Clean(cmd::clean::CleanArgs),
+    /// Check the workspace over and repair what can be repaired
+    Doctor(cmd::doctor::DoctorArgs),
     /// Read and write configuration
     #[command(subcommand)]
     Config(cmd::config::ConfigCmd),
@@ -198,6 +200,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Search(a) => cmd::search::run(g, a, out),
         Command::Resolve(a) => cmd::resolve::run(g, a, out),
         Command::Clean(a) => cmd::clean::run(g, a, out),
+        Command::Doctor(a) => cmd::doctor::run(g, a, out),
         Command::Config(a) => cmd::config::run(g, a, out),
         Command::Whoami(a) => cmd::whoami::run(g, a, out),
         Command::Projects(a) => cmd::list::run_projects(g, a, out),

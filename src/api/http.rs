@@ -20,7 +20,7 @@ pub struct TlsOptions {
 impl TlsOptions {
     pub fn from_resolver(r: &mut Resolver) -> Result<Self> {
         Ok(Self {
-            ca_path: r.get_value("tls.ca_cert")?.map(PathBuf::from),
+            ca_path: r.get_quiet("tls.ca_cert")?.map(PathBuf::from),
             insecure: r.get_bool("tls.insecure")?.unwrap_or(false),
         })
     }
@@ -93,7 +93,7 @@ pub struct HttpClient {
 /// rustls needs exactly one process-wide crypto provider. jired picks `ring`
 /// so the build stays pure Rust; installing it is idempotent and racing
 /// installs are harmless because a second call simply loses.
-fn install_crypto_provider() {
+pub(crate) fn install_crypto_provider() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();

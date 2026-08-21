@@ -91,6 +91,36 @@ impl ConfigFile {
         Ok(())
     }
 
+    /// Write a key and, unless it already carries one, prefix it with the
+    /// setting's own documentation as a comment.
+    ///
+    /// `init` writes the whole settings surface this way, so the file it leaves
+    /// behind explains itself and nobody has to go looking for the docs to
+    /// change one value.
+    pub fn set_documented(&mut self, key: &str, value: &str) -> Result<()> {
+        self.set(key, value)?;
+        let Some(doc) = keys::lookup(key).map(|d| d.doc) else {
+            return Ok(());
+        };
+        let parts: Vec<&str> = key.split('.').collect();
+        let (last, tables) = parts.split_last().expect("non-empty key");
+        let mut item: &mut Item = self.doc.as_item_mut();
+        for part in tables {
+            match item.get_mut(part) {
+                Some(next) => item = next,
+                None => return Ok(()),
+            }
+        }
+        if let Some(mut key) = item.as_table_mut().and_then(|t| t.key_mut(last)) {
+            let decor = key.leaf_decor_mut();
+            let existing = decor.prefix().and_then(|p| p.as_str()).unwrap_or("");
+            if existing.trim().is_empty() {
+                decor.set_prefix(comment_block(doc, existing.starts_with('\n')));
+            }
+        }
+        Ok(())
+    }
+
     pub fn unset(&mut self, key: &str) -> bool {
         let parts: Vec<&str> = key.split('.').collect();
         let (last, tables) = parts.split_last().expect("non-empty key");
@@ -127,6 +157,28 @@ impl ConfigFile {
         self.path = Some(path.to_path_buf());
         self.save()
     }
+}
+
+/// Wrap documentation into `#` comment lines short enough to read in an editor.
+fn comment_block(doc: &str, leading_blank: bool) -> String {
+    const WIDTH: usize = 74;
+    let mut out = String::new();
+    if leading_blank {
+        out.push('\n');
+    }
+    let mut line = String::from("#");
+    for word in doc.split_whitespace() {
+        if line.len() + 1 + word.len() > WIDTH && line.len() > 1 {
+            out.push_str(&line);
+            out.push('\n');
+            line = String::from("#");
+        }
+        line.push(' ');
+        line.push_str(word);
+    }
+    out.push_str(&line);
+    out.push('\n');
+    out
 }
 
 /// Preserve types that round-trip: booleans and integers stay scalars.
@@ -185,6 +237,40 @@ mod tests {
         let toml = cfg.to_toml();
         assert!(toml.contains("insecure = true"), "{toml}");
         assert!(toml.contains("max_upload = 1024"), "{toml}");
+    }
+
+    /// The config file `init` leaves behind has to be readable without the
+    /// docs open in another window.
+    #[test]
+    fn documented_writes_explain_the_setting_they_set() {
+        let mut cfg = ConfigFile::empty();
+        cfg.set_documented("links.mode", "auto").unwrap();
+        let toml = cfg.to_toml();
+        assert!(toml.contains("mode = \"auto\""), "{toml}");
+        assert!(toml.contains("# How grouping folders point"), "{toml}");
+        assert!(
+            toml.lines().all(|l| l.chars().count() <= 78),
+            "comment lines must stay readable: {toml}"
+        );
+
+        // Re-writing the value keeps the comment, and never doubles it.
+        cfg.set_documented("links.mode", "stub").unwrap();
+        let toml = cfg.to_toml();
+        assert_eq!(
+            toml.matches("# How grouping folders point").count(),
+            1,
+            "{toml}"
+        );
+    }
+
+    #[test]
+    fn documented_writes_leave_a_users_own_comment_alone() {
+        let mut cfg =
+            ConfigFile::from_toml("[links]\n# mine, do not touch\nmode = \"stub\"\n").unwrap();
+        cfg.set_documented("links.mode", "auto").unwrap();
+        let toml = cfg.to_toml();
+        assert!(toml.contains("# mine, do not touch"), "{toml}");
+        assert!(!toml.contains("# How grouping folders"), "{toml}");
     }
 
     #[test]

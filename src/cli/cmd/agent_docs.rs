@@ -79,8 +79,8 @@ pub fn render() -> String {
 
     s.push_str("## Files and folders\n\n");
     s.push_str("| Path | Meaning |\n|---|---|\n");
-    s.push_str("| `PROJ-142. Summary.md` | One issue. The `PROJ-142.` prefix is its identity; the summary part is cosmetic. |\n");
-    s.push_str("| `.PROJ-142. Summary/` | Attachments for that issue. New files here are uploaded on push. |\n");
+    s.push_str("| `PROJ-0142. Summary.md` | One issue. The key prefix is its identity; the summary part is cosmetic. The number is zero-padded so files sort numerically — the key itself is `PROJ-142`, which is what the frontmatter and every command use. |\n");
+    s.push_str("| `.PROJ-0142. Summary/` | Attachments for that issue. New files here are uploaded on push. |\n");
     s.push_str("| `by-parent/`, `sprints/`, `boards/` | Grouping links, regenerated from the database. Never edit as source of truth. |\n");
     s.push_str("| `.jired/` | Machine state: credentials, sync database, logs. Never edit or commit. |\n\n");
 
@@ -112,6 +112,14 @@ pub fn render() -> String {
         "`## Checklist` lists subtasks as `- [ ] PROJ-143 Title`. Ticking a box applies a \
          done-transition only when `checklist.done_transition` is configured; otherwise it \
          is reported and ignored.\n\n",
+    );
+
+    s.push_str("## Repairing a workspace\n\n");
+    s.push_str(
+        "`jired doctor` checks the layout, the config file, the credentials, the filenames \
+         and the database, and repairs what it can; `jired doctor --dry-run` reports without \
+         changing anything. It is also the migration path when a naming convention changes, \
+         so run it after upgrading jired. It exits 1 when something needs a human.\n\n",
     );
 
     s.push_str("## Lossy regions\n\n");

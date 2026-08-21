@@ -59,7 +59,7 @@ sentinels so your own entries survive regeneration:
 re-checked and repaired on every open, so a careless `chmod` is corrected rather
 than tolerated.
 
-Attachment folders (`.PROJ-142. Summary/`) are **not** ignored: they hold issue
+Attachment folders (`.PROJ-0142. Summary/`) are **not** ignored: they hold issue
 content, and whether that belongs in your repository is your call.
 
 ## What never appears in output
@@ -88,11 +88,30 @@ Review the output before committing it. Scrubbing cannot know that
 
 ## TLS
 
-For a Data Center instance with a private CA:
+For a Data Center instance with a private CA, point jired at the bundle:
 
 ```sh
 jired --ca-cert /etc/ssl/corp-ca.pem status
 ```
+
+If you do not have one to hand, `jired init` asks once. When the handshake fails
+because the certificate is not trusted, it opens a second connection that accepts
+whatever the server sends — purely to *look* — and prints what arrived: subject,
+issuer, validity window, the hostnames it covers, and the SHA-256 fingerprint.
+Compare that fingerprint with what your Jira administrator publishes; nothing else
+in the exchange proves anything. Accepting it writes the certificate to
+`.jired/trusted-ca.pem` and pins it as a trust anchor **for that workspace only**.
+Every later command uses the pinned file without asking again, and verification
+stays on.
+
+Trust-on-first-use has an obvious hole: the first connection is the one an attacker
+would want to intercept, and a fingerprint nobody checks is a fingerprint nobody
+checked. It is offered because the honest alternative people reach for is
+`--insecure`, which is worse in every subsequent run as well as the first.
+
+A certificate that is expired or issued for a different hostname is **not** offered
+for pinning: trusting it would not make verification pass, and pretending otherwise
+would push the user toward `--insecure` anyway. jired says so and stops.
 
 `--insecure` disables verification entirely and prints a warning on **every**
 run, not just the one that configured it — a workspace set up that way months

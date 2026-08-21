@@ -14,6 +14,8 @@ pub const CONFIG_FILE: &str = "config.toml";
 pub const SESSION_DB: &str = "session.db";
 pub const STATE_DB: &str = "state.db";
 pub const LOCK_FILE: &str = "lock";
+/// Certificate the user chose to trust for this workspace during `init`.
+pub const TRUSTED_CA: &str = "trusted-ca.pem";
 pub const LOGS_DIR: &str = "logs";
 pub const TEMPLATES_DIR: &str = "templates";
 
@@ -74,6 +76,9 @@ impl Workspace {
     }
     pub fn lock_path(&self) -> PathBuf {
         self.state_dir().join(LOCK_FILE)
+    }
+    pub fn trusted_ca_path(&self) -> PathBuf {
+        self.state_dir().join(TRUSTED_CA)
     }
     pub fn logs_dir(&self) -> PathBuf {
         self.state_dir().join(LOGS_DIR)

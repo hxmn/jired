@@ -120,7 +120,11 @@ custom-field schema) has been observed yet.
 - **Done when:** the M1 test suite runs entirely from fixtures with no network.
 
 ### M1.13 `jired init`, `whoami`, `projects list`
-- [x] `init` flags-only flow (TUI wizard is M4): auth → verify → `--project` → persist → optional pull (`--no-pull`)
+- [x] `init` flags-only flow: auth → verify → `--project` → persist → optional pull (`--no-pull`)
+- [x] Line-based interactive wizard: URL → deployment and credential inferred → token page linked → project picker with filtering; a failed sign-in re-asks instead of aborting
+- [x] Trust-on-first-use for an unknown TLS certificate: shown in full, pinned to `.jired/trusted-ca.pem` only if accepted, never offered when pinning could not help
+- [x] Writes every setting into `.jired/config.toml` with its documentation, so only URL, email, token and project are ever prompted for anywhere in the CLI
+- [x] `jired doctor` repairs layout, config, filenames, database paths, gitignore and agent docs, and is the migration path when a naming convention changes
 - [x] Generates `CLAUDE.md`/`AGENTS.md` stubs (full content in M5)
 - [x] `whoami`, `projects list [--refresh]` with `--json`
 - **Done when:** `init --no-input --json` on a fresh dir + `pull` yields the acceptance checkout.

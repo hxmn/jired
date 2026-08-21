@@ -9,6 +9,7 @@ pub mod completion;
 pub mod config;
 pub mod create;
 pub mod diff;
+pub mod doctor;
 pub mod edit;
 pub mod fetch;
 pub mod init;

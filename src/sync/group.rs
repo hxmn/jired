@@ -107,10 +107,12 @@ pub fn regroup(engine: &Engine, root: &Path, options: &GroupOptions) -> Result<G
     for (parent, children) in &by_parent {
         // Name the folder after the parent's own file when we have it, so the
         // folder reads like the issue rather than like a key.
+        // A parent whose own file is not in the workspace still gets a folder;
+        // padding its key keeps those sorting with the rest.
         let label = files
             .get(parent)
             .map(|f| f.relative.trim_end_matches(".md").to_string())
-            .unwrap_or_else(|| parent.clone());
+            .unwrap_or_else(|| naming::padded_key(parent));
         let dir = root
             .join(naming::GROUP_PARENT)
             .join(naming::group_dir(&label, None));

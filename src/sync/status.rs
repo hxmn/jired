@@ -320,7 +320,7 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
     let last_fetch = engine.state.last_fetch_at()?;
     let workspace = WorkspaceStatus {
         root: ctx.workspace.root().display().to_string(),
-        project: ctx.resolver.get_value("workspace.project")?,
+        project: ctx.resolver.get_quiet("workspace.project")?,
         base_url: Some(engine.base_url().to_string()),
         deployment: Some(engine.account.deployment.as_str().to_string()),
         issues: rows.len(),

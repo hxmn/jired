@@ -3,11 +3,24 @@
 //! The `KEY.` prefix is the issue's identity; the summary that follows is
 //! cosmetic. Every lookup matches on the prefix, so renaming a file by hand or
 //! having the summary change on either side never loses the association.
+//!
+//! The number in that prefix is zero-padded, because `PROJ-9` sorts after
+//! `PROJ-10` in every file manager, shell glob and editor sidebar there is. The
+//! padding is a filename convention only: the key in the frontmatter, the
+//! database and the API stays `PROJ-9`, and [`key_from_file_name`] strips the
+//! padding back off. `jired doctor` renames files that predate the convention.
 
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Longest filename jired will produce, before the `.md` extension.
 pub const MAX_STEM: usize = 120;
+
+/// Digits an issue number is padded to inside a filename.
+///
+/// Four covers the first 9999 issues of a project, which is where sorting
+/// actually matters; beyond that names simply grow, and still sort correctly
+/// among themselves.
+pub const KEY_PAD: usize = 4;
 
 /// Characters no mainstream filesystem accepts in a name.
 const FORBIDDEN: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
@@ -58,8 +71,41 @@ pub fn truncate(text: &str, max: usize) -> String {
     format!("{}…", out.trim_end())
 }
 
-/// The file stem for an issue: `PROJ-142. Fix login flow`.
+/// `PROJ-142` → `PROJ-0142`, for use in filenames only.
+///
+/// Temporary `NEW-*` keys carry a hex suffix rather than an issue number and
+/// are left exactly as they are.
+pub fn padded_key(key: &str) -> String {
+    if crate::doc::is_temp_key(key) || !crate::doc::is_issue_key(key) {
+        return key.to_string();
+    }
+    let Some((project, number)) = key.split_once('-') else {
+        return key.to_string();
+    };
+    format!("{project}-{number:0>KEY_PAD$}")
+}
+
+/// `PROJ-0142` → `PROJ-142`: the key as Jira knows it.
+pub fn unpadded_key(key: &str) -> String {
+    if crate::doc::is_temp_key(key) {
+        return key.to_string();
+    }
+    let Some((project, number)) = key.split_once('-') else {
+        return key.to_string();
+    };
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+        return key.to_string();
+    }
+    let trimmed = number.trim_start_matches('0');
+    format!(
+        "{project}-{}",
+        if trimmed.is_empty() { "0" } else { trimmed }
+    )
+}
+
+/// The file stem for an issue: `PROJ-0142. Fix login flow`.
 pub fn file_stem(key: &str, summary: &str) -> String {
+    let key = &padded_key(key);
     let clean = sanitize(summary);
     let prefix = format!("{key}. ");
     let room = MAX_STEM.saturating_sub(prefix.chars().count());
@@ -87,8 +133,11 @@ pub fn attachment_dir(key: &str, summary: &str) -> String {
 pub fn key_from_file_name(name: &str) -> Option<String> {
     let stem = name.strip_suffix(".md").unwrap_or(name);
     let candidate = stem.split(['.', ' ']).next()?;
-    (crate::doc::is_issue_key(candidate) || crate::doc::is_temp_key(candidate))
-        .then(|| candidate.to_string())
+    if crate::doc::is_temp_key(candidate) {
+        return Some(candidate.to_string());
+    }
+    // Padded or not, the file names the same issue.
+    crate::doc::is_issue_key(candidate).then(|| unpadded_key(candidate))
 }
 
 /// Grouping folders are visible and fixed, so they can never collide with the
@@ -148,16 +197,47 @@ mod tests {
     fn file_stem_has_the_documented_shape() {
         assert_eq!(
             file_stem("PROJ-142", "Fix login flow"),
-            "PROJ-142. Fix login flow"
+            "PROJ-0142. Fix login flow"
         );
         assert_eq!(
             file_name("PROJ-142", "Fix login flow"),
-            "PROJ-142. Fix login flow.md"
+            "PROJ-0142. Fix login flow.md"
         );
         assert_eq!(
             attachment_dir("PROJ-142", "Fix login flow"),
-            ".PROJ-142. Fix login flow"
+            ".PROJ-0142. Fix login flow"
         );
+    }
+
+    /// The whole point of padding: a plain sort has to put 9 before 10.
+    #[test]
+    fn padded_names_sort_numerically() {
+        let mut names: Vec<String> = [7, 10, 9, 100, 1234]
+            .iter()
+            .map(|n| file_name(&format!("PROJ-{n}"), "x"))
+            .collect();
+        names.sort();
+        let keys: Vec<Option<String>> = names.iter().map(|n| key_from_file_name(n)).collect();
+        assert_eq!(
+            keys,
+            ["PROJ-7", "PROJ-9", "PROJ-10", "PROJ-100", "PROJ-1234"]
+                .iter()
+                .map(|k| Some(k.to_string()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn padding_is_a_filename_convention_and_round_trips() {
+        assert_eq!(padded_key("PROJ-9"), "PROJ-0009");
+        assert_eq!(padded_key("PROJ-12345"), "PROJ-12345");
+        assert_eq!(unpadded_key("PROJ-0009"), "PROJ-9");
+        assert_eq!(unpadded_key("PROJ-12345"), "PROJ-12345");
+        // A hex temp key is not a number and must survive untouched.
+        assert_eq!(padded_key("NEW-0052"), "NEW-0052");
+        assert_eq!(unpadded_key("NEW-0052"), "NEW-0052");
+        // Not a key at all.
+        assert_eq!(padded_key("notes"), "notes");
     }
 
     #[test]
@@ -165,7 +245,7 @@ mod tests {
         let stem = file_stem("PROJ-1", &"x".repeat(500));
         assert!(stem.chars().count() <= MAX_STEM, "{}", stem.chars().count());
         assert!(stem.ends_with('…'));
-        assert!(stem.starts_with("PROJ-1. "));
+        assert!(stem.starts_with("PROJ-0001. "));
     }
 
     #[test]
@@ -178,12 +258,17 @@ mod tests {
 
     #[test]
     fn an_empty_summary_still_yields_a_usable_name() {
-        assert_eq!(file_stem("PROJ-1", "   "), "PROJ-1");
-        assert_eq!(file_name("PROJ-1", ""), "PROJ-1.md");
+        assert_eq!(file_stem("PROJ-1", "   "), "PROJ-0001");
+        assert_eq!(file_name("PROJ-1", ""), "PROJ-0001.md");
     }
 
     #[test]
     fn key_is_recovered_from_any_summary_spelling() {
+        assert_eq!(
+            key_from_file_name("PROJ-0142. Fix login flow.md").as_deref(),
+            Some("PROJ-142")
+        );
+        // Files written before the padding convention still resolve.
         assert_eq!(
             key_from_file_name("PROJ-142. Fix login flow.md").as_deref(),
             Some("PROJ-142")

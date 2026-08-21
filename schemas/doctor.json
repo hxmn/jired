@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/doctor/1",
+  "title": "jired doctor result",
+  "type": "object",
+  "required": [
+    "schema",
+    "dry_run",
+    "checks",
+    "fixed",
+    "pending",
+    "problems"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/doctor/1"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "layout, config, credentials, filenames, state, gitignore, agent-docs, groups"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "fixed",
+              "would_fix",
+              "problem"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "from",
+                "to"
+              ],
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "fixed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pending": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Repairs a --dry-run run would have made"
+    },
+    "problems": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Findings doctor cannot repair; the command exits 1 when this is non-zero"
+    }
+  }
+}

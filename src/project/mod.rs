@@ -137,7 +137,8 @@ impl Projector {
         })
     }
 
-    fn rename(&self, from: &str, to: &str) -> Result<()> {
+    /// Move an issue file and its attachment folder to a new name.
+    pub fn rename(&self, from: &str, to: &str) -> Result<()> {
         let from_path = self.path_of(from);
         if from_path.exists() {
             std::fs::rename(&from_path, self.path_of(to))
@@ -175,7 +176,7 @@ impl Projector {
     }
 }
 
-/// `PROJ-1. Summary.md` → `.PROJ-1. Summary`
+/// `PROJ-0001. Summary.md` → `.PROJ-0001. Summary`
 fn dot_dir_of(file_name: &str) -> String {
     format!(".{}", file_name.strip_suffix(".md").unwrap_or(file_name))
 }
@@ -209,7 +210,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = Projector::new(dir.path());
         let out = p.write(&doc("PROJ-1", "First task"), None).unwrap();
-        assert_eq!(out.relative, "PROJ-1. First task.md");
+        assert_eq!(out.relative, "PROJ-0001. First task.md");
         assert!(out.changed);
 
         let back = p.read(&out.relative).unwrap();
@@ -252,8 +253,11 @@ mod tests {
         let second = p
             .write(&doc("PROJ-1", "New name"), Some(&first.relative))
             .unwrap();
-        assert_eq!(second.relative, "PROJ-1. New name.md");
-        assert_eq!(second.renamed_from.as_deref(), Some("PROJ-1. Old name.md"));
+        assert_eq!(second.relative, "PROJ-0001. New name.md");
+        assert_eq!(
+            second.renamed_from.as_deref(),
+            Some("PROJ-0001. Old name.md")
+        );
         assert!(!p.path_of(&first.relative).exists());
         assert!(
             p.attachment_dir(&second.relative)

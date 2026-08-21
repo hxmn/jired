@@ -43,6 +43,12 @@ pub struct KeyDef {
     /// Long flag name without leading dashes, if the value has one.
     pub flag: Option<&'static str>,
     pub sensitivity: Sensitivity,
+    /// Whether a missing value may be asked for at an interactive prompt.
+    ///
+    /// Only the four values a person genuinely has to supply are askable;
+    /// everything else has a sane default or a flag, and prompting for it would
+    /// turn every command into a questionnaire.
+    pub ask: bool,
     pub doc: &'static str,
 }
 
@@ -53,6 +59,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_URL",
         flag: Some("url"),
         sensitivity: Sensitivity::Plain,
+        ask: true,
         doc: "Base URL of the Jira instance (https://x.atlassian.net or https://jira.corp/jira)",
     },
     KeyDef {
@@ -60,6 +67,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_DEPLOYMENT",
         flag: Some("deployment"),
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Deployment kind: cloud or datacenter (probed automatically when unset)",
     },
     KeyDef {
@@ -67,6 +75,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_EMAIL",
         flag: Some("email"),
         sensitivity: Sensitivity::Plain,
+        ask: true,
         doc: "Account email (Jira Cloud API-token auth)",
     },
     KeyDef {
@@ -74,6 +83,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_AUTH",
         flag: Some("auth"),
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Authentication method: api-token, pat, or basic",
     },
     KeyDef {
@@ -81,6 +91,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_TOKEN",
         flag: Some("token"),
         sensitivity: Sensitivity::Secret,
+        ask: true,
         doc: "API token or personal access token (never written to config files)",
     },
     KeyDef {
@@ -88,6 +99,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_PROJECT",
         flag: Some("project"),
         sensitivity: Sensitivity::Plain,
+        ask: true,
         doc: "Default project key for fetch/pull scope",
     },
     KeyDef {
@@ -95,6 +107,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_PROFILE",
         flag: Some("profile"),
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Named account profile to use",
     },
     KeyDef {
@@ -102,6 +115,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_CA_CERT",
         flag: Some("ca-cert"),
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Path to an additional CA bundle (PEM) for self-signed Data Center instances",
     },
     KeyDef {
@@ -109,6 +123,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_INSECURE",
         flag: Some("insecure"),
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Disable TLS certificate verification (prints a warning on every run)",
     },
     KeyDef {
@@ -116,6 +131,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_NO_INPUT",
         flag: Some("no-input"),
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Never prompt; fail with exit code 7 when a required value is missing",
     },
     KeyDef {
@@ -123,6 +139,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_ATTACH_AUTO_MAX",
         flag: None,
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Attachments up to this size (bytes) are downloaded eagerly on pull",
     },
     KeyDef {
@@ -130,6 +147,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_ATTACH_MAX_UPLOAD",
         flag: None,
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Refuse to upload attachments larger than this size (bytes)",
     },
     KeyDef {
@@ -137,6 +155,7 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_CHECKLIST_DONE_TRANSITION",
         flag: None,
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Transition applied when a subtask checkbox is ticked (disabled when unset)",
     },
     KeyDef {
@@ -144,13 +163,19 @@ pub const KEYS: &[KeyDef] = &[
         env: "JIRED_LINKS_MODE",
         flag: None,
         sensitivity: Sensitivity::Plain,
-        doc: "Grouping link style: auto, symlink, hardlink, or stub",
+        ask: false,
+        doc: "How grouping folders point at issue files. auto: a symlink, or a \
+              hard link where symlinks are not permitted (Windows without \
+              Developer Mode), or a small Markdown stub file if neither works. \
+              symlink, hardlink, stub: always use that one and fail if it is \
+              unavailable",
     },
     KeyDef {
         key: "sprints.include_closed",
         env: "JIRED_SPRINTS_INCLUDE_CLOSED",
         flag: None,
         sensitivity: Sensitivity::Plain,
+        ask: false,
         doc: "Project closed sprints into sprints/ (default false)",
     },
 ];

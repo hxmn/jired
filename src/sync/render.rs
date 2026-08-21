@@ -282,7 +282,7 @@ mod tests {
         let r = render_issue(&issue(), &ctx()).unwrap();
         assert_eq!(
             r.doc.attachments[0].path,
-            ".PROJ-142. Fix login flow/trace.har"
+            ".PROJ-0142. Fix login flow/trace.har"
         );
         assert_eq!(r.doc.attachments[0].note, "2.1 MiB");
     }

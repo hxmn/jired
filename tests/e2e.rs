@@ -35,8 +35,8 @@ impl Deployment {
     /// The issue every shared test edits.
     fn issue_file(self) -> &'static str {
         match self {
-            Deployment::Cloud => "PROJ-142. Fix login flow.md",
-            Deployment::DataCenter => "DC-77. Rotate the LDAP bind credential.md",
+            Deployment::Cloud => "PROJ-0142. Fix login flow.md",
+            Deployment::DataCenter => "DC-0077. Rotate the LDAP bind credential.md",
         }
     }
 
@@ -230,7 +230,7 @@ impl Ws {
     }
 }
 
-const ISSUE_FILE: &str = "PROJ-142. Fix login flow.md";
+const ISSUE_FILE: &str = "PROJ-0142. Fix login flow.md";
 
 // ---------------------------------------------------------------------------
 // init
@@ -247,7 +247,25 @@ fn init_creates_the_workspace_and_agent_docs() {
     assert_eq!(report["account"]["display_name"], "Ilya A");
     assert_eq!(report["workspace"]["project"], "PROJ");
 
-    assert!(ws.path().join(".jired/config.toml").is_file());
+    // The config file is the whole picture, and explains itself.
+    let config = ws.read(".jired/config.toml");
+    for key in [
+        "url =",
+        "deployment =",
+        "kind =",
+        "project =",
+        "mode =",
+        "insecure =",
+        "auto_download_max =",
+    ] {
+        assert!(config.contains(key), "{key} missing from\n{config}");
+    }
+    assert!(
+        config.contains("# Base URL of the Jira instance"),
+        "settings are written with their documentation:\n{config}"
+    );
+    assert_eq!(report["account"]["tls"]["insecure"], false);
+    assert!(report["account"]["tls"]["ca_path"].is_null());
     assert!(ws.path().join(".jired/session.db").is_file());
     assert!(ws.path().join(".jired/state.db").is_file());
 
@@ -331,8 +349,8 @@ fn pull_writes_one_file_per_issue() {
 
     for name in [
         ISSUE_FILE,
-        "PROJ-143. Add integration test.md",
-        "PROJ-150. Rotate IdP certificate.md",
+        "PROJ-0143. Add integration test.md",
+        "PROJ-0150. Rotate IdP certificate.md",
     ] {
         assert!(ws.path().join(name).is_file(), "missing {name}");
     }
@@ -433,12 +451,12 @@ fn a_remote_summary_change_renames_the_file_and_keeps_the_key() {
     assert_eq!(renamed.len(), 1);
     assert_eq!(renamed[0]["key"], "PROJ-142");
     assert_eq!(renamed[0]["from"], ISSUE_FILE);
-    assert_eq!(renamed[0]["to"], "PROJ-142. Fix the SSO login flow.md");
+    assert_eq!(renamed[0]["to"], "PROJ-0142. Fix the SSO login flow.md");
 
     assert!(!ws.path().join(ISSUE_FILE).exists());
     assert!(ws
         .path()
-        .join("PROJ-142. Fix the SSO login flow.md")
+        .join("PROJ-0142. Fix the SSO login flow.md")
         .is_file());
 }
 
@@ -986,7 +1004,9 @@ fn an_interrupted_push_is_replayed_by_resume() {
 
     // A confirmed summary change renames the file, so the old name is gone.
     assert!(!ws.path().join(ISSUE_FILE).exists());
-    assert!(ws.read("PROJ-142. Retried.md").contains("summary: Retried"));
+    assert!(ws
+        .read("PROJ-0142. Retried.md")
+        .contains("summary: Retried"));
 }
 
 #[test]
@@ -1423,7 +1443,10 @@ fn create_makes_a_local_issue_that_push_turns_into_a_real_one() {
     assert!(status["new_issues"].as_array().unwrap().is_empty());
     assert!(status["dirty"].as_array().unwrap().is_empty());
 
-    let created = ws.read(&format!("{new_key}. Audit the SSO config.md"));
+    // The file carries the padded spelling of the key; the frontmatter carries
+    // the key itself.
+    let number = new_key.rsplit('-').next().unwrap();
+    let created = ws.read(&format!("PROJ-{number:0>4}. Audit the SSO config.md"));
     assert!(created.contains(&format!("key: {new_key}")));
     assert!(created.contains("Check every tenant."));
 }
@@ -1446,7 +1469,7 @@ fn a_large_attachment_becomes_a_stub_until_asked_for() {
     ws.init();
     ws.json(&["pull"]);
 
-    let folder = ws.path().join(".PROJ-142. Fix login flow");
+    let folder = ws.path().join(".PROJ-0142. Fix login flow");
     let name = ws.deployment.attachment();
     let stub = folder.join(format!("{name}.jiredstub"));
 
@@ -1471,7 +1494,7 @@ fn attachments_pull_replaces_the_stub_with_real_content() {
     ws.init();
     ws.json(&["pull"]);
 
-    let folder = ws.path().join(".PROJ-142. Fix login flow");
+    let folder = ws.path().join(".PROJ-0142. Fix login flow");
     let name = ws.deployment.attachment();
 
     let report = ws.json(&["attachments", "pull"]);
@@ -1511,7 +1534,7 @@ fn a_small_attachment_is_downloaded_eagerly_on_pull() {
     ws.init();
     ws.json(&["pull"]);
 
-    let folder = ws.path().join(".DC-77. Rotate the LDAP bind credential");
+    let folder = ws.path().join(".DC-0077. Rotate the LDAP bind credential");
     assert!(
         folder.join("ldap-audit.log").is_file(),
         "a 47 KiB file is under the default auto-download threshold"
@@ -1532,7 +1555,7 @@ fn attach_stages_a_file_that_push_uploads() {
     assert_eq!(report["staged"][0], "evidence.txt");
     assert!(ws
         .path()
-        .join(".PROJ-142. Fix login flow/evidence.txt")
+        .join(".PROJ-0142. Fix login flow/evidence.txt")
         .is_file());
 
     let dry = ws.json(&["push", "--dry-run"]);
@@ -1571,7 +1594,7 @@ fn an_oversized_attachment_is_refused_before_anything_is_copied() {
     assert_eq!(err["details"]["limit"], 1024);
     assert!(
         !ws.path()
-            .join(".PROJ-142. Fix login flow/huge.bin")
+            .join(".PROJ-0142. Fix login flow/huge.bin")
             .exists(),
         "nothing should have been copied"
     );
@@ -1662,7 +1685,7 @@ fn resolve_theirs_takes_the_server_value_and_clears_the_conflict() {
     assert_eq!(report["strategy"], "theirs");
     assert_eq!(report["resolved"][0], "PROJ-142");
 
-    assert!(ws.read("PROJ-142. Theirs.md").contains("summary: Theirs"));
+    assert!(ws.read("PROJ-0142. Theirs.md").contains("summary: Theirs"));
     let status = ws.json(&["status"]);
     assert!(status["conflicts"].as_array().unwrap().is_empty());
     assert!(status["dirty"].as_array().unwrap().is_empty());
@@ -1677,7 +1700,7 @@ fn resolve_ours_keeps_the_local_value_and_leaves_it_to_push() {
 
     ws.json(&["resolve", "--ours"]);
 
-    assert!(ws.read("PROJ-142. Ours.md").contains("summary: Ours"));
+    assert!(ws.read("PROJ-0142. Ours.md").contains("summary: Ours"));
     let status = ws.json(&["status"]);
     assert!(status["conflicts"].as_array().unwrap().is_empty());
     // Keeping the local value means there is something to send.
@@ -1803,7 +1826,7 @@ fn clean_removes_a_file_whose_issue_left_the_server() {
     std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
 
     ws.json(&["fetch", "--full"]);
-    let orphan = "PROJ-150. Rotate IdP certificate.md";
+    let orphan = "PROJ-0150. Rotate IdP certificate.md";
     assert!(ws.path().join(orphan).is_file());
 
     let dry = ws.json(&["clean", "--dry-run"]);
@@ -1825,7 +1848,7 @@ fn clean_keeps_an_orphan_that_still_holds_unpushed_edits() {
     ws.init();
     ws.json(&["pull"]);
 
-    let orphan = "PROJ-150. Rotate IdP certificate.md";
+    let orphan = "PROJ-0150. Rotate IdP certificate.md";
     let text = ws.read(orphan).replace("- ops\n", "- ops\n- unpushed\n");
     ws.write(orphan, &text);
 
@@ -1860,6 +1883,120 @@ fn clean_leaves_a_healthy_workspace_alone() {
     let report = ws.json(&["clean", "--yes"]);
     assert!(report["removed"].as_array().unwrap().is_empty());
     assert!(ws.path().join(ISSUE_FILE).is_file());
+}
+
+// ---------------------------------------------------------------------------
+// doctor
+// ---------------------------------------------------------------------------
+
+/// The migration path for the padded filenames: a workspace written by an older
+/// jired has `PROJ-142. …md`, and doctor has to move it without losing the
+/// attachment folder, the database row, or the grouping links.
+#[test]
+fn doctor_migrates_filenames_written_before_the_padding_convention() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let legacy = "PROJ-142. Fix login flow.md";
+    std::fs::rename(ws.path().join(ISSUE_FILE), ws.path().join(legacy)).unwrap();
+    std::fs::rename(
+        ws.path().join(".PROJ-0142. Fix login flow"),
+        ws.path().join(".PROJ-142. Fix login flow"),
+    )
+    .unwrap();
+
+    let dry = ws.json(&["doctor", "--dry-run"]);
+    assert_eq!(dry["schema"], "jired/doctor/1");
+    assert_eq!(dry["dry_run"], true);
+    // The rename and the grouping links it invalidates.
+    assert_eq!(dry["pending"], 2);
+    assert_eq!(dry["fixed"], 0);
+    assert!(
+        ws.path().join(legacy).is_file(),
+        "a dry run changes nothing"
+    );
+
+    let report = ws.json(&["doctor"]);
+    let names = &report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "filenames")
+        .expect("a filenames check")
+        .clone();
+    assert_eq!(names["status"], "fixed");
+    assert_eq!(names["changes"][0]["from"], legacy);
+    assert_eq!(names["changes"][0]["to"], ISSUE_FILE);
+    assert_eq!(report["problems"], 0);
+
+    assert!(ws.path().join(ISSUE_FILE).is_file());
+    assert!(!ws.path().join(legacy).exists());
+    assert!(
+        ws.path().join(".PROJ-0142. Fix login flow").is_dir(),
+        "the attachment folder follows the rename"
+    );
+    // The grouping links point at the new name rather than dangling.
+    let linked = ws
+        .path()
+        .join("by-parent/PROJ-0142. Fix login flow")
+        .join("PROJ-0143. Add integration test.md");
+    assert!(linked.exists(), "grouping links were rebuilt");
+
+    // Everything jired command touches still resolves to the real key.
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty());
+
+    // Idempotent: a second run has nothing left to do.
+    let again = ws.json(&["doctor"]);
+    assert_eq!(again["fixed"], 0);
+    assert_eq!(again["pending"], 0);
+    assert_eq!(again["problems"], 0);
+}
+
+#[test]
+fn doctor_restores_config_defaults_and_the_gitignore_block() {
+    let ws = Ws::new();
+    ws.init();
+
+    ws.write(".gitignore", "target/\n");
+    std::fs::write(
+        ws.path().join(".jired/config.toml"),
+        "[server]\nurl = \"https://acme.atlassian.net\"\n",
+    )
+    .unwrap();
+
+    let report = ws.json(&["doctor"]);
+    assert_eq!(report["problems"], 0);
+    assert!(ws.read(".gitignore").contains("/.jired/"));
+    let config = ws.read(".jired/config.toml");
+    for key in ["links", "auto_download_max", "insecure"] {
+        assert!(config.contains(key), "{key} missing from {config}");
+    }
+    // The rewritten file explains itself.
+    assert!(config.contains("# "), "{config}");
+}
+
+/// Without an account there is nothing doctor can repair on its own, and saying
+/// "healthy" would be a lie.
+#[test]
+fn doctor_reports_a_workspace_that_was_never_initialized() {
+    let ws = Ws::new();
+    ws.init();
+    std::fs::remove_file(ws.path().join(".jired/session.db")).unwrap();
+
+    let out = ws.cmd(&["doctor", "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["problems"], 1);
+    let credentials = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "credentials")
+        .unwrap()
+        .clone();
+    assert_eq!(credentials["status"], "problem");
 }
 
 // ---------------------------------------------------------------------------
@@ -1945,7 +2082,7 @@ fn ticking_a_box_transitions_the_subtask_when_configured() {
     // The subtask really moved on the server, so pulling brings its new status
     // back into the working copy.
     assert!(ws
-        .read("PROJ-143. Add integration test.md")
+        .read("PROJ-0143. Add integration test.md")
         .contains("status: To Do"));
 
     ws.json(&["fetch", "--full"]);
@@ -1959,7 +2096,7 @@ fn ticking_a_box_transitions_the_subtask_when_configured() {
         "the subtask's new status should come back: {pulled}"
     );
     assert!(ws
-        .read("PROJ-143. Add integration test.md")
+        .read("PROJ-0143. Add integration test.md")
         .contains("status: Done"));
 }
 
@@ -1993,7 +2130,7 @@ fn pull_builds_the_parent_and_sprint_folders() {
     // PROJ-143 is a subtask of PROJ-142, so it groups under the parent's file.
     let parent = ws
         .path()
-        .join("by-parent/PROJ-142. Fix login flow/PROJ-143. Add integration test.md");
+        .join("by-parent/PROJ-0142. Fix login flow/PROJ-0143. Add integration test.md");
     assert!(
         std::fs::symlink_metadata(&parent).is_ok(),
         "expected a link at {}",
@@ -2004,7 +2141,7 @@ fn pull_builds_the_parent_and_sprint_folders() {
     // PROJ-142 is in Sprint 42.
     let sprint = ws
         .path()
-        .join("sprints/Sprint 42/PROJ-142. Fix login flow.md");
+        .join("sprints/Sprint 42/PROJ-0142. Fix login flow.md");
     assert!(std::fs::symlink_metadata(&sprint).is_ok());
     assert!(resolves_to_issue(&sprint, "PROJ-142"));
 }
@@ -2028,7 +2165,7 @@ fn board_columns_group_issues_by_status() {
     // PROJ-142 is In Progress (status id 3), PROJ-143 and PROJ-150 are To Do.
     let in_progress = ws
         .path()
-        .join("boards/Platform Board/In Progress/PROJ-142. Fix login flow.md");
+        .join("boards/Platform Board/In Progress/PROJ-0142. Fix login flow.md");
     assert!(
         std::fs::symlink_metadata(&in_progress).is_ok(),
         "expected {}",
@@ -2036,7 +2173,7 @@ fn board_columns_group_issues_by_status() {
     );
     let todo = ws
         .path()
-        .join("boards/Platform Board/To Do/PROJ-150. Rotate IdP certificate.md");
+        .join("boards/Platform Board/To Do/PROJ-0150. Rotate IdP certificate.md");
     assert!(std::fs::symlink_metadata(&todo).is_ok());
 }
 
@@ -2065,7 +2202,7 @@ fn clean_regroup_rebuilds_everything_from_the_database() {
 
     let sprint = ws
         .path()
-        .join("sprints/Sprint 42/PROJ-142. Fix login flow.md");
+        .join("sprints/Sprint 42/PROJ-0142. Fix login flow.md");
     assert!(std::fs::symlink_metadata(&sprint).is_ok());
 
     // Throw the whole lot away, as a confused user or a bad merge might.
@@ -2092,7 +2229,7 @@ fn regroup_clears_a_stale_group_rather_than_leaving_it() {
     // A group folder from an earlier sprint the issue has since left.
     let stale = ws.path().join("sprints/Sprint 40");
     std::fs::create_dir_all(&stale).unwrap();
-    std::fs::write(stale.join("PROJ-142. Fix login flow.md"), "stale").unwrap();
+    std::fs::write(stale.join("PROJ-0142. Fix login flow.md"), "stale").unwrap();
 
     ws.json(&["clean", "--regroup"]);
     assert!(
@@ -2101,7 +2238,7 @@ fn regroup_clears_a_stale_group_rather_than_leaving_it() {
     );
     assert!(ws
         .path()
-        .join("sprints/Sprint 42/PROJ-142. Fix login flow.md")
+        .join("sprints/Sprint 42/PROJ-0142. Fix login flow.md")
         .exists());
 }
 
@@ -2117,10 +2254,13 @@ fn stub_mode_produces_followable_files_where_links_are_unavailable() {
 
     let stub = ws
         .path()
-        .join("sprints/Sprint 42/PROJ-142. Fix login flow.md");
+        .join("sprints/Sprint 42/PROJ-0142. Fix login flow.md");
     let text = std::fs::read_to_string(&stub).unwrap();
     assert!(text.starts_with("---\nlink: '"), "{text}");
-    assert!(text.contains("../../PROJ-142. Fix login flow.md"), "{text}");
+    assert!(
+        text.contains("../../PROJ-0142. Fix login flow.md"),
+        "{text}"
+    );
     // Readable by a human in any editor, not just resolvable by the filesystem.
     assert!(text.contains("[Open the issue]"), "{text}");
 }
@@ -2135,10 +2275,10 @@ fn dragging_a_card_between_columns_stages_a_transition() {
     // on a board would.
     let from = ws
         .path()
-        .join("boards/Platform Board/In Progress/PROJ-142. Fix login flow.md");
+        .join("boards/Platform Board/In Progress/PROJ-0142. Fix login flow.md");
     let to_dir = ws.path().join("boards/Platform Board/Done");
     std::fs::create_dir_all(&to_dir).unwrap();
-    std::fs::rename(&from, to_dir.join("PROJ-142. Fix login flow.md")).unwrap();
+    std::fs::rename(&from, to_dir.join("PROJ-0142. Fix login flow.md")).unwrap();
 
     // The `.md` file is untouched, so only the board folders reveal this.
     let status = ws.json(&["status"]);
@@ -2200,9 +2340,9 @@ fn an_explicit_status_edit_wins_over_a_board_move() {
 
     let from = ws
         .path()
-        .join("boards/Platform Board/In Progress/PROJ-142. Fix login flow.md");
+        .join("boards/Platform Board/In Progress/PROJ-0142. Fix login flow.md");
     let to_dir = ws.path().join("boards/Platform Board/To Do");
-    std::fs::rename(&from, to_dir.join("PROJ-142. Fix login flow.md")).unwrap();
+    std::fs::rename(&from, to_dir.join("PROJ-0142. Fix login flow.md")).unwrap();
 
     // The file is the more explicit statement of intent, so it wins.
     let dry = ws.json(&["push", "--dry-run"]);
@@ -2226,10 +2366,10 @@ fn a_card_dropped_somewhere_that_is_not_a_column_says_so() {
     // believing they had moved the card.
     let from = ws
         .path()
-        .join("boards/Platform Board/In Progress/PROJ-142. Fix login flow.md");
+        .join("boards/Platform Board/In Progress/PROJ-0142. Fix login flow.md");
     let to_dir = ws.path().join("boards/Platform Board/In Review");
     std::fs::create_dir_all(&to_dir).unwrap();
-    std::fs::rename(&from, to_dir.join("PROJ-142. Fix login flow.md")).unwrap();
+    std::fs::rename(&from, to_dir.join("PROJ-0142. Fix login flow.md")).unwrap();
 
     let status = ws.json(&["status"]);
     assert!(status["staged_transitions"].as_array().unwrap().is_empty());

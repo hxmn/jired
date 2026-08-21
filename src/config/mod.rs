@@ -47,6 +47,19 @@ impl Resolver {
 
     /// Resolve a key, returning the value and where it came from.
     pub fn get(&mut self, key: &str) -> Result<Option<(String, Source)>> {
+        self.resolve(key, true)
+    }
+
+    /// Resolve a key without ever asking the user.
+    ///
+    /// Commands that run their own wizard use this to see what was already
+    /// supplied, so the wizard can ask its own, friendlier question instead of
+    /// the bare `key: ` prompt this resolver falls back to.
+    pub fn get_quiet(&mut self, key: &str) -> Result<Option<String>> {
+        Ok(self.resolve(key, false)?.map(|(v, _)| v))
+    }
+
+    fn resolve(&mut self, key: &str, allow_prompt: bool) -> Result<Option<(String, Source)>> {
         if let Some(v) = self.flags.get(key) {
             return Ok(Some((v.clone(), Source::Flag)));
         }
@@ -66,8 +79,15 @@ impl Resolver {
         if let Some(v) = self.prompted.get(key) {
             return Ok(Some((v.clone(), Source::Prompt)));
         }
-        if self.interactive {
-            if let Some(def) = keys::lookup(key) {
+        // A key with a built-in default is never worth interrupting for: the
+        // default is the answer almost everyone wants, and asking for `links.mode`
+        // or `tls.ca_cert` on every command is the fastest way to make a CLI
+        // unusable. Only the handful of keys marked askable reach the prompt.
+        if let Some(v) = self.defaults.get(key) {
+            return Ok(Some((v.clone(), Source::Default)));
+        }
+        if allow_prompt && self.interactive {
+            if let Some(def) = keys::lookup(key).filter(|d| d.ask) {
                 let secret = keys::is_secret(key);
                 if let Some(v) = self.prompter.prompt(key, def.doc, secret)? {
                     self.prompted.insert(key.to_string(), v.clone());
@@ -75,14 +95,17 @@ impl Resolver {
                 }
             }
         }
-        if let Some(v) = self.defaults.get(key) {
-            return Ok(Some((v.clone(), Source::Default)));
-        }
         Ok(None)
     }
 
     pub fn get_value(&mut self, key: &str) -> Result<Option<String>> {
         Ok(self.get(key)?.map(|(v, _)| v))
+    }
+
+    /// Record a value discovered by a command (e.g. a certificate the user just
+    /// chose to trust) so later lookups in the same run see it.
+    pub fn set_resolved(&mut self, key: &str, value: impl Into<String>) {
+        self.prompted.insert(key.to_string(), value.into());
     }
 
     /// Resolve a key that the command cannot proceed without.
@@ -145,7 +168,7 @@ impl Resolver {
         for def in keys::KEYS {
             if def.sensitivity == keys::Sensitivity::Secret {
                 // Secrets are reported as present/absent, never echoed.
-                let present = self.get(def.key).ok().flatten();
+                let present = self.resolve(def.key, false).ok().flatten();
                 out.push((
                     def.key,
                     present.as_ref().map(|_| "<set>".to_string()),
@@ -153,7 +176,9 @@ impl Resolver {
                 ));
                 continue;
             }
-            match self.get(def.key).ok().flatten() {
+            // Listing settings must never turn into an interrogation, so this
+            // reports what is already known rather than resolving interactively.
+            match self.resolve(def.key, false).ok().flatten() {
                 Some((v, src)) => out.push((def.key, Some(v), src)),
                 None => out.push((def.key, None, Source::Default)),
             }
@@ -260,15 +285,20 @@ impl ResolverBuilder {
     }
 }
 
+/// Settings that have a working value nobody needs to be asked for.
+///
+/// `init` writes these into the workspace config verbatim, so the file spells
+/// out what jired will do instead of leaving it to a default nobody can see.
+pub const DEFAULTS: &[(&str, &str)] = &[
+    ("attachments.auto_download_max", "262144"),
+    ("attachments.max_upload", "52428800"),
+    ("links.mode", "auto"),
+    ("sprints.include_closed", "false"),
+    ("tls.insecure", "false"),
+];
+
 fn builtin_defaults(mut user: HashMap<String, String>) -> HashMap<String, String> {
-    let builtin = [
-        ("attachments.auto_download_max", "262144"),
-        ("attachments.max_upload", "52428800"),
-        ("links.mode", "auto"),
-        ("sprints.include_closed", "false"),
-        ("tls.insecure", "false"),
-    ];
-    for (k, v) in builtin {
+    for &(k, v) in DEFAULTS {
         user.entry(k.to_string()).or_insert_with(|| v.to_string());
     }
     user
@@ -394,6 +424,63 @@ mod tests {
         assert_eq!(
             r.get("links.mode").unwrap().unwrap(),
             ("auto".to_string(), Source::Default)
+        );
+    }
+
+    /// The bug this prevents: an interactive `jired pull` asking the user to
+    /// type a value for `links.mode`, `tls.ca_cert` and four others before it
+    /// will do anything.
+    #[test]
+    fn a_setting_with_a_default_is_never_asked_about() {
+        let mut r = Resolver::builder()
+            .interactive(true)
+            .prompter(Box::new(FixedPrompter("prompted")))
+            .build();
+        for (key, expected) in DEFAULTS {
+            assert_eq!(
+                r.get(key).unwrap().unwrap(),
+                (expected.to_string(), Source::Default),
+                "{key} was prompted for"
+            );
+        }
+    }
+
+    /// Only the values a person actually has to supply may interrupt them.
+    #[test]
+    fn only_the_setup_values_reach_the_prompt() {
+        let askable: Vec<&str> = keys::KEYS.iter().filter(|k| k.ask).map(|k| k.key).collect();
+        assert_eq!(
+            askable,
+            vec![
+                "server.url",
+                "auth.email",
+                "auth.token",
+                "workspace.project"
+            ]
+        );
+
+        let mut r = Resolver::builder()
+            .interactive(true)
+            .prompter(Box::new(FixedPrompter("prompted")))
+            .build();
+        // No default, not askable: the answer is "unset", not a question.
+        assert!(r.get("checklist.done_transition").unwrap().is_none());
+        assert!(r.get("tls.ca_cert").unwrap().is_none());
+    }
+
+    /// A command running its own wizard must be able to see what was supplied
+    /// without the resolver asking first.
+    #[test]
+    fn get_quiet_never_prompts() {
+        let mut r = Resolver::builder()
+            .interactive(true)
+            .prompter(Box::new(FixedPrompter("prompted")))
+            .build();
+        assert!(r.get_quiet("server.url").unwrap().is_none());
+        assert_eq!(
+            r.get("server.url").unwrap().unwrap().1,
+            Source::Prompt,
+            "the prompt rung still works when asked for"
         );
     }
 
