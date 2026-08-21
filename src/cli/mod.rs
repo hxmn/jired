@@ -192,6 +192,8 @@ pub enum Command {
     Open(cmd::open::OpenArgs),
     /// Run a JQL search
     Search(cmd::search::SearchArgs),
+    /// Drop local changes and go back to the last sync
+    Reset(cmd::reset::ResetArgs),
     /// Resolve recorded conflicts
     Resolve(cmd::resolve::ResolveArgs),
     /// Remove files whose issues left the workspace scope
@@ -277,6 +279,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Attachments(a) => cmd::attach::run_attachments(g, a, out),
         Command::Open(a) => cmd::open::run(g, a, out),
         Command::Search(a) => cmd::search::run(g, a, out),
+        Command::Reset(a) => cmd::reset::run(g, a, out),
         Command::Resolve(a) => cmd::resolve::run(g, a, out),
         Command::Clean(a) => cmd::clean::run(g, a, out),
         Command::Doctor(a) => cmd::doctor::run(g, a, out),

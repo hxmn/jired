@@ -187,6 +187,7 @@ fn command_output_matches_its_published_schema() {
         vec!["attachments", "pull", "--max-size", "1"],
         vec!["push", "--dry-run"],
         vec!["resolve", "--list"],
+        vec!["reset", "--dry-run"],
         vec!["clean", "--dry-run"],
         // Rebuilding the grouping folders belongs to `doctor`, which owns every
         // other repair; `clean --regroup` used to shadow clean's own purpose.

@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/reset/1",
+  "title": "jired reset result",
+  "description": "Local changes dropped, and the local work deliberately left alone",
+  "type": "object",
+  "required": [
+    "schema"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/reset/1"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "cancelled": {
+      "description": "Present only when the confirmation was declined; `planned` then holds the untouched plan",
+      "type": "boolean"
+    },
+    "planned": {
+      "type": "object"
+    },
+    "restored": {
+      "description": "Files put back to the last synced state",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    },
+    "removed": {
+      "description": "Locally created issues deleted outright, having no earlier state",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    },
+    "kept": {
+      "description": "Local work reset left alone, and why",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "file",
+          "reason"
+        ]
+      }
+    },
+    "clean": {
+      "description": "Issues named on the command line that had nothing to drop",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "moves_undone": {
+      "description": "Cards dragged between board columns, put back where base says they go",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "conflicts_cleared": {
+      "type": "integer"
+    },
+    "pending_ops_cleared": {
+      "type": "integer"
+    },
+    "groups": {
+      "type": "object",
+      "properties": {
+        "parents": {
+          "type": "integer"
+        },
+        "sprints": {
+          "type": "integer"
+        },
+        "boards": {
+          "type": "integer"
+        },
+        "links": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "symlink",
+            "hardlink",
+            "stub",
+            null
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "parents",
+        "sprints",
+        "boards",
+        "links"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "dropped": {
+          "description": "What the working copy was holding, named field by field",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "file",
+        "dropped"
+      ]
+    }
+  }
+}

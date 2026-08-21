@@ -81,3 +81,10 @@ as unimplemented rather than doing something approximate.
 - [x] Detect orphans (files/stubs whose issues left scope or were deleted remotely)
 - [x] `--dry-run` preview; never removes dirty files without `--force`
 - **Done when:** orphan scenarios (deleted remotely, JQL scope shrink) clean correctly.
+
+### M3.10 `jired reset`
+- [x] Re-render each dirty file from its base snapshot, byte-identical to what `pull` wrote; renames the file back when the summary was edited; needs no network and no parseable file
+- [x] Optional issue scope; `-n/--dry-run` lists what would go; the listing precedes the confirmation and `--yes` is required non-interactively
+- [x] Recorded conflicts and the pending-op journal go with the edits that caused them; a dragged board card is put back by a regroup
+- [x] Staged attachment uploads and locally created issues are reported, not deleted — base cannot bring either back; `--include-new` opts into deleting the second
+- **Done when:** an edited, conflicted, board-moved workspace comes back to the last sync in one command and `status` reports it clean.

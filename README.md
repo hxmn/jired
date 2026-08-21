@@ -224,6 +224,7 @@ the filename you were just editing instead of retyping the key.
 | `log ISSUE` | the cached changelog; `--refresh` asks the server |
 | `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag) |
 | `resolve` | list and clear recorded conflicts — see above |
+| `reset [ISSUES…]` | drop local changes and put the files back to the last sync; lists what would go and asks first, `-n/--dry-run` just lists, `--include-new` also deletes locally created issues |
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
 | `open ISSUE` | open it in a browser, or `--print` the URL |
 | `whoami` | which account, which server, and where the credential is kept |
@@ -290,6 +291,7 @@ out of the way.
 
 | Exit | What happened | What to run |
 |---|---|---|
+| 2 | an edit left a file jired cannot parse | `jired diff` to see what changed, or `jired reset "PROJ-0142. Fix login flow.md"` to throw the edit away and start from the last sync |
 | 3 | the credential was rejected — an expired or revoked token, or the wrong identity for this server | `jired whoami`, then `jired init --force` to authenticate again |
 | 4 | DNS, connect, timeout or TLS | `jired doctor` verifies connectivity; see TLS and proxies below |
 | 5 | `pull` found fields changed on both sides, or `push` refused an issue the server has moved on from | `jired pull --strategy merge` then `jired resolve`; for a stale push, `jired pull` first |

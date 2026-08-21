@@ -304,6 +304,29 @@ contain conflict markers. `--field` is hidden and unimplemented — it narrows t
 listing, and combining it with a resolution flag fails immediately with exit 2.
 There is no TUI and no `$EDITOR` hunk picker; both are M4 work.
 
+### `jired reset [ISSUES…] [-n/--dry-run] [--include-new]`
+Drops local changes: every dirty file is re-rendered from its base snapshot,
+through the renderer `pull` uses, so the result is byte-identical to what the
+last pull wrote and the issue has nothing left for `push` to send. Offline —
+base is already on disk, which is also why this is the recovery path for a file
+that no longer parses: it never needs to read one. An edited summary renamed the
+file, so the name is put back too.
+
+The mirror of `pull --force`, pointing the other way: a forced pull moves a file
+*forward* to what the server holds now, a reset moves it *back* to what jired
+last wrote. Recorded conflicts and the pending-op journal go with the edits that
+caused them, and a card dragged between board columns is put back by the regroup
+that follows the writes.
+
+Two kinds of local work are reported rather than dropped, because base cannot
+bring either back: a staged attachment, whose only copy is the file sitting in
+the folder, and a locally created `NEW-*` issue, which has no earlier state at
+all — `--include-new` opts into deleting the second. Naming an issue narrows the
+run; a key the workspace does not have is exit 2, not a licence to reset the
+rest. The listing comes before the question, `-n` prints it and stops, and a
+non-interactive run needs `-y` (otherwise exit 7).
+JSON: `{"schema":"jired/reset/1","restored":[{"key":"PROJ-1","file":"…","dropped":["summary","description"]}],"removed":[],"kept":[],"conflicts_cleared":0,"pending_ops_cleared":0}`.
+
 ### `jired clean [--dry-run] [--force]`
 Removes orphaned files/symlinks/stubs (never dirty files without `--force`) and
 asks before deleting. Rebuilding the grouping folders is `jired doctor --regroup`:

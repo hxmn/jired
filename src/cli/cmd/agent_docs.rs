@@ -276,6 +276,27 @@ pub fn render() -> String {
          markers and exits 5 listing them, so `<<<<<<<` cannot reach Jira.\n\n",
     );
 
+    s.push_str("## Undoing local changes\n\n");
+    s.push_str(
+        "`jired reset [ISSUES…]` puts files back to the state of the last sync — the \
+         same state `push` diffs against — so a reset issue has nothing left to send. \
+         It is offline and does not need the file to parse, which makes it the way out \
+         of an edit that broke one. Run `--dry-run` first: it lists every issue and \
+         names the fields that would go. Non-interactively it needs `--yes`, or it \
+         exits 7 rather than dropping work on a script's say-so.\n\n",
+    );
+    s.push_str("```sh\n");
+    s.push_str("jired reset --dry-run --json   # what would be dropped, field by field\n");
+    s.push_str("jired reset PROJ-142 --yes --json\n");
+    s.push_str("```\n\n");
+    s.push_str(
+        "Two things it reports rather than deletes, because the last sync cannot bring \
+         them back: staged attachment uploads, whose only copy is the file in the \
+         issue's folder, and `NEW-*` issues, which have no earlier state at all \
+         (`--include-new` deletes those). `jired reset` goes backwards to the last \
+         sync; `jired pull --force` goes forwards to whatever the server holds now.\n\n",
+    );
+
     s.push_str("## Exit codes\n\n| Code | Meaning |\n|---|---|\n");
     for (code, meaning) in [
         (0, "success"),

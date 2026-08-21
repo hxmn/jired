@@ -9,6 +9,7 @@ pub mod progress;
 pub mod pull;
 pub mod push;
 pub mod render;
+pub mod reset;
 pub mod status;
 
 use crate::api::{JiraApi, Markup};

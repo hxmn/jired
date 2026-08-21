@@ -2295,6 +2295,297 @@ fn clean_leaves_a_healthy_workspace_alone() {
 }
 
 // ---------------------------------------------------------------------------
+// reset
+// ---------------------------------------------------------------------------
+
+/// The whole point: an edited file goes back to exactly what the last pull
+/// wrote, and the workspace has nothing left to send.
+#[test]
+fn reset_puts_an_edited_file_back_and_leaves_the_workspace_clean() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let original = ws.read(ISSUE_FILE);
+
+    let edited = original
+        .replace(
+            "summary: Fix login flow",
+            "summary: Fix login flow properly",
+        )
+        .replace(
+            "Steps to reproduce are below.",
+            "Steps to reproduce are below. And a line nobody asked for.",
+        );
+    // The summary drives the file name, so `jired edit` renames on save; doing
+    // it here too is what makes reset put the name back as well as the content.
+    let renamed = "PROJ-0142. Fix login flow properly.md";
+    ws.write(renamed, &edited);
+    std::fs::remove_file(ws.path().join(ISSUE_FILE)).unwrap();
+
+    let report = ws.json(&["reset", "--yes"]);
+    assert_eq!(report["schema"], "jired/reset/1");
+    let restored = &report["restored"][0];
+    assert_eq!(restored["key"], "PROJ-142");
+    let dropped = restored["dropped"].as_array().unwrap();
+    assert!(dropped.contains(&Value::from("summary")), "{dropped:?}");
+    assert!(dropped.contains(&Value::from("description")), "{dropped:?}");
+
+    assert_eq!(
+        ws.read(ISSUE_FILE),
+        original,
+        "the file must come back byte for byte"
+    );
+    assert!(
+        !ws.path().join(renamed).exists(),
+        "an edited summary renamed the file; reset renames it back"
+    );
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+    assert!(ws.json(&["diff"])["issues"].as_array().unwrap().is_empty());
+}
+
+/// Nothing is dropped without saying what, and `--dry-run` says it without
+/// dropping anything.
+#[test]
+fn reset_dry_run_names_what_would_go_and_writes_nothing() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let edited = ws
+        .read(ISSUE_FILE)
+        .replace("summary: Fix login flow", "summary: Ours");
+    ws.write(ISSUE_FILE, &edited);
+
+    let report = ws.json(&["reset", "--dry-run"]);
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["restored"][0]["key"], "PROJ-142");
+    assert!(ws.read(ISSUE_FILE).contains("summary: Ours"));
+    assert!(!ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// Resetting is not a blanket operation when a key is given, and a key nobody
+/// here has is a typo rather than a licence to reset the rest.
+#[test]
+fn reset_takes_a_scope_and_refuses_a_key_it_does_not_know() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let other = "PROJ-0150. Rotate IdP certificate.md";
+    ws.write(
+        ISSUE_FILE,
+        &ws.read(ISSUE_FILE)
+            .replace("summary: Fix login flow", "summary: Ours"),
+    );
+    ws.write(other, &ws.read(other).replace("- ops\n", "- ops\n- mine\n"));
+
+    let err = ws.json_err(&["reset", "PROJ-999", "--yes"], 2);
+    assert_eq!(err["kind"], "usage");
+    assert!(ws.read(ISSUE_FILE).contains("summary: Ours"));
+
+    let report = ws.json(&["reset", "PROJ-142", "--yes"]);
+    assert_eq!(report["restored"].as_array().unwrap().len(), 1);
+    assert_eq!(report["restored"][0]["key"], "PROJ-142");
+    assert!(!ws.read(ISSUE_FILE).contains("summary: Ours"));
+    assert!(
+        ws.read(other).contains("- mine"),
+        "an issue outside the scope keeps its edits"
+    );
+}
+
+/// An issue named that has nothing to drop is said out loud: a command that
+/// prints nothing leaves the question of whether it looked.
+#[test]
+fn reset_says_when_a_named_issue_has_no_local_changes() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["reset", "PROJ-142", "--yes"]);
+    assert_eq!(report["clean"][0], "PROJ-142");
+    assert!(report["restored"].as_array().unwrap().is_empty());
+}
+
+/// A conflicting pull leaves a recorded conflict behind. The conflict is a
+/// disagreement between a local edit and the server; drop the edit and there is
+/// nothing left to disagree about.
+#[test]
+fn reset_clears_the_conflict_the_dropped_edit_caused() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    conflicted(&ws);
+    assert!(!ws.json(&["status"])["conflicts"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let report = ws.json(&["reset", "--yes"]);
+    assert_eq!(report["conflicts_cleared"], 1);
+    let status = ws.json(&["status"]);
+    assert!(status["conflicts"].as_array().unwrap().is_empty());
+    assert!(status["dirty"].as_array().unwrap().is_empty());
+    // The server moved on while this was going round, so the issue is behind —
+    // which is a pull's business, not a reset's.
+    assert_eq!(status["behind"][0], "PROJ-142");
+}
+
+/// A locally created issue has no earlier state, so "drop its changes" can only
+/// mean deleting it. That is not something to do because someone typed `reset`.
+#[test]
+fn reset_keeps_a_locally_created_issue_unless_asked_to_delete_it() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let created = ws.json(&["create", "--summary", "Draft nobody pushed"]);
+    let file = created["file"].as_str().expect("file").to_string();
+    let key = created["key"].as_str().expect("key").to_string();
+    assert!(ws.path().join(&file).is_file());
+
+    let report = ws.json(&["reset", "--yes"]);
+    assert_eq!(report["kept"][0]["key"], key);
+    assert!(report["removed"].as_array().unwrap().is_empty());
+    assert!(
+        ws.path().join(&file).is_file(),
+        "unpushed work is not deleted by a plain reset"
+    );
+
+    let report = ws.json(&["reset", "--include-new", "--yes"]);
+    assert_eq!(report["removed"][0]["key"], key);
+    assert!(!ws.path().join(&file).exists());
+    assert!(ws.json(&["status"])["new_issues"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+/// A staged upload is the only copy of that file anywhere. Reset restores from
+/// the last sync, and the last sync cannot bring bytes back that never left.
+#[test]
+fn reset_leaves_a_staged_attachment_where_it_is() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let source = ws.path().join("note.txt");
+    std::fs::write(&source, b"evidence").unwrap();
+    ws.json(&["attach", "PROJ-142", source.to_str().unwrap()]);
+    let staged = ws
+        .path()
+        .join(".PROJ-0142. Fix login flow")
+        .join("note.txt");
+    assert!(staged.is_file());
+
+    let report = ws.json(&["reset", "--yes"]);
+    assert_eq!(report["kept"][0]["key"], "PROJ-142");
+    assert!(report["kept"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("attachment"));
+    assert!(staged.is_file(), "the only copy of that file must survive");
+}
+
+/// A file somebody broke is exactly what reset is for, so it must not need the
+/// file to parse before it can replace it.
+#[test]
+fn reset_rescues_a_file_that_no_longer_parses() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let original = ws.read(ISSUE_FILE);
+
+    ws.write(ISSUE_FILE, "this is not an issue file at all\n");
+    let report = ws.json(&["reset", "--yes"]);
+    assert_eq!(report["restored"][0]["key"], "PROJ-142");
+    assert_eq!(ws.read(ISSUE_FILE), original);
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// Dropping other people's work by accident is the failure mode here, so a
+/// script has to say `--yes` rather than have it assumed.
+#[test]
+fn reset_refuses_to_run_unconfirmed_without_a_terminal() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.write(
+        ISSUE_FILE,
+        &ws.read(ISSUE_FILE)
+            .replace("summary: Fix login flow", "summary: Ours"),
+    );
+
+    let err = ws.json_err(&["reset"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(ws.read(ISSUE_FILE).contains("summary: Ours"));
+}
+
+/// Time booked but not yet pushed lives only in the file, so a reset takes it
+/// with everything else — and has to say so before it does.
+#[test]
+fn reset_drops_time_that_was_booked_but_never_pushed() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let original = ws.read(ISSUE_FILE);
+
+    ws.json(&["logwork", "PROJ-142", "2h 30m", "-m", "Traced it."]);
+    assert!(ws.read(ISSUE_FILE).contains("2h 30m"));
+
+    let report = ws.json(&["reset", "--dry-run"]);
+    assert!(report["restored"][0]["dropped"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::from("worklogs")));
+
+    ws.json(&["reset", "--yes"]);
+    assert_eq!(ws.read(ISSUE_FILE), original);
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// A card dragged between board columns is a staged change no `.md` file
+/// records, so reset has to reach the folder tree to undo it.
+#[test]
+fn reset_puts_a_dragged_card_back_in_its_column() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let card = "PROJ-0142. Fix login flow.md";
+    let from = ws
+        .path()
+        .join("boards/Platform Board/In Progress")
+        .join(card);
+    let to_dir = ws.path().join("boards/Platform Board/Done");
+    std::fs::create_dir_all(&to_dir).unwrap();
+    std::fs::rename(&from, to_dir.join(card)).unwrap();
+    assert_eq!(
+        ws.json(&["status"])["staged_transitions"][0]["origin"],
+        "board-move"
+    );
+
+    let report = ws.json(&["reset", "--yes"]);
+    assert_eq!(report["moves_undone"][0], "PROJ-142");
+    assert!(from.exists(), "the card belongs back in In Progress");
+    assert!(!to_dir.join(card).exists());
+    assert!(ws.json(&["status"])["staged_transitions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn reset_on_a_clean_workspace_says_so_and_does_nothing() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let report = ws.json(&["reset", "--yes"]);
+    assert!(report["restored"].as_array().unwrap().is_empty());
+    assert!(report["removed"].as_array().unwrap().is_empty());
+    assert!(ws.path().join(ISSUE_FILE).is_file());
+}
+
+// ---------------------------------------------------------------------------
 // edit [M4.7]
 // ---------------------------------------------------------------------------
 

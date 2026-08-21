@@ -40,6 +40,18 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Added
 
+- **`jired reset [ISSUES…]`** drops local changes: every dirty file is re-rendered
+  from its base snapshot, byte-identical to what the last pull wrote, so the issue
+  has nothing left for `push` to send. The mirror of `pull --force` pointing the
+  other way — backwards to the last sync rather than forwards to the server. It is
+  offline and never reads the working copy to do its job, which makes it the way
+  out of an edit that left a file unparseable. Recorded conflicts and the
+  pending-op journal go with the edits that caused them, and a card dragged
+  between board columns is put back. Staged attachment uploads and locally created
+  `NEW-*` issues are reported rather than deleted, because base cannot bring
+  either back; `--include-new` opts into deleting the second. `-n/--dry-run` lists
+  what would go, field by field; the listing precedes the confirmation, and a
+  non-interactive run needs `-y` or exits 7.
 - **Install and licence.** `LICENSE-MIT` and `LICENSE-APACHE`, and a README
   install section: `cargo install --git … --locked --bin jired`, Rust ≥ 1.89, and
   what a Linux machine without a Secret Service provider needs.
