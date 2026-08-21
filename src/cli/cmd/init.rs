@@ -9,6 +9,7 @@
 //! who you are, and which project you want.
 
 use crate::api::{AuthKind, Deployment, TlsOptions};
+use crate::auth::CredStore;
 use crate::cli::cmd::prompt::Ui;
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
@@ -46,6 +47,8 @@ pub struct AccountReport {
     pub display_name: Option<String>,
     pub account_id: Option<String>,
     pub secret_storage: String,
+    /// Where the credential lives: keychain, local_db, or user_config.
+    pub secret_location: String,
     pub tls: TlsReport,
 }
 
@@ -91,8 +94,14 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
     ui.title("jired init");
     ui.detail(ctx.workspace.root().display().to_string());
 
+    let wanted_store = match ctx.resolver.get_quiet("creds.storage")? {
+        Some(v) => Some(CredStore::parse(&v)?),
+        None => None,
+    };
+
     // 1. Find a server that answers, with credentials it accepts.
-    let conn = connect(&mut ctx, &ui)?;
+    // `--force` means "authenticate again", so it never reuses a stored token.
+    let conn = connect(&mut ctx, &ui, wanted_store, !args.force)?;
 
     // 2. Persist the account and its secret.
     let session = SessionStore::open(&ctx.workspace)?;
@@ -107,6 +116,7 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
         tls_insecure: conn.tls.insecure,
         token: conn.token.clone(),
         allow_plaintext: g.insecure_store,
+        store: wanted_store,
     })?;
 
     ui.good(format!(
@@ -123,12 +133,14 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
             None => title.clone(),
         });
     }
+    let location = account.secret_location();
     match account.secret_storage() {
-        "keyring" => ui.detail("token stored in the system keychain"),
-        "encrypted_blob" => ui.detail("token stored encrypted in .jired/session.db"),
-        other => ui.caution(format!(
-            "token stored as {other} — no keychain was available"
+        "plaintext" => ui.caution(format!(
+            "token stored UNENCRYPTED in {}",
+            location.describe()
         )),
+        "keyring" => ui.detail(format!("token stored in {}", location.describe())),
+        _ => ui.detail(format!("token stored encrypted in {}", location.describe())),
     }
 
     // 3. Choose what this workspace tracks.
@@ -148,6 +160,10 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
     if let Some(ca) = &conn.tls.ca_path {
         cfg.set_documented("tls.ca_cert", &ca.display().to_string())?;
     }
+    // Record where the credential actually went, not where it was asked to go:
+    // with the setting unset that is the only place the answer is written down,
+    // and `doctor` compares against it later.
+    cfg.set_documented("creds.storage", account.secret_location().as_str())?;
     // Everything else lands at its default, spelled out and commented, so the
     // file is the whole picture rather than a fragment plus hidden behaviour.
     for (key, value) in crate::config::DEFAULTS {
@@ -207,6 +223,11 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
         project.as_deref().unwrap_or("every visible project")
     ));
     out.say(format!(
+        "  credential {} ({})",
+        account.secret_location().describe(),
+        account.secret_storage()
+    ));
+    out.say(format!(
         "  config     {}",
         ctx.workspace.config_path().display()
     ));
@@ -245,6 +266,7 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
             display_name: conn.probe.me.display_name,
             account_id: Some(conn.probe.me.account_id),
             secret_storage: account.secret_storage().to_string(),
+            secret_location: account.secret_location().as_str().to_string(),
             tls: TlsReport {
                 ca_path: conn.tls.ca_path.map(|p| p.display().to_string()),
                 insecure: conn.tls.insecure,
@@ -280,7 +302,12 @@ struct Connected {
 /// Non-interactively this is a straight line that fails on the first problem;
 /// interactively every failure comes back as a question, because the answer to
 /// "wrong token" is another token, not a stack trace and a lost setup.
-fn connect(ctx: &mut Context, ui: &Ui) -> Result<Connected> {
+fn connect(
+    ctx: &mut Context,
+    ui: &Ui,
+    store: Option<CredStore>,
+    reuse_stored: bool,
+) -> Result<Connected> {
     let mut tls = TlsOptions::from_resolver(&mut ctx.resolver)?;
     // A certificate trusted during an earlier init stays trusted; that decision
     // was made once and does not need making again.
@@ -316,6 +343,7 @@ fn connect(ctx: &mut Context, ui: &Ui) -> Result<Connected> {
         .resolver
         .get_quiet("auth.token")?
         .map(SecretString::from);
+    let mut reuse_stored = reuse_stored;
     let mut announced: Option<(Deployment, AuthKind)> = None;
     let mut trusted_fingerprint = None;
     let mut certificate_offered = false;
@@ -337,6 +365,16 @@ fn connect(ctx: &mut Context, ui: &Ui) -> Result<Connected> {
             } else {
                 ctx.resolver.require("auth.email")?
             });
+        }
+        if token.is_none() && reuse_stored {
+            // A keychain entry or the shared credential file may already hold
+            // this account's token from another workspace; asking again for
+            // something the machine can already produce is busywork.
+            let entry = crate::auth::keyring_user(&base_url, identity.as_deref());
+            if let Some(found) = crate::auth::existing(&entry, store) {
+                ui.good(format!("using the credential already stored for {entry}"));
+                token = Some(found);
+            }
         }
         if token.is_none() {
             token = Some(SecretString::from(ask_token(
@@ -406,6 +444,9 @@ fn connect(ctx: &mut Context, ui: &Ui) -> Result<Connected> {
             ui.detail(hint);
         }
 
+        // Whatever the user picks, the next attempt asks rather than reusing:
+        // a stored credential that just failed is not worth trying twice.
+        reuse_stored = false;
         match recovery(ui, &err, deployment)? {
             Recovery::Credentials => token = None,
             Recovery::Switch => {

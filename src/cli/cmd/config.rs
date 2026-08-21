@@ -89,13 +89,16 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
         }
         ConfigCmd::Set(a) => {
             check_key(&a.key)?;
+            // Settings with a fixed vocabulary are checked here, where the typo
+            // is still on screen, rather than at the next command that reads them.
+            let value = normalize(&a.key, &a.value)?;
             let ctx = Context::open(g, out)?;
             let mut file = if a.global {
                 ctx.global_config_file()?
             } else {
                 ctx.local_config()?
             };
-            file.set(&a.key, &a.value)?;
+            file.set(&a.key, &value)?;
             if a.global {
                 let path = ctx
                     .global_config_path()
@@ -104,10 +107,13 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
             } else {
                 file.save_to(&ctx.workspace.config_path())?;
             }
-            out.say(format!("{} = {}", a.key, a.value));
+            out.say(format!("{} = {}", a.key, value));
+            if a.key == "creds.storage" {
+                out.say("run `jired doctor` to move the stored credential there");
+            }
             out.emit(
                 "config",
-                &serde_json::json!({"key": a.key, "value": a.value, "scope":
+                &serde_json::json!({"key": a.key, "value": value, "scope":
                     if a.global {"global"} else {"local"}}),
             );
         }
@@ -170,6 +176,21 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::Success)
+}
+
+/// Validate a value against the vocabulary its setting accepts, returning the
+/// canonical spelling so the config file does not accumulate `local-db`,
+/// `localdb` and `local_db` for the same thing.
+fn normalize(key: &str, value: &str) -> Result<String> {
+    Ok(match key {
+        "creds.storage" => crate::auth::CredStore::parse(value)?.as_str().to_string(),
+        "server.deployment" => crate::api::Deployment::parse(value)?.as_str().to_string(),
+        "auth.kind" => crate::api::AuthKind::parse(value)?.as_str().to_string(),
+        "links.mode" => crate::project::links::LinkMode::parse(value)?
+            .as_str()
+            .to_string(),
+        _ => value.to_string(),
+    })
 }
 
 /// Break documentation into lines that fit an ordinary terminal.

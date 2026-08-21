@@ -95,6 +95,21 @@ pub const KEYS: &[KeyDef] = &[
         doc: "API token or personal access token (never written to config files)",
     },
     KeyDef {
+        key: "creds.storage",
+        env: "JIRED_CREDS_STORAGE",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        doc: "Where the credential is kept. keychain: the OS keychain. local_db: \
+              encrypted in .jired/session.db, so it belongs to this workspace \
+              alone. user_config: encrypted in credentials.toml in your user \
+              config directory, shared by every workspace on this machine. The \
+              file-backed stores need JIRED_SECRET_KEY (or --insecure-store). \
+              Unset means keychain when this machine has one, otherwise local_db; \
+              `jired init` records what was actually used, and `jired doctor` \
+              moves the credential when this value changes",
+    },
+    KeyDef {
         key: "workspace.project",
         env: "JIRED_PROJECT",
         flag: Some("project"),

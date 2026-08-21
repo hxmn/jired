@@ -96,7 +96,7 @@ pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
     let mut checks = vec![
         check_layout(&ctx, args)?,
         check_config(&mut ctx, args)?,
-        check_credentials(&ctx)?,
+        check_credentials(&mut ctx, args, g)?,
         filenames,
         check_state_paths(&ctx, args, &final_paths)?,
         check_gitignore(&ctx, args)?,
@@ -273,8 +273,9 @@ fn check_config(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     Ok(repaired("config", false, detail))
 }
 
-/// There is an account, and its token can still be read back.
-fn check_credentials(ctx: &Context) -> Result<Check> {
+/// There is an account, its token can still be read back, and it is kept where
+/// `creds.storage` says it should be.
+fn check_credentials(ctx: &mut Context, args: &DoctorArgs, g: &GlobalArgs) -> Result<Check> {
     let session = SessionStore::open(&ctx.workspace)?;
     let Some(account) = session.account()? else {
         return Ok(problem(
@@ -282,20 +283,50 @@ fn check_credentials(ctx: &Context) -> Result<Check> {
             "no account is stored — run `jired init`",
         ));
     };
-    match account.token() {
-        Ok(_) => Ok(ok(
-            "credentials",
-            format!(
-                "{} ({}, {})",
-                account.identity.as_deref().unwrap_or("account"),
-                account.deployment.as_str(),
-                account.secret_storage()
-            ),
-        )),
-        Err(e) => Ok(problem(
+    if let Err(e) = account.token() {
+        return Ok(problem(
             "credentials",
             format!(
                 "the stored token cannot be read ({}) — run `jired init --force`",
+                e.message
+            ),
+        ));
+    }
+
+    let here = account.secret_location();
+    let wanted = match ctx.resolver.get_quiet("creds.storage")? {
+        Some(v) => crate::auth::CredStore::parse(&v)?,
+        None => here,
+    };
+    if wanted == here {
+        return Ok(ok(
+            "credentials",
+            format!(
+                "{} in {} ({})",
+                account.identity.as_deref().unwrap_or("account"),
+                here.describe(),
+                account.secret_storage()
+            ),
+        ));
+    }
+
+    // creds.storage changed since the credential was stored: move it rather
+    // than making the user re-authenticate for a setting they already answered.
+    let detail = format!(
+        "moving the credential from {} to {}",
+        here.describe(),
+        wanted.describe()
+    );
+    if args.dry_run {
+        return Ok(repaired("credentials", true, detail));
+    }
+    match session.relocate_secret(&account, wanted, g.insecure_store) {
+        Ok(()) => Ok(repaired("credentials", false, detail)),
+        Err(e) => Ok(problem(
+            "credentials",
+            format!(
+                "cannot move the credential to {}: {}",
+                wanted.describe(),
                 e.message
             ),
         )),

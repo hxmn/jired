@@ -1,16 +1,17 @@
 //! `.jired/session.db` — identity and credential references [M1.5].
 
 use crate::api::{AuthKind, Deployment, Myself};
-use crate::auth::{self, SecretStorage, StoredSecret};
+use crate::auth::{self, CredStore, SecretStorage, StoredSecret};
 use crate::error::{JiredError, Result};
 use crate::store::{migrate, now_rfc3339, open_db, Migration};
 use crate::workspace::{restrict_file_mode, Workspace};
 use rusqlite::{params, Connection, OptionalExtension};
 use secrecy::SecretString;
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: r#"
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: r#"
 CREATE TABLE account (
   id            INTEGER PRIMARY KEY,
   profile       TEXT NOT NULL DEFAULT 'default',
@@ -30,7 +31,19 @@ CREATE TABLE account (
 );
 CREATE UNIQUE INDEX account_profile ON account(profile);
 "#,
-}];
+    },
+    // Which backend holds the secret. Rows written before this column existed
+    // are read as "keychain when there is a reference, otherwise this database",
+    // which is exactly what they meant.
+    Migration {
+        version: 2,
+        sql: r#"
+ALTER TABLE account ADD COLUMN secret_store TEXT;
+UPDATE account SET secret_store =
+  CASE WHEN secret_ref IS NOT NULL THEN 'keychain' ELSE 'local_db' END;
+"#,
+    },
+];
 
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -48,8 +61,14 @@ pub struct Account {
 }
 
 impl Account {
+    /// What protects the credential: `keyring`, `encrypted_blob`, `plaintext`.
     pub fn secret_storage(&self) -> &'static str {
         self.secret.storage().as_str()
+    }
+
+    /// Where the credential is kept — the effective `creds.storage`.
+    pub fn secret_location(&self) -> CredStore {
+        self.secret.location()
     }
 
     /// Recover the live credential. Kept off `Account`'s `Debug` output by
@@ -70,6 +89,8 @@ pub struct NewAccount {
     pub tls_insecure: bool,
     pub token: SecretString,
     pub allow_plaintext: bool,
+    /// Where to keep the credential; `None` means keychain if one exists.
+    pub store: Option<CredStore>,
 }
 
 pub struct SessionStore {
@@ -104,19 +125,21 @@ impl SessionStore {
 
     pub fn upsert_account(&self, new: NewAccount) -> Result<Account> {
         let entry_user = auth::keyring_user(&new.base_url, new.identity.as_deref());
-        let secret = auth::store(&entry_user, &new.token, new.allow_plaintext)?;
+        let secret = auth::store(&entry_user, &new.token, new.allow_plaintext, new.store)?;
         let now = now_rfc3339();
 
         self.conn.execute(
             r#"
 INSERT INTO account
   (profile, base_url, deployment, auth_kind, identity, display_name, account_id,
-   secret_ref, secret_blob, secret_kdf, tls_ca_path, tls_insecure, created_at, last_verified_at)
-VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+   secret_ref, secret_blob, secret_kdf, secret_store, tls_ca_path, tls_insecure,
+   created_at, last_verified_at)
+VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
 ON CONFLICT(profile) DO UPDATE SET
   base_url=excluded.base_url, deployment=excluded.deployment, auth_kind=excluded.auth_kind,
   identity=excluded.identity, display_name=excluded.display_name, account_id=excluded.account_id,
   secret_ref=excluded.secret_ref, secret_blob=excluded.secret_blob, secret_kdf=excluded.secret_kdf,
+  secret_store=excluded.secret_store,
   tls_ca_path=excluded.tls_ca_path, tls_insecure=excluded.tls_insecure,
   last_verified_at=excluded.last_verified_at
 "#,
@@ -130,6 +153,7 @@ ON CONFLICT(profile) DO UPDATE SET
                 secret.reference,
                 secret.blob,
                 secret.kdf,
+                secret.store.as_str(),
                 new.tls_ca_path,
                 new.tls_insecure as i64,
                 now,
@@ -143,7 +167,8 @@ ON CONFLICT(profile) DO UPDATE SET
             .conn
             .query_row(
                 r#"SELECT id, profile, base_url, deployment, auth_kind, identity, display_name,
-                          account_id, secret_ref, secret_blob, secret_kdf, tls_ca_path, tls_insecure
+                          account_id, secret_ref, secret_blob, secret_kdf, tls_ca_path,
+                          tls_insecure, secret_store
                    FROM account WHERE profile = 'default'"#,
                 [],
                 |r| {
@@ -161,6 +186,7 @@ ON CONFLICT(profile) DO UPDATE SET
                         r.get::<_, Option<String>>(10)?,
                         r.get::<_, Option<String>>(11)?,
                         r.get::<_, i64>(12)?,
+                        r.get::<_, Option<String>>(13)?,
                     ))
                 },
             )
@@ -179,11 +205,7 @@ ON CONFLICT(profile) DO UPDATE SET
                 account_id: r.7,
                 tls_ca_path: r.11,
                 tls_insecure: r.12 != 0,
-                secret: StoredSecret {
-                    reference: r.8,
-                    blob: r.9,
-                    kdf: r.10,
-                },
+                secret: StoredSecret::from_row(r.13.as_deref(), r.8, r.9, r.10)?,
             }),
         })
     }
@@ -216,6 +238,36 @@ ON CONFLICT(profile) DO UPDATE SET
     pub fn secret_storage(&self) -> Result<Option<SecretStorage>> {
         Ok(self.account()?.map(|a| a.secret.storage()))
     }
+
+    /// Move an account's credential to another backend.
+    ///
+    /// The new copy is written before the old one is removed: a crash in the
+    /// middle leaves the credential in two places, which is recoverable, rather
+    /// than in none, which is not.
+    pub fn relocate_secret(
+        &self,
+        account: &Account,
+        to: CredStore,
+        allow_plaintext: bool,
+    ) -> Result<()> {
+        let token = account.token()?;
+        let entry_user = auth::keyring_user(&account.base_url, account.identity.as_deref());
+        let secret = auth::store(&entry_user, &token, allow_plaintext, Some(to))?;
+
+        self.conn.execute(
+            "UPDATE account SET secret_ref = ?1, secret_blob = ?2, secret_kdf = ?3, \
+             secret_store = ?4 WHERE id = ?5",
+            params![
+                secret.reference,
+                secret.blob,
+                secret.kdf,
+                secret.store.as_str(),
+                account.id,
+            ],
+        )?;
+        auth::delete(&account.secret);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +287,7 @@ mod tests {
             tls_insecure: false,
             token: SecretString::from(token.to_string()),
             allow_plaintext: true,
+            store: Some(CredStore::LocalDb),
         }
     }
 

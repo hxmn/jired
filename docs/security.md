@@ -2,22 +2,46 @@
 
 ## Where your credential lives
 
-jired never writes a token into a config file. Where it does go depends on what
-the machine offers:
+jired never writes a token into `config.toml`. *Where* it does go is your
+choice — `creds.storage`, one of three places:
 
-| Storage | When | What protects it |
+| `creds.storage` | Where | Scope |
 |---|---|---|
-| OS keychain | Default, whenever one is reachable | The keychain. `.jired/session.db` holds only a reference, not the secret. |
-| Encrypted blob | No keychain, and `JIRED_SECRET_KEY` is set | scrypt-derived key, XChaCha20-Poly1305. The blob lives in `session.db`. |
-| Plaintext | No keychain, no key, and you passed `--insecure-store` | Nothing but file permissions. jired says so on every run that stores one. |
+| `keychain` | The OS keychain; `.jired/session.db` holds only a reference | The account, on this machine |
+| `local_db` | `.jired/session.db` in this workspace | This workspace alone |
+| `user_config` | `credentials.toml` in your user config directory (`$XDG_CONFIG_HOME/jired/`, mode `0600`) | Every workspace on this machine |
+
+Unset means "the keychain if this machine has one, otherwise `local_db`".
+`jired init` records which one it actually used, and `jired doctor` moves the
+credential when you change the setting, so switching never means authenticating
+again.
+
+*What protects it* is a separate question, decided by where it went:
+
+| Protection | When | What it is |
+|---|---|---|
+| The keychain | `creds.storage = keychain` | Whatever your OS provides |
+| Encrypted blob | The file-backed stores, with `JIRED_SECRET_KEY` set | scrypt-derived key, XChaCha20-Poly1305 |
+| Plaintext | The file-backed stores, no key, and you passed `--insecure-store` | Nothing but file permissions. jired says so on every run that stores one. |
 
 Without a keychain and without `JIRED_SECRET_KEY`, jired refuses to store the
-credential rather than quietly falling back to plaintext.
+credential rather than quietly falling back to plaintext. Asking for a store
+that cannot work — `keychain` on a machine without one — is an error rather
+than a silent downgrade to a weaker one.
+
+`user_config` is worth its own sentence: it is keyed by host and identity, so
+ten workspaces pointing at one Jira share one credential. `jired init` in the
+second workspace finds it and does not ask for a token at all. That also means
+one compromised read of that file is ten workspaces, which is the trade being
+made.
 
 ```sh
 # Headless or CI:
 export JIRED_SECRET_KEY='a passphrase this machine can produce'
 jired init --url https://acme.atlassian.net --email you@acme.com --token "$JIRA_TOKEN"
+
+# One credential for every workspace on this machine:
+jired config set creds.storage user_config --global
 ```
 
 ## Threat model of the encrypted blob
@@ -55,9 +79,10 @@ sentinels so your own entries survive regeneration:
 # END jired
 ```
 
-`.jired/` is created mode `0700` and `session.db` mode `0600`. The mode is
-re-checked and repaired on every open, so a careless `chmod` is corrected rather
-than tolerated.
+`.jired/` is created mode `0700` and `session.db` mode `0600`; so is
+`credentials.toml` and the directory holding it. The mode is re-checked and
+repaired on every open, so a careless `chmod` is corrected rather than
+tolerated.
 
 Attachment folders (`.PROJ-0142. Summary/`) are **not** ignored: they hold issue
 content, and whether that belongs in your repository is your call.

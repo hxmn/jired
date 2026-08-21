@@ -43,6 +43,15 @@
     },
     "secret_storage": {
       "type": "string"
+    },
+    "secret_location": {
+      "type": "string",
+      "enum": [
+        "keychain",
+        "local_db",
+        "user_config"
+      ],
+      "description": "Where the credential is kept (creds.storage)"
     }
   }
 }

@@ -1886,6 +1886,150 @@ fn clean_leaves_a_healthy_workspace_alone() {
 }
 
 // ---------------------------------------------------------------------------
+// Credential storage [M1.5]
+// ---------------------------------------------------------------------------
+
+/// Run a command with extra environment, returning its parsed JSON stdout.
+fn json_with(ws: &Ws, env: &[(&str, &str)], args: &[&str]) -> Value {
+    let mut cmd = ws.cmd(args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.arg("--json").output().expect("run");
+    assert!(
+        out.status.success(),
+        "`jired {}` failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("json")
+}
+
+/// With no keychain reachable, the credential belongs to the workspace — and
+/// `init` writes down which store it actually used, so nothing has to guess.
+#[test]
+fn credentials_default_to_the_workspace_when_there_is_no_keychain() {
+    let ws = Ws::new();
+    let report = ws.init();
+    assert_eq!(report["account"]["secret_location"], "local_db");
+    assert_eq!(report["account"]["secret_storage"], "encrypted_blob");
+    assert!(ws
+        .read(".jired/config.toml")
+        .contains("storage = \"local_db\""));
+    assert_eq!(ws.json(&["whoami"])["secret_location"], "local_db");
+}
+
+/// `creds.storage` is a decision, not a description: changing it moves the
+/// credential rather than making the user authenticate again.
+#[test]
+fn doctor_moves_the_credential_when_creds_storage_changes() {
+    let ws = Ws::new();
+    let home = TempDir::new().unwrap();
+    let xdg = home.path().to_str().unwrap();
+    let credentials = home.path().join("jired/credentials.toml");
+    ws.init();
+
+    json_with(
+        &ws,
+        &[("XDG_CONFIG_HOME", xdg)],
+        &["config", "set", "creds.storage", "user-config"],
+    );
+    let report = json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["doctor"]);
+    assert_eq!(report["problems"], 0);
+    let check = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "credentials")
+        .unwrap()
+        .clone();
+    assert_eq!(check["status"], "fixed");
+
+    let file = std::fs::read_to_string(&credentials).expect("the credential file was written");
+    assert!(file.contains("fixture.invalid"), "{file}");
+    assert!(
+        !file.contains("fixture-token"),
+        "the token is not in the clear"
+    );
+
+    let who = json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["whoami"]);
+    assert_eq!(who["secret_location"], "user_config");
+
+    // And a command that needs the token still finds it.
+    json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["pull"]);
+
+    // Moving it back leaves nothing behind in the shared file.
+    json_with(
+        &ws,
+        &[("XDG_CONFIG_HOME", xdg)],
+        &["config", "set", "creds.storage", "local_db"],
+    );
+    json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["doctor"]);
+    let file = std::fs::read_to_string(&credentials).unwrap();
+    assert!(!file.contains("fixture.invalid"), "{file}");
+    assert_eq!(
+        json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["whoami"])["secret_location"],
+        "local_db"
+    );
+}
+
+/// The point of the user-config store: one credential, many workspaces.
+#[test]
+fn a_second_workspace_reuses_a_credential_from_the_user_config_store() {
+    let first = Ws::new();
+    let home = TempDir::new().unwrap();
+    let xdg = home.path().to_str().unwrap();
+    let env: &[(&str, &str)] = &[
+        ("XDG_CONFIG_HOME", xdg),
+        ("JIRED_CREDS_STORAGE", "user_config"),
+    ];
+
+    let report = json_with(&first, env, &["init", "--no-pull"]);
+    assert_eq!(report["account"]["secret_location"], "user_config");
+
+    // A fresh workspace with no token anywhere in its environment.
+    let second = Ws::new();
+    let mut cmd = second.cmd(&["init", "--no-pull", "--json"]);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.env_remove("JIRED_TOKEN").output().unwrap();
+    assert!(
+        out.status.success(),
+        "the shared credential should have been reused: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["account"]["secret_location"], "user_config");
+    assert_eq!(report["account"]["display_name"], "Ilya A");
+}
+
+/// Asking for a store that cannot work has to fail, not quietly use another one:
+/// `creds.storage = keychain` that silently wrote a file would be a lie.
+#[test]
+fn an_unavailable_keychain_is_refused_rather_than_downgraded() {
+    let ws = Ws::new();
+    let mut cmd = ws.cmd(&["init", "--no-pull", "--json"]);
+    let out = cmd.env("JIRED_CREDS_STORAGE", "keychain").output().unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(err["kind"], "auth");
+    assert!(err["hint"].as_str().unwrap().contains("creds.storage"));
+}
+
+#[test]
+fn an_unknown_credential_store_is_rejected_when_it_is_set() {
+    let ws = Ws::new();
+    ws.init();
+    let out = ws
+        .cmd(&["config", "set", "creds.storage", "somewhere-else"])
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+}
+
+// ---------------------------------------------------------------------------
 // doctor
 // ---------------------------------------------------------------------------
 

@@ -22,6 +22,8 @@ pub struct WhoamiReport {
     pub display_name: Option<String>,
     pub account_id: Option<String>,
     pub secret_storage: String,
+    /// Where the credential is kept: keychain, local_db, or user_config.
+    pub secret_location: String,
 }
 
 pub fn run(g: &GlobalArgs, args: &WhoamiArgs, out: Out) -> Result<ExitCode> {
@@ -46,6 +48,7 @@ pub fn run(g: &GlobalArgs, args: &WhoamiArgs, out: Out) -> Result<ExitCode> {
         display_name,
         account_id,
         secret_storage: account.secret_storage().to_string(),
+        secret_location: account.secret_location().as_str().to_string(),
     };
 
     out.say(format!(
@@ -54,6 +57,11 @@ pub fn run(g: &GlobalArgs, args: &WhoamiArgs, out: Out) -> Result<ExitCode> {
         report.identity.as_deref().unwrap_or("?"),
         report.base_url,
         report.deployment
+    ));
+    out.say(format!(
+        "credential in {} ({})",
+        account.secret_location().describe(),
+        report.secret_storage
     ));
     out.emit("whoami", &report);
     Ok(ExitCode::Success)

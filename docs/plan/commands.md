@@ -7,8 +7,8 @@
 `--insecure`, `--ca-cert PATH`, `--profile NAME`.
 
 **Env vars:** `JIRED_URL`, `JIRED_EMAIL`, `JIRED_TOKEN`, `JIRED_PROJECT`,
-`JIRED_PROFILE`, `JIRED_NO_INPUT`, `JIRED_SECRET_KEY`, `JIRED_CA_CERT`,
-`JIRED_INSECURE`, plus standard `HTTPS_PROXY`/`NO_PROXY`.
+`JIRED_PROFILE`, `JIRED_NO_INPUT`, `JIRED_SECRET_KEY`, `JIRED_CREDS_STORAGE`,
+`JIRED_CA_CERT`, `JIRED_INSECURE`, plus standard `HTTPS_PROXY`/`NO_PROXY`.
 
 **Resolution chain (highest first):** CLI flag → `JIRED_*` env → `.jired/config.toml`
 → `$XDG_CONFIG_HOME/jired/config.toml` → built-in default → prompt. `--no-input` (or
@@ -49,6 +49,12 @@ Interactively a three-question wizard — URL, identity, project — and nothing
   unpinnable rather than half-trusted. Later runs reuse the pinned file silently.
 * the project picker lists keys, filters on typing, and accepts an empty answer as
   "every project I can see".
+
+* `creds.storage` decides where the credential goes — `keychain`, `local_db`
+  (`.jired/session.db`), or `user_config` (`credentials.toml` in the user config
+  directory, shared by every workspace). Unset means keychain-if-available. An
+  existing credential for the same host and identity in a shared store is reused
+  instead of asked for, except under `--force`.
 
 Then: `GET /myself` verify → `.jired/`, a fully documented `config.toml` (every
 setting, including the ones at their default), `.gitignore` entry,
@@ -132,7 +138,8 @@ source of truth).
 
 ### `jired doctor [--dry-run] [--regroup]`
 Checks a workspace over and repairs what it can: `.jired/` layout and permissions,
-missing config defaults, readable credentials, filenames that predate a naming
+missing config defaults, credentials that are unreadable or no longer where
+`creds.storage` says they belong (it moves them), filenames that predate a naming
 convention (this is the migration path for zero-padded issue numbers), database rows
 pointing at the wrong file, the `.gitignore` block, and the generated agent docs.
 Renaming files re-links the grouping folders automatically; `--regroup` rebuilds them
@@ -141,7 +148,9 @@ JSON: `{"schema":"jired/doctor/1","checks":[{"name":"filenames","status":"fixed"
 
 ### `jired config get|set|list [--global]`
 TOML round-trip preserving comments (`toml_edit`); refuses to store secrets
-(points at `init`).
+(points at `init`). Values with a fixed vocabulary (`creds.storage`,
+`server.deployment`, `auth.kind`, `links.mode`) are validated and canonicalised
+at set time; `list --all` prints each setting's documentation.
 
 ### `jired whoami` · `jired projects|boards|sprints list [--refresh]`
 Cached + `--refresh`; table / JSON.

@@ -114,6 +114,16 @@ pub fn render() -> String {
          is reported and ignored.\n\n",
     );
 
+    s.push_str("## Credentials\n\n");
+    s.push_str(
+        "The token is never in `config.toml`. `creds.storage` says where it is: \
+         `keychain`, `local_db` (`.jired/session.db`), or `user_config` \
+         (`credentials.toml` in the user config directory, shared by every \
+         workspace on the machine). The file-backed stores encrypt it with \
+         `JIRED_SECRET_KEY`. Changing the setting and running `jired doctor` \
+         moves the credential; it never has to be entered twice.\n\n",
+    );
+
     s.push_str("## Repairing a workspace\n\n");
     s.push_str(
         "`jired doctor` checks the layout, the config file, the credentials, the filenames \

@@ -61,7 +61,10 @@ custom-field schema) has been observed yet.
 - [x] File-mode enforcement (0600, warn+fix)
 - [x] Keyring backend (`secret_ref`); `secrecy::SecretString` everywhere
 - [x] Encrypted-blob fallback: scrypt(`JIRED_SECRET_KEY`) + XChaCha20-Poly1305; refusal without key unless `--insecure-store` (D11)
-- [x] Tests: round-trip via mock keyring; blob encrypt/decrypt; refusal path
+- [x] `creds.storage` picks the backend: `keychain`, `local_db` (`.jired/session.db`), or `user_config` (`credentials.toml` in the user config directory, shared by every workspace and keyed by host + identity)
+- [x] An explicit choice is honoured or fails — never silently downgraded — and `jired doctor` moves the credential when the setting changes
+- [x] `init` reuses an account-scoped credential this machine already holds instead of asking for it again (not under `--force`)
+- [x] Tests: round-trip via mock keyring; blob encrypt/decrypt; refusal path; relocation between all three stores; a second workspace reusing a shared credential
 - **Done when:** credentials survive restart via keyring and via blob fallback, and never appear in logs (grep test).
 
 ### M1.6 Jira API abstraction

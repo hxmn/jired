@@ -3,38 +3,136 @@
   "$id": "jired/init/1",
   "title": "jired init result",
   "type": "object",
-  "required": ["schema", "account", "workspace"],
+  "required": [
+    "schema",
+    "account",
+    "workspace"
+  ],
   "properties": {
-    "schema": { "const": "jired/init/1" },
+    "schema": {
+      "const": "jired/init/1"
+    },
     "account": {
       "type": "object",
-      "required": ["base_url", "deployment", "auth_kind"],
+      "required": [
+        "base_url",
+        "deployment",
+        "auth_kind"
+      ],
       "properties": {
-        "base_url": { "type": "string" },
-        "deployment": { "type": "string", "enum": ["cloud", "datacenter"] },
+        "base_url": {
+          "type": "string"
+        },
+        "deployment": {
+          "type": "string",
+          "enum": [
+            "cloud",
+            "datacenter"
+          ]
+        },
         "auth_kind": {
           "type": "string",
-          "enum": ["api_token", "pat", "basic", "cookie", "oauth2"]
+          "enum": [
+            "api_token",
+            "pat",
+            "basic",
+            "cookie",
+            "oauth2"
+          ]
         },
-        "identity": { "type": ["string", "null"] },
-        "display_name": { "type": ["string", "null"] },
-        "account_id": { "type": ["string", "null"] },
+        "identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "secret_storage": {
           "type": "string",
-          "enum": ["keyring", "encrypted_blob", "plaintext"]
+          "enum": [
+            "keyring",
+            "encrypted_blob",
+            "plaintext"
+          ]
+        },
+        "secret_location": {
+          "type": "string",
+          "enum": [
+            "keychain",
+            "local_db",
+            "user_config"
+          ],
+          "description": "Where the credential is kept (creds.storage)"
+        },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "ca_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "insecure": {
+              "type": "boolean"
+            },
+            "trusted_fingerprint": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "SHA-256 of a certificate pinned during this run"
+            }
+          }
         }
       }
     },
     "workspace": {
       "type": "object",
-      "required": ["root", "project"],
+      "required": [
+        "root",
+        "project"
+      ],
       "properties": {
-        "root": { "type": "string" },
-        "project": { "type": ["string", "null"] },
-        "gitignore_updated": { "type": "boolean" },
-        "agent_docs": { "type": "array", "items": { "type": "string" } }
+        "root": {
+          "type": "string"
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gitignore_updated": {
+          "type": "boolean"
+        },
+        "agent_docs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "config": {
+          "type": "string"
+        }
       }
     },
-    "pulled": { "type": ["object", "null"] }
+    "pulled": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
   }
 }

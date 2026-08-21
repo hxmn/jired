@@ -119,10 +119,20 @@ person actually has to supply — URL, email, token, project — are ever prompt
 Run `jired config list --all` to see every setting, its value, and where it came
 from.
 
-Credentials go to the OS keychain. Headless environments set `JIRED_SECRET_KEY`
-to a passphrase and jired stores an encrypted blob instead — see
-[docs/security.md](docs/security.md), which is explicit about what that does and
-does not protect against.
+Credentials go wherever `creds.storage` says: `keychain` (the default when the
+machine has one), `local_db` for `.jired/session.db` in this workspace, or
+`user_config` for `credentials.toml` in your user config directory, shared by
+every workspace here. The two file-backed stores encrypt the token with a
+passphrase from `JIRED_SECRET_KEY`, which is how headless environments work;
+`jired doctor` moves the credential when you change the setting.
+
+```sh
+jired config set creds.storage user_config --global   # one credential, every workspace
+jired doctor                                          # move the existing one there
+```
+
+See [docs/security.md](docs/security.md), which is explicit about what each
+store does and does not protect against.
 
 ## Repairing a workspace
 
