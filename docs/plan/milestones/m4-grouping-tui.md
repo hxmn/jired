@@ -68,7 +68,7 @@ command works non-interactively today, so nothing is blocked on them.
 
 ### M4.7 TUI screens
 - [x] New-issue form: summary, type, priority, labels, parent, project, description, with the workspace's own values as options
-- [x] Assignee autocompletes to the mention as a name is typed, and refuses to save one that matches nobody; the sprint field offers the open sprints and the backlog
+- [x] Assignee autocompletes to the mention as a name is typed, and refuses to save one that matches nobody; the sprint field is a ticked list of every sprint the workspace knows — running, queued, then closed newest first, each row saying which — and the backlog
 - [x] Edit-issue form (`jired edit KEY`): the fields a push can send, loaded from the file, marked as they move, written back as a normal local edit; `$EDITOR` on the file where a full-screen terminal is unavailable
 - [x] Init wizard: url → deployment and credential inferred → verify → project picker (line-based rather than full-screen; see M1.13)
 - [x] Issue picker: `jired edit` with no key searches the working copy by subsequence over key and summary

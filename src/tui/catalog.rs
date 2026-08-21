@@ -26,8 +26,28 @@ pub struct Catalog {
     pub components: Vec<String>,
     pub people: Vec<KnownUser>,
     pub issues: Vec<KnownIssue>,
-    /// Sprints an issue can be moved into: the open ones, most recent first.
-    pub sprints: Vec<String>,
+    /// Every sprint the board cache knows: the one running, the ones queued
+    /// behind it, then the finished ones, newest first.
+    pub sprints: Vec<KnownSprint>,
+}
+
+/// A sprint the workspace has seen, and what it is doing now.
+#[derive(Debug, Clone)]
+pub struct KnownSprint {
+    pub name: String,
+    /// `active`, `future` or `closed`.
+    pub state: String,
+}
+
+impl KnownSprint {
+    /// How the state reads beside the name in a list.
+    pub fn detail(&self) -> &'static str {
+        match self.state.as_str() {
+            "active" => "running now",
+            "future" => "not started",
+            _ => "closed",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -143,19 +163,36 @@ impl Catalog {
         }
     }
 
-    /// Add the sprints from the board cache.
+    /// Add the sprints from the board cache — all of them, closed included.
     ///
-    /// Closed sprints are left out: an issue can be moved into the sprint that
-    /// is running or one that has not started, and offering to move it into a
-    /// finished one is offering to rewrite history.
+    /// `sprint:` is a history as much as a destination, so a finished sprint is
+    /// a real answer: it is where the issue has been. The ones an issue can
+    /// actually be moved into come first, and every row says which it is, so
+    /// the difference is on screen rather than left to be remembered.
     pub fn with_sprints(mut self, sprints: &[crate::store::state::SprintRow]) -> Self {
-        let mut open: Vec<&crate::store::state::SprintRow> = sprints
-            .iter()
-            .filter(|s| s.state == "active" || s.state == "future")
+        let mut all: Vec<&crate::store::state::SprintRow> = sprints.iter().collect();
+        // The one running, then the ones queued behind it, then the finished
+        // ones newest first — a sprint that just ended is the likeliest of them.
+        all.sort_by(|a, b| {
+            rank(&a.state)
+                .cmp(&rank(&b.state))
+                .then_with(|| match (rank(&a.state), rank(&b.state)) {
+                    (2, 2) => recency(&b.id).cmp(&recency(&a.id)),
+                    _ => std::cmp::Ordering::Equal,
+                })
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        // A name can belong to both a closed sprint and an open one; the list
+        // holds names, so the higher-ranked of the two is the one to keep.
+        let mut seen = std::collections::HashSet::new();
+        self.sprints = all
+            .into_iter()
+            .filter(|s| seen.insert(s.name.to_lowercase()))
+            .map(|s| KnownSprint {
+                name: s.name.clone(),
+                state: s.state.clone(),
+            })
             .collect();
-        // The one running comes first, then the ones queued behind it.
-        open.sort_by_key(|s| (s.state != "active", s.name.clone()));
-        self.sprints = open.into_iter().map(|s| s.name.clone()).collect();
         self
     }
 }
@@ -178,6 +215,21 @@ impl Tally {
         all.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         all.into_iter().map(|(value, _)| value).collect()
     }
+}
+
+/// Where a sprint's state puts it in the list.
+fn rank(state: &str) -> u8 {
+    match state {
+        "active" => 0,
+        "future" => 1,
+        _ => 2,
+    }
+}
+
+/// Sprint ids climb as sprints are created, so the id orders finished sprints
+/// by age. One that is not a number sorts oldest rather than guessing.
+fn recency(id: &str) -> u64 {
+    id.parse().unwrap_or(0)
 }
 
 fn text(value: Option<&serde_json::Value>) -> String {
@@ -345,5 +397,58 @@ mod tests {
         assert!(mentions.contains(&"@[Ilya A](5b10a2)"), "{mentions:?}");
         assert!(mentions.contains(&"@[Jane D](5b1af9)"), "{mentions:?}");
         assert_eq!(catalog.people[0].display_name, "Ilya A");
+    }
+
+    fn sprint_row(id: &str, name: &str, state: &str) -> crate::store::state::SprintRow {
+        crate::store::state::SprintRow {
+            id: id.into(),
+            board_id: Some("1".into()),
+            name: name.into(),
+            state: state.into(),
+        }
+    }
+
+    /// Closed sprints belong in the list — an issue has been in them — but
+    /// behind the ones it can still be moved into.
+    #[test]
+    fn sprints_are_offered_running_then_queued_then_finished_newest_first() {
+        let catalog = Catalog::default().with_sprints(&[
+            sprint_row("3", "Sprint 41", "closed"),
+            sprint_row("5", "Sprint 43", "future"),
+            sprint_row("1", "Sprint 39", "closed"),
+            sprint_row("4", "Sprint 42", "active"),
+            sprint_row("2", "Sprint 40", "closed"),
+        ]);
+        let offered: Vec<(&str, &str)> = catalog
+            .sprints
+            .iter()
+            .map(|s| (s.name.as_str(), s.detail()))
+            .collect();
+        assert_eq!(
+            offered,
+            vec![
+                ("Sprint 42", "running now"),
+                ("Sprint 43", "not started"),
+                ("Sprint 41", "closed"),
+                ("Sprint 40", "closed"),
+                ("Sprint 39", "closed"),
+            ]
+        );
+    }
+
+    /// Sprint names repeat across boards and across years. The list holds
+    /// names, so one row per name, and the one still running wins it.
+    #[test]
+    fn a_name_shared_by_a_closed_and_an_open_sprint_is_listed_once() {
+        let catalog = Catalog::default().with_sprints(&[
+            sprint_row("1", "Hardening", "closed"),
+            sprint_row("2", "Hardening", "active"),
+        ]);
+        let offered: Vec<(&str, &str)> = catalog
+            .sprints
+            .iter()
+            .map(|s| (s.name.as_str(), s.detail()))
+            .collect();
+        assert_eq!(offered, vec![("Hardening", "running now")]);
     }
 }

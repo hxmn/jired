@@ -166,13 +166,19 @@ impl EditScreen {
 
         // The issue's own values belong in every list, whether or not the rest
         // of the workspace happens to use them.
-        // Every sprint the issue is in belongs among the options, closed ones
-        // included: an issue that rolled over has been through sprints nobody
-        // can move it into any more, and the list has to show where it has been.
-        let mut sprints = catalog.sprints.clone();
+        // The list is every sprint the board cache knows, closed ones included,
+        // each row saying what its sprint is doing. A sprint the issue is in
+        // that the cache has never heard of — another board's, or one fetched
+        // before this workspace existed — is added rather than dropped, since
+        // the list has to be able to show where the issue has been.
+        let mut sprints: Vec<Item> = catalog
+            .sprints
+            .iter()
+            .map(|s| Item::new(&s.name).with_detail(s.detail()))
+            .collect();
         for name in &current.sprint {
-            if !sprints.iter().any(|s| s.eq_ignore_ascii_case(name)) {
-                sprints.insert(0, name.clone());
+            if !sprints.iter().any(|s| s.value.eq_ignore_ascii_case(name)) {
+                sprints.insert(0, Item::new(name));
             }
         }
 
@@ -197,7 +203,7 @@ impl EditScreen {
                 .with_items(catalog.components.iter().map(Item::new).collect())
                 .with_hint("comma-separated"),
             Field::line(SPRINT_LABEL, BACKLOG)
-                .with_items(sprints.iter().map(Item::new).collect())
+                .with_items(sprints)
                 .multiple()
                 .with_hint("^l to tick sprints; the last one is where it moves to"),
             Field::line(POINTS_LABEL, "none").with_hint("a number, or empty to clear"),
@@ -604,8 +610,15 @@ fn format_points(points: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::catalog::{KnownIssue, KnownUser};
+    use crate::tui::catalog::{KnownIssue, KnownSprint, KnownUser};
     use crate::tui::render_lines;
+
+    fn sprint(name: &str, state: &str) -> KnownSprint {
+        KnownSprint {
+            name: name.into(),
+            state: state.into(),
+        }
+    }
 
     fn catalog() -> Catalog {
         Catalog {
@@ -614,7 +627,11 @@ mod tests {
             priorities: vec!["High".into(), "Medium".into()],
             labels: vec!["auth".into(), "backend".into(), "sso".into()],
             components: vec!["web".into(), "api".into()],
-            sprints: vec!["Sprint 42".into(), "Sprint 43".into()],
+            sprints: vec![
+                sprint("Sprint 42", "active"),
+                sprint("Sprint 43", "future"),
+                sprint("Sprint 41", "closed"),
+            ],
             people: vec![
                 KnownUser {
                     mention: "@[Ilya A](5b10a2)".into(),
@@ -795,6 +812,27 @@ mod tests {
         assert_eq!(
             done(screen.handle(key(KeyCode::Enter))).sprint,
             current.sprint
+        );
+    }
+
+    /// A finished sprint is where an issue has been, so it is an answer the
+    /// list offers whether or not the issue is in it — and the row says so,
+    /// because ticking it last is not a move anyone can make.
+    #[test]
+    fn closed_sprints_are_offered_and_say_that_they_are_closed() {
+        let screen = screen();
+        let rows: Vec<(&str, &str)> = screen.fields[SPRINT]
+            .items
+            .iter()
+            .map(|i| (i.value.as_str(), i.detail.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("Sprint 42", "running now"),
+                ("Sprint 43", "not started"),
+                ("Sprint 41", "closed"),
+            ]
         );
     }
 

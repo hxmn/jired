@@ -213,9 +213,12 @@ actually send, and no others, so nothing offered is silently dropped. The
 assignee field completes as you type: a name becomes the `@[Name](id)` mention
 the file wants, tab takes the suggestion, and saving a name that matches nobody
 is refused rather than sent. The sprint field is a ticked list — space toggles, or tab while
-filtering — offering the sprint running now, the ones queued behind it, and
-whichever sprints the issue is already in, closed ones included. Ticking none of
-them is the backlog. Options come from
+filtering — offering every sprint the workspace knows: the one running now, the
+ones queued behind it, then the closed ones newest first, each row saying which
+it is. Closed sprints are on the list because `sprint:` records where an issue
+has been as well as where it is; only the last entry is a move a push can make.
+A sprint the issue is in that the cache has never seen is offered too, rather
+than dropped. Ticking none of them is the backlog. Options come from
 the workspace's own snapshots (statuses and types it uses, people it has seen,
 its issues as parents), never from the network. Saving writes the file, renaming
 it when the summary changed; the change then behaves like any other local edit —
