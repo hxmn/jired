@@ -133,7 +133,7 @@ assignee: "@[Ilya A](5b10a2…)"   # editable; `me` accepted as shorthand
 reporter: "@[Jane D](5b1af9…)"   # RO
 created: 2026-08-01T09:12:00Z    # RO
 updated: 2026-08-16T14:03:00Z    # RO
-sprint: "Sprint 42"      # editable
+sprint: [Sprint 41, Sprint 42]   # editable; oldest first, one written as a string
 parent: PROJ-100         # editable
 epic: PROJ-90            # editable (cloud: parent; dc: epic-link custom field)
 fix_versions: [2.4.0]    # editable
@@ -154,6 +154,14 @@ jired:                   # RO sync block — local edits ignored with a warning
 
 Edits to RO fields: warning + ignored (rewritten correctly on next pull);
 edits to `key`/`id`: hard error.
+
+`sprint:` names every sprint the issue has been through or is queued for, oldest
+first, because Jira's field is a list and an issue that rolls over stays in the
+sprint it came from. One sprint is written as a plain string and read back as a
+list of one, so files that predate the list form are unchanged; `sprints:` is
+accepted on the way in. The last entry is where the issue is now and the only one
+a push can move (a board call, D23); the earlier entries are the server's record
+and an edit to them is reported rather than sent. No sprint at all is the backlog.
 
 ## JSON output versioning (D19)
 
