@@ -33,6 +33,7 @@
           "assignee",
           "labels",
           "components",
+          "sprint",
           "story_points",
           "parent",
           "description"

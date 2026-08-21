@@ -85,6 +85,11 @@ pub trait JiraApi: Send + Sync {
         fields: Option<serde_json::Value>,
     ) -> Result<()>;
 
+    /// Move issues into a sprint, or out of every sprint when `sprint` is
+    /// `None`. The Sprint field itself is read-only on many instances; the
+    /// board API is the way that works on both deployments.
+    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()>;
+
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment>;
     async fn update_comment(&self, key: &str, id: &str, body: &RichText) -> Result<RemoteComment>;
     async fn delete_comment(&self, key: &str, id: &str) -> Result<()>;

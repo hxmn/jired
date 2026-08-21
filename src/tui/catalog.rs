@@ -26,6 +26,8 @@ pub struct Catalog {
     pub components: Vec<String>,
     pub people: Vec<KnownUser>,
     pub issues: Vec<KnownIssue>,
+    /// Sprints an issue can be moved into: the open ones, most recent first.
+    pub sprints: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,7 +139,24 @@ impl Catalog {
                 })
                 .collect(),
             issues: issues.into_iter().map(|(_, issue)| issue).collect(),
+            sprints: Vec::new(),
         }
+    }
+
+    /// Add the sprints from the board cache.
+    ///
+    /// Closed sprints are left out: an issue can be moved into the sprint that
+    /// is running or one that has not started, and offering to move it into a
+    /// finished one is offering to rewrite history.
+    pub fn with_sprints(mut self, sprints: &[crate::store::state::SprintRow]) -> Self {
+        let mut open: Vec<&crate::store::state::SprintRow> = sprints
+            .iter()
+            .filter(|s| s.state == "active" || s.state == "future")
+            .collect();
+        // The one running comes first, then the ones queued behind it.
+        open.sort_by_key(|s| (s.state != "active", s.name.clone()));
+        self.sprints = open.into_iter().map(|s| s.name.clone()).collect();
+        self
     }
 }
 

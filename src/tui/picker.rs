@@ -200,6 +200,34 @@ impl Picker {
     }
 }
 
+/// The one item `needle` matches best, by the same scoring the list uses.
+///
+/// Shared so that typing into a field and typing into its list agree about what
+/// the best match is: a suggestion that differs from the first row of the list
+/// it came from would be its own small betrayal.
+pub fn best_match<'a>(items: &'a [Item], needle: &str) -> Option<&'a Item> {
+    let needle = needle.trim().to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    items
+        .iter()
+        .filter_map(|item| {
+            score(
+                &format!("{} {}", item.label, item.detail).to_lowercase(),
+                &needle,
+            )
+            .map(|s| (s, item))
+        })
+        // `max_by_key` keeps the last of equal scores; the first is the one the
+        // caller ordered highest, so the comparison is reversed here.
+        .fold(None, |best: Option<(i32, &Item)>, (s, item)| match best {
+            Some((top, _)) if top >= s => best,
+            _ => Some((s, item)),
+        })
+        .map(|(_, item)| item)
+}
+
 /// Score `needle` as a subsequence of `haystack`, or `None` if it is not one.
 ///
 /// Both sides are already lowercased by the caller.
@@ -269,6 +297,31 @@ mod tests {
         let mut by_detail = Picker::new("Parent", issues(), false);
         typed(&mut by_detail, "sso ro");
         assert_eq!(by_detail.items[by_detail.matches[0]].value, "OPS-7");
+    }
+
+    #[test]
+    fn the_best_match_is_the_one_the_list_would_put_first() {
+        let items = issues();
+        assert_eq!(
+            best_match(&items, "pl142").map(|i| i.value.as_str()),
+            Some("PLAT-142")
+        );
+        assert_eq!(
+            best_match(&items, "sso").map(|i| i.value.as_str()),
+            Some("OPS-7")
+        );
+        assert!(best_match(&items, "zzz").is_none());
+        assert!(
+            best_match(&items, "  ").is_none(),
+            "nothing typed, nothing meant"
+        );
+
+        // Equal scores keep the caller's order, which is the list's order.
+        let same = vec![Item::new("Ilya A"), Item::new("Ilya B")];
+        assert_eq!(
+            best_match(&same, "ilya").map(|i| i.value.as_str()),
+            Some("Ilya A")
+        );
     }
 
     #[test]

@@ -528,6 +528,17 @@ impl JiraApi for Rest {
         Ok(())
     }
 
+    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()> {
+        let path = match sprint {
+            Some(id) => format!("/rest/agile/1.0/sprint/{id}/issue"),
+            None => "/rest/agile/1.0/backlog/issue".to_string(),
+        };
+        self.http
+            .post_json(&path, json!({ "issues": keys }))
+            .await
+            .map(|_| ())
+    }
+
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment> {
         let v = self
             .http

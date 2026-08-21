@@ -61,7 +61,8 @@ pub fn run(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
         let catalog = Catalog::from_rows(
             &engine.state.issues()?,
             ctx.resolver.get_quiet("workspace.project")?.as_deref(),
-        );
+        )
+        .with_sprints(&engine.state.sprints()?);
         let mut screen = EditScreen::new(&key, &catalog, &before);
         match crate::tui::run(&mut screen)? {
             Some(edits) => (write_back(&engine, doc, &file, &edits)?, edits),
@@ -236,6 +237,7 @@ fn changed_fields(before: &Edits, after: &Edits) -> Vec<&'static str> {
         ("assignee", before.assignee != after.assignee),
         ("labels", before.labels != after.labels),
         ("components", before.components != after.components),
+        ("sprint", before.sprint != after.sprint),
         ("story_points", before.story_points != after.story_points),
         ("parent", before.parent != after.parent),
         ("description", before.description != after.description),

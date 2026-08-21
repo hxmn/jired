@@ -34,6 +34,8 @@ pub struct Edits {
     pub assignee: Option<String>,
     pub labels: Vec<String>,
     pub components: Vec<String>,
+    /// The sprint the issue sits in; `None` is the backlog.
+    pub sprint: Option<String>,
     pub story_points: Option<f64>,
     pub parent: Option<String>,
     pub description: String,
@@ -51,6 +53,7 @@ impl Edits {
             assignee: fm.assignee.clone(),
             labels: fm.labels.clone(),
             components: fm.components.clone(),
+            sprint: fm.sprint.clone(),
             story_points: fm.story_points,
             parent: fm.parent.clone(),
             description: doc.description.trim_end().to_string(),
@@ -69,6 +72,7 @@ impl Edits {
         fm.assignee = self.assignee.clone();
         fm.labels = self.labels.clone();
         fm.components = self.components.clone();
+        fm.sprint = self.sprint.clone();
         fm.story_points = self.story_points;
         fm.parent = self.parent.clone();
         // The heading and the summary are two renderings of one thing.
@@ -85,9 +89,10 @@ const PRIORITY: usize = 3;
 const ASSIGNEE: usize = 4;
 const LABELS: usize = 5;
 const COMPONENTS: usize = 6;
-const POINTS: usize = 7;
-const PARENT: usize = 8;
-const DESCRIPTION: usize = 9;
+const SPRINT: usize = 7;
+const POINTS: usize = 8;
+const PARENT: usize = 9;
+const DESCRIPTION: usize = 10;
 
 const SUMMARY_LABEL: &str = "Summary";
 const STATUS_LABEL: &str = "Status";
@@ -96,7 +101,10 @@ const PRIORITY_LABEL: &str = "Priority";
 const ASSIGNEE_LABEL: &str = "Assignee";
 const LABELS_LABEL: &str = "Labels";
 const COMPONENTS_LABEL: &str = "Components";
+const SPRINT_LABEL: &str = "Sprint";
 const POINTS_LABEL: &str = "Points";
+/// What the empty sprint value is called, because "—" does not say it.
+const BACKLOG: &str = "Backlog";
 const PARENT_LABEL: &str = "Parent";
 const DESCRIPTION_LABEL: &str = "Description";
 
@@ -105,6 +113,7 @@ const HELP: &[(&str, &str)] = &[
     ("↑ ↓", "move between fields"),
     ("← →", "change a choice"),
     ("^p or f2", "open the field as a list"),
+    ("tab", "take the suggestion, where there is one"),
     ("⏎", "save to the file"),
     ("^s", "save from the description"),
     ("^a ^e ^w ^u ^k", "edit the line like a shell does"),
@@ -154,6 +163,12 @@ impl EditScreen {
 
         // The issue's own values belong in every list, whether or not the rest
         // of the workspace happens to use them.
+        // The backlog is one of the options rather than the absence of one:
+        // "no sprint" is a place an issue can be moved to, and a form that
+        // spelled it "—" would not say so.
+        let mut sprints = with_current(&catalog.sprints, current.sprint.as_deref());
+        sprints.push(BACKLOG.to_string());
+
         let statuses = with_current(&catalog.statuses, Some(&current.status));
         let types = with_current(&catalog.types, Some(&current.issue_type));
         let priorities = with_current(&catalog.priorities, current.priority.as_deref());
@@ -166,16 +181,20 @@ impl EditScreen {
             Field::choice(PRIORITY_LABEL, priorities, true),
             Field::line(ASSIGNEE_LABEL, "nobody")
                 .with_items(people)
-                .with_hint("^p to pick someone this workspace has seen"),
+                .suggesting()
+                .with_hint("type a name — tab completes it — or ^p for the list"),
             Field::line(LABELS_LABEL, "none")
                 .with_items(catalog.labels.iter().map(Item::new).collect())
                 .with_hint("comma-separated"),
             Field::line(COMPONENTS_LABEL, "none")
                 .with_items(catalog.components.iter().map(Item::new).collect())
                 .with_hint("comma-separated"),
+            Field::choice(SPRINT_LABEL, sprints, false)
+                .with_hint("the sprint it moves into when you push"),
             Field::line(POINTS_LABEL, "none").with_hint("a number, or empty to clear"),
             Field::line(PARENT_LABEL, "none")
                 .with_items(issues)
+                .suggesting()
                 .with_hint("the epic or story this belongs under"),
             Field::body(
                 DESCRIPTION_LABEL,
@@ -191,6 +210,7 @@ impl EditScreen {
         fields[ASSIGNEE].set(current.assignee.as_deref());
         fields[LABELS].set(Some(&current.labels.join(", ")));
         fields[COMPONENTS].set(Some(&current.components.join(", ")));
+        fields[SPRINT].set(Some(current.sprint.as_deref().unwrap_or(BACKLOG)));
         fields[POINTS].set(current.story_points.map(format_points).as_deref());
         fields[PARENT].set(current.parent.as_deref());
         fields[DESCRIPTION].set(Some(&current.description));
@@ -216,6 +236,9 @@ impl EditScreen {
             assignee: self.fields[ASSIGNEE].filled().map(str::to_string),
             labels: split_list(self.fields[LABELS].text()),
             components: split_list(self.fields[COMPONENTS].text()),
+            sprint: Some(self.fields[SPRINT].text())
+                .filter(|s| *s != BACKLOG && !s.trim().is_empty())
+                .map(str::to_string),
             story_points: parse_points(self.fields[POINTS].text()),
             parent: self.fields[PARENT].filled().map(|p| p.to_uppercase()),
             description: self.fields[DESCRIPTION].text().trim_end().to_string(),
@@ -240,6 +263,7 @@ impl EditScreen {
             now.assignee != before.assignee,
             now.labels != before.labels,
             now.components != before.components,
+            now.sprint != before.sprint,
             now.story_points != before.story_points,
             now.parent != before.parent,
             now.description != before.description,
@@ -258,6 +282,18 @@ impl EditScreen {
             self.error = Some("a summary is required".into());
             return Flow::Continue;
         }
+        // A half-typed name is not an assignee: Jira wants the id inside the
+        // mention, so what is on screen has to become one before it is saved.
+        // The suggestion is right there next to the field, so taking it is what
+        // the user was looking at when they pressed enter.
+        if !self.fields[ASSIGNEE].complete() && !self.assignee_is_resolved() {
+            self.focus = ASSIGNEE;
+            self.error = Some(format!(
+                "nobody here matches `{}` — ^p to pick, or clear it",
+                self.fields[ASSIGNEE].text().trim()
+            ));
+            return Flow::Continue;
+        }
         let points = self.fields[POINTS].text().trim().to_string();
         if !points.is_empty() && parse_points(&points).is_none() {
             self.focus = POINTS;
@@ -265,6 +301,22 @@ impl EditScreen {
             return Flow::Continue;
         }
         Flow::Done(self.edits())
+    }
+
+    /// Whether the assignee field holds something a push could send: a mention,
+    /// or nothing at all.
+    fn assignee_is_resolved(&self) -> bool {
+        let Some(text) = self.fields[ASSIGNEE].filled() else {
+            return true;
+        };
+        // A mention that came from the file names someone this workspace may
+        // never have seen in any other issue, so its own value counts too.
+        text.starts_with("@[")
+            || self.original.assignee.as_deref() == Some(text)
+            || self.fields[ASSIGNEE]
+                .items
+                .iter()
+                .any(|i| i.value.eq_ignore_ascii_case(text))
     }
 
     fn move_focus(&mut self, forward: bool) {
@@ -358,6 +410,9 @@ impl EditScreen {
         } else {
             keys.push(("⏎", "save"));
         }
+        if self.fields[self.focus].suggestion().is_some() {
+            keys.push(("tab", "complete"));
+        }
         if self.fields[self.focus].openable() {
             keys.push(("^p", "list"));
         } else if matches!(self.fields[self.focus].value, Value::Choice(_)) {
@@ -371,6 +426,9 @@ impl EditScreen {
     /// The summary of the issue the parent field names, when the workspace
     /// knows it.
     fn parent_detail(&self) -> Option<String> {
+        if let Some(item) = self.fields[PARENT].suggestion() {
+            return Some(format!("→ {}  {}   tab", item.label, item.detail));
+        }
         let key = self.fields[PARENT].filled()?.to_uppercase();
         self.fields[PARENT]
             .items
@@ -379,8 +437,12 @@ impl EditScreen {
             .map(|i| i.detail.clone())
     }
 
-    /// Who the assignee field names, so a mention is readable as a person.
+    /// What sits dim after the assignee: who the mention names once one is
+    /// chosen, and what tab would complete to before that.
     fn assignee_detail(&self) -> Option<String> {
+        if let Some(item) = self.fields[ASSIGNEE].suggestion() {
+            return Some(format!("→ {}   tab", item.detail));
+        }
         let value = self.fields[ASSIGNEE].filled()?;
         self.fields[ASSIGNEE]
             .items
@@ -422,8 +484,12 @@ impl Screen for EditScreen {
                     Flow::Cancel
                 }
             }
+            // Tab completes what is being typed before it moves on, the way a
+            // shell does; with nothing to complete it is just the next field.
             KeyCode::Tab => {
-                self.move_focus(true);
+                if !self.fields[self.focus].complete() {
+                    self.move_focus(true);
+                }
                 return Flow::Continue;
             }
             KeyCode::BackTab => {
@@ -530,6 +596,7 @@ mod tests {
             priorities: vec!["High".into(), "Medium".into()],
             labels: vec!["auth".into(), "backend".into(), "sso".into()],
             components: vec!["web".into(), "api".into()],
+            sprints: vec!["Sprint 42".into(), "Sprint 43".into()],
             people: vec![
                 KnownUser {
                     mention: "@[Ilya A](5b10a2)".into(),
@@ -559,6 +626,7 @@ mod tests {
             assignee: Some("@[Ilya A](5b10a2)".into()),
             labels: vec!["auth".into(), "backend".into()],
             components: vec!["web".into()],
+            sprint: Some("Sprint 42".into()),
             story_points: Some(5.0),
             parent: Some("PROJ-100".into()),
             description: "Login fails when SSO is enabled.".into(),
@@ -659,6 +727,131 @@ mod tests {
         screen.handle(ctrl('u'));
         assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
         assert_eq!(screen.error.as_deref(), Some("a summary is required"));
+    }
+
+    /// The three places an issue can go: the sprint running now, one queued
+    /// behind it, or out of all of them.
+    #[test]
+    fn the_sprint_field_offers_the_open_sprints_and_the_backlog() {
+        let mut screen = screen();
+        assert_eq!(screen.fields[SPRINT].text(), "Sprint 42");
+
+        screen.focus = SPRINT;
+        screen.handle(key(KeyCode::Right));
+        assert_eq!(screen.fields[SPRINT].text(), "Sprint 43");
+        let edits = done(screen.handle(key(KeyCode::Enter)));
+        assert_eq!(edits.sprint.as_deref(), Some("Sprint 43"));
+    }
+
+    #[test]
+    fn choosing_the_backlog_clears_the_sprint() {
+        let mut screen = screen();
+        screen.focus = SPRINT;
+        // Backlog is the last option, so one step back from the first reaches it.
+        screen.handle(key(KeyCode::Left));
+        assert_eq!(screen.fields[SPRINT].text(), "Backlog");
+        let edits = done(screen.handle(key(KeyCode::Enter)));
+        assert_eq!(edits.sprint, None, "the backlog is no sprint at all");
+    }
+
+    /// An issue sitting in a closed sprint still has to show where it is.
+    #[test]
+    fn a_sprint_that_is_no_longer_open_is_still_shown() {
+        let mut current = current();
+        current.sprint = Some("Sprint 7".into());
+        let mut screen = EditScreen::new("PROJ-142", &catalog(), &current);
+        assert_eq!(screen.fields[SPRINT].text(), "Sprint 7");
+        // And saving without touching it leaves the issue where it is.
+        assert_eq!(
+            done(screen.handle(key(KeyCode::Enter))).sprint,
+            current.sprint
+        );
+    }
+
+    #[test]
+    fn an_issue_with_no_sprint_starts_on_the_backlog() {
+        let mut current = current();
+        current.sprint = None;
+        let screen = EditScreen::new("PROJ-142", &catalog(), &current);
+        assert_eq!(screen.fields[SPRINT].text(), "Backlog");
+    }
+
+    /// The mention is an id nobody can type, so typing a name has to be enough.
+    #[test]
+    fn typing_a_name_completes_to_the_mention_that_names_them() {
+        let mut screen = screen();
+        screen.focus = ASSIGNEE;
+        screen.handle(ctrl('u'));
+        typed(&mut screen, "jane");
+        assert_eq!(
+            screen.fields[ASSIGNEE]
+                .suggestion()
+                .map(|i| i.value.as_str()),
+            Some("@[Jane D](5b1af9)")
+        );
+
+        // Tab takes it, and does not move on while there is something to take.
+        screen.handle(key(KeyCode::Tab));
+        assert_eq!(screen.focus, ASSIGNEE);
+        assert_eq!(screen.fields[ASSIGNEE].text(), "@[Jane D](5b1af9)");
+
+        // With nothing left to complete, tab is the next field again.
+        screen.handle(key(KeyCode::Tab));
+        assert_eq!(screen.focus, LABELS);
+
+        let edits = done(screen.handle(key(KeyCode::Enter)));
+        assert_eq!(edits.assignee.as_deref(), Some("@[Jane D](5b1af9)"));
+    }
+
+    /// Enter with a half-typed name takes the suggestion on screen rather than
+    /// saving text that no push could send.
+    #[test]
+    fn saving_resolves_a_typed_name_and_refuses_an_unknown_one() {
+        let mut screen = screen();
+        screen.focus = ASSIGNEE;
+        screen.handle(ctrl('u'));
+        typed(&mut screen, "jane");
+        let edits = done(screen.handle(key(KeyCode::Enter)));
+        assert_eq!(edits.assignee.as_deref(), Some("@[Jane D](5b1af9)"));
+
+        let mut screen = self::tests::screen();
+        screen.focus = ASSIGNEE;
+        screen.handle(ctrl('u'));
+        typed(&mut screen, "somebody else");
+        assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
+        assert_eq!(screen.focus, ASSIGNEE);
+        assert!(
+            screen.error.as_deref().unwrap().contains("somebody else"),
+            "{:?}",
+            screen.error
+        );
+
+        // Clearing it is always allowed: nobody assigned is a valid answer.
+        screen.handle(ctrl('u'));
+        let edits = done(screen.handle(key(KeyCode::Enter)));
+        assert_eq!(edits.assignee, None);
+    }
+
+    /// A mention loaded from the file names someone the rest of the workspace
+    /// may never have seen; saving must not demand they be in the list.
+    #[test]
+    fn an_assignee_the_file_already_had_survives_a_save() {
+        let mut current = current();
+        current.assignee = Some("@[Someone Else](abc123)".into());
+        let mut screen = EditScreen::new("PROJ-142", &catalog(), &current);
+        let edits = done(screen.handle(key(KeyCode::Enter)));
+        assert_eq!(edits.assignee.as_deref(), Some("@[Someone Else](abc123)"));
+    }
+
+    #[test]
+    fn the_suggestion_is_shown_next_to_the_field() {
+        let mut screen = screen();
+        screen.focus = ASSIGNEE;
+        screen.handle(ctrl('u'));
+        typed(&mut screen, "jane");
+        let lines = render_lines(&mut screen, 80, 26).join("\n");
+        assert!(lines.contains("→ Jane D"), "{lines}");
+        assert!(lines.contains("tab complete"), "{lines}");
     }
 
     #[test]

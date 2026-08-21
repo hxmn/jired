@@ -155,6 +155,14 @@ pub fn render() -> String {
          the scriptable single-field equivalents.\n\n",
     );
 
+    s.push_str("## Sprints\n\n");
+    s.push_str(
+        "`sprint:` names the sprint an issue sits in; removing the line puts it \
+         in the backlog. Push turns a change into a board move rather than a \
+         field update, resolving the name against the sprints the workspace has \
+         fetched — so a sprint nobody has pulled cannot be moved into.\n\n",
+    );
+
     s.push_str("## Repairing a workspace\n\n");
     s.push_str(
         "`jired doctor` checks the layout, the config file, the credentials, the filenames, \

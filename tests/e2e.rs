@@ -2183,6 +2183,89 @@ fn a_story_point_change_is_pushed_to_the_instances_own_field() {
 }
 
 // ---------------------------------------------------------------------------
+// Sprints
+// ---------------------------------------------------------------------------
+
+/// The Sprint field is read-only on most instances, so a move is a board call
+/// rather than a field update.
+#[test]
+fn changing_the_sprint_moves_the_issue_between_boards() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    assert!(ws.read(ISSUE_FILE).contains("sprint: Sprint 42"));
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("sprint: Sprint 42", "sprint: Sprint 43");
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = &dry["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "move_sprint");
+    assert_eq!(op["request"]["path"], "/rest/agile/1.0/sprint/43/issue");
+
+    ws.json(&["push"]);
+    ws.json(&["pull"]);
+    assert!(
+        ws.read(ISSUE_FILE).contains("sprint: Sprint 43"),
+        "the server moved it and the pull saw it"
+    );
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// Removing the line is how a file says "put it back in the backlog".
+#[test]
+fn clearing_the_sprint_moves_the_issue_to_the_backlog() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(ISSUE_FILE).replace("sprint: Sprint 42\n", "");
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = &dry["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "move_sprint");
+    assert_eq!(op["request"]["path"], "/rest/agile/1.0/backlog/issue");
+
+    ws.json(&["push"]);
+    ws.json(&["pull"]);
+    assert!(
+        !ws.read(ISSUE_FILE).contains("sprint:"),
+        "{}",
+        ws.read(ISSUE_FILE)
+    );
+}
+
+/// A name no board knows cannot be resolved to an id, and guessing would move
+/// the issue somewhere nobody asked for.
+#[test]
+fn a_sprint_the_workspace_does_not_know_is_reported_rather_than_guessed() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("sprint: Sprint 42", "sprint: Sprint 99");
+    ws.write(ISSUE_FILE, &text);
+
+    let report = ws.json(&["push"]);
+    let warnings = report["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("Sprint 99")),
+        "{warnings:?}"
+    );
+    assert!(
+        report["results"].as_array().unwrap().is_empty(),
+        "nothing was sent"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Custom fields [M2.3]
 // ---------------------------------------------------------------------------
 

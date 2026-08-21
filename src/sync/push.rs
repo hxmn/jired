@@ -150,6 +150,11 @@ enum Action {
         filename: String,
         bytes: Vec<u8>,
     },
+    /// Move the issue into a sprint, or out of every sprint for the backlog.
+    MoveSprint {
+        /// The sprint's id, or `None` for the backlog.
+        sprint: Option<String>,
+    },
     /// Transition a *different* issue: ticking a subtask's box under `## Children`.
     TransitionOther {
         key: String,
@@ -165,6 +170,9 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     // Custom fields need their schema, not just their name: it is what says
     // whether a value goes out bare, wrapped in `{"value": …}`, or as a list.
     let field_meta = engine.state.field_meta_by_id()?;
+    // Sprint names come from the board cache; moving between sprints needs the
+    // id behind the name the file carries.
+    let sprints = engine.state.sprints()?;
     let base_url = engine.base_url().to_string();
     let files = engine.projector.scan()?;
     let max_upload = ctx
@@ -343,6 +351,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             &base.raw,
             &field_meta,
             fields.story_points.as_deref(),
+            &sprints,
             markup,
             &raw,
             &engine,
@@ -462,6 +471,9 @@ fn create_issue(
     // A locally created issue may already carry custom fields; there is no
     // previous value to learn the shape from, so the schema decides.
     let field_meta = engine.state.field_meta_by_id()?;
+    // Sprint names come from the board cache; moving between sprints needs the
+    // id behind the name the file carries.
+    let sprints = engine.state.sprints()?;
     for (id, value) in &doc.frontmatter.custom {
         let payload =
             crate::api::custom::expand(value, None, field_meta.get(id), engine.account.deployment);
@@ -521,6 +533,27 @@ fn create_issue(
     engine.state.rekey_issue(temp_key, &new_key, &new_id)?;
     engine.state.forget_new_issue_project(temp_key)?;
 
+    // A sprint is not part of the create call: the field is read-only on most
+    // instances, so the issue is created first and moved second. A move that
+    // fails is worth saying out loud but not worth failing a created issue for.
+    if let Some(name) = &doc.frontmatter.sprint {
+        match sprint_target(Some(name), &sprints) {
+            Ok(target) => {
+                if let Err(e) = crate::api::block_on(
+                    client.move_to_sprint(target.as_deref(), std::slice::from_ref(&new_key)),
+                ) {
+                    ctx.out.warn(format!(
+                        "{new_key} was created but not moved into `{name}`: {}",
+                        e.message
+                    ));
+                }
+            }
+            Err(_) => ctx.out.warn(format!(
+                "{new_key} was created; `{name}` is not a sprint this workspace knows"
+            )),
+        }
+    }
+
     let confirmed = crate::api::block_on(client.issue(&new_key))?;
     let base_url = engine.base_url().to_string();
     rewrite_after_push(engine, &confirmed, file, markup, &base_url)?;
@@ -547,6 +580,36 @@ fn create_issue(
 /// Comparison is done on the simplified form of both sides, so a file written
 /// before jired started collapsing these values does not read as an edit; and
 /// what goes out is rebuilt from the shape the server last sent.
+/// The sprint id to move into, `None` for the backlog, or the names this
+/// workspace does know when the one asked for is not among them.
+fn sprint_target(
+    wanted: Option<&str>,
+    sprints: &[crate::store::state::SprintRow],
+) -> std::result::Result<Option<String>, Vec<String>> {
+    let Some(name) = wanted.map(str::trim).filter(|n| !n.is_empty()) else {
+        return Ok(None);
+    };
+    // An open sprint wins over a closed one of the same name: sprint names
+    // repeat, and nobody means the finished one.
+    let mut candidates: Vec<&crate::store::state::SprintRow> = sprints
+        .iter()
+        .filter(|s| s.name.eq_ignore_ascii_case(name))
+        .collect();
+    candidates.sort_by_key(|s| match s.state.as_str() {
+        "active" => 0,
+        "future" => 1,
+        _ => 2,
+    });
+    match candidates.first() {
+        Some(sprint) => Ok(Some(sprint.id.clone())),
+        None => Err(sprints
+            .iter()
+            .filter(|s| s.state != "closed")
+            .map(|s| s.name.clone())
+            .collect()),
+    }
+}
+
 fn plan_custom_fields(
     bf: &crate::doc::Frontmatter,
     wf: &crate::doc::Frontmatter,
@@ -588,6 +651,7 @@ fn plan(
     base_raw: &Value,
     field_meta: &std::collections::BTreeMap<String, crate::api::FieldMeta>,
     story_points_field: Option<&str>,
+    sprints: &[crate::store::state::SprintRow],
     markup: Markup,
     raw: &[crate::convert::ast::RawBlock],
     engine: &Engine,
@@ -704,6 +768,44 @@ fn plan(
                             "body": {"fields": {"description": rich.to_field_value()}}}),
             action: Action::UpdateDescription(rich),
         });
+    }
+
+    // A sprint is not a field on most instances — the Sprint custom field is
+    // read-only — so moving between sprints is its own board call.
+    if bf.sprint != wf.sprint {
+        match sprint_target(wf.sprint.as_deref(), sprints) {
+            Ok(target) => {
+                let (path, label) = match &target {
+                    Some(id) => (
+                        format!("/rest/agile/1.0/sprint/{id}/issue"),
+                        wf.sprint.clone().unwrap_or_default(),
+                    ),
+                    None => (
+                        "/rest/agile/1.0/backlog/issue".to_string(),
+                        "the backlog".to_string(),
+                    ),
+                };
+                ops.push(Op {
+                    kind: "move_sprint",
+                    summary: format!(
+                        "{} → {label}",
+                        bf.sprint.as_deref().unwrap_or("the backlog")
+                    ),
+                    request: json!({"method": "POST", "path": path,
+                                    "body": {"issues": ["{key}"]}}),
+                    action: Action::MoveSprint { sprint: target },
+                });
+            }
+            Err(known) => warnings.push(format!(
+                "`{}` is not a sprint this workspace knows{}; the change was not sent",
+                wf.sprint.as_deref().unwrap_or(""),
+                if known.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (it has {})", known.join(", "))
+                }
+            )),
+        }
     }
 
     // A board move and a frontmatter edit are the same intent expressed two
@@ -1057,6 +1159,11 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                     .with_hint("run `jired transition` with --field key=value"));
                 }
                 client.do_transition(key, &target.id, None).await
+            }
+            Action::MoveSprint { sprint } => {
+                client
+                    .move_to_sprint(sprint.as_deref(), &[key.to_string()])
+                    .await
             }
             Action::CreateComment(body) => client.add_comment(key, body).await.map(|_| ()),
             Action::UpdateComment { id, body } => {

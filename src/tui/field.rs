@@ -102,6 +102,12 @@ pub struct Field {
     pub detail: Option<String>,
     /// Marked in the label when the value no longer matches what was loaded.
     pub changed: bool,
+    /// Whether typing offers the best matching item as a completion.
+    ///
+    /// For a field whose values are opaque — an assignee is stored as
+    /// `@[Ilya A](5b10a2)`, an id nobody can type — this is what makes the
+    /// keyboard usable at all without opening the list.
+    pub suggest: bool,
 }
 
 impl Field {
@@ -116,6 +122,7 @@ impl Field {
             hint: String::new(),
             detail: None,
             changed: false,
+            suggest: false,
         }
     }
 
@@ -130,6 +137,7 @@ impl Field {
             hint: String::new(),
             detail: None,
             changed: false,
+            suggest: false,
         }
     }
 
@@ -145,6 +153,7 @@ impl Field {
             hint: String::new(),
             detail: None,
             changed: false,
+            suggest: false,
         }
     }
 
@@ -161,6 +170,41 @@ impl Field {
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = hint.into();
         self
+    }
+
+    /// Offer the best matching item while this field is being typed into.
+    pub fn suggesting(mut self) -> Self {
+        self.suggest = true;
+        self
+    }
+
+    /// The item that completing right now would choose.
+    ///
+    /// `None` once the text is already one of the items: there is nothing left
+    /// to complete, and offering to "complete" what is already chosen would put
+    /// a suggestion on screen that does nothing.
+    pub fn suggestion(&self) -> Option<&Item> {
+        if !self.suggest {
+            return None;
+        }
+        let typed = self.filled()?;
+        if self
+            .items
+            .iter()
+            .any(|i| i.value.eq_ignore_ascii_case(typed))
+        {
+            return None;
+        }
+        crate::tui::picker::best_match(&self.items, typed)
+    }
+
+    /// Take the suggestion, if there is one. Reports whether anything changed.
+    pub fn complete(&mut self) -> bool {
+        let Some(value) = self.suggestion().map(|i| i.value.clone()) else {
+            return false;
+        };
+        self.set(Some(&value));
+        true
     }
 
     /// The current value as text; empty when there is none.
@@ -302,6 +346,41 @@ mod tests {
             !f.handle(key(KeyCode::Char('z'))),
             "no option starts with z"
         );
+    }
+
+    /// The assignee case: a person types a name and gets the mention that names
+    /// them, because the mention is not something anyone could type.
+    #[test]
+    fn a_suggesting_field_completes_to_the_best_match() {
+        let people = vec![
+            Item::new("@[Ilya A](5b10a2)").with_detail("Ilya A"),
+            Item::new("@[Jane D](5b1af9)").with_detail("Jane D"),
+        ];
+        let mut f = Field::line("Assignee", "nobody")
+            .with_items(people)
+            .suggesting();
+
+        assert_eq!(f.suggestion(), None, "nothing typed, nothing to suggest");
+        f.set(Some("jane"));
+        assert_eq!(
+            f.suggestion().map(|i| i.value.as_str()),
+            Some("@[Jane D](5b1af9)")
+        );
+        assert!(f.complete());
+        assert_eq!(f.text(), "@[Jane D](5b1af9)");
+        assert_eq!(f.suggestion(), None, "already chosen");
+        assert!(!f.complete());
+
+        f.set(Some("nobody by that name"));
+        assert_eq!(f.suggestion(), None);
+    }
+
+    #[test]
+    fn a_field_that_does_not_suggest_never_completes() {
+        let mut f = Field::line("Labels", "none").with_items(vec![Item::new("auth")]);
+        f.set(Some("au"));
+        assert_eq!(f.suggestion(), None);
+        assert!(!f.complete());
     }
 
     #[test]

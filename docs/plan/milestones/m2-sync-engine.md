@@ -43,6 +43,12 @@ with a block marker becoming a table or list.
 - [ ] `summary` change → rename intent; heading/frontmatter divergence warning (D6)
 - **Done when:** dirty scan of 1k files completes < 1s and reports exactly the edited fields.
 
+### M2.3b Sprint moves
+- [x] A `sprint:` change is pushed as a board move (`/rest/agile/1.0/sprint/{id}/issue`), and clearing it moves the issue to the backlog
+- [x] The name is resolved against the cached sprints, preferring an open one over a closed one of the same name; an unknown name is reported rather than guessed
+- [x] A locally created issue that names a sprint is moved into it after it is created, since the field cannot be set on the create call
+- **Done when:** a sprint change round-trips through push and pull on both deployments.
+
 ### M2.3a Editable custom fields
 - [x] Custom-field values are collapsed to their simple form in the file (`{"value": X}` → `X`, arrays of options → a YAML list, user objects → `@[Name](id)`)
 - [x] Push rebuilds the wire shape from the value the server last sent, falling back to the field's cached schema (`type`/`items`); anything ambiguous round-trips verbatim

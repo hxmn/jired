@@ -187,6 +187,20 @@ impl FixtureClient {
     }
 }
 
+/// Which custom field this fixture's issues keep their sprint in.
+fn sprint_field(issue: &Value) -> Option<String> {
+    issue
+        .get("fields")?
+        .as_object()?
+        .iter()
+        .find(|(k, v)| {
+            k.starts_with("customfield_")
+                && v.as_array()
+                    .is_some_and(|a| a.first().is_some_and(|first| first.get("state").is_some()))
+        })
+        .map(|(k, _)| k.clone())
+}
+
 fn read_json(dir: &Path, name: &str) -> Option<Value> {
     let text = std::fs::read_to_string(dir.join(name)).ok()?;
     serde_json::from_str(&text).ok()
@@ -409,6 +423,45 @@ impl JiraApi for FixtureClient {
             }
         }
         self.bump_updated(key);
+        Ok(())
+    }
+
+    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()> {
+        let path = match sprint {
+            Some(id) => format!("/rest/agile/1.0/sprint/{id}/issue"),
+            None => "/rest/agile/1.0/backlog/issue".to_string(),
+        };
+        self.record("POST", &path, json!({ "issues": keys }))?;
+
+        // Reflect the move the way the server would, so the next fetch sees it.
+        let named = sprint.and_then(|id| {
+            read_json(&self.dir, "sprints.json")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default()
+                .into_iter()
+                .find(|s| {
+                    s.get("id")
+                        .map(|i| i.to_string().trim_matches('"').to_string())
+                        == Some(id.to_string())
+                })
+        });
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            for key in keys {
+                let Some(issue) = issues.get_mut(key) else {
+                    continue;
+                };
+                let field = sprint_field(issue);
+                match (&field, &named) {
+                    (Some(field), Some(sprint)) => issue["fields"][field] = json!([sprint]),
+                    (Some(field), None) => issue["fields"][field] = Value::Null,
+                    (None, _) => {}
+                }
+            }
+        }
+        for key in keys {
+            self.bump_updated(key);
+        }
         Ok(())
     }
 
