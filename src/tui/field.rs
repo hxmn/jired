@@ -273,7 +273,7 @@ impl Field {
                 }
                 // Typing a letter jumps to the first option starting with it,
                 // the way a native select does. Chords are left for the screen:
-                // ^p means "open the list", not "jump to Priority".
+                // ^l means "open the list", not "jump to Labels".
                 KeyCode::Char(ch)
                     if !ch.is_control()
                         && !key.modifiers.intersects(

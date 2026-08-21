@@ -269,7 +269,7 @@ impl Screen for CreateScreen {
             // Always a way out, even mid-edit: this is the key people reach for.
             KeyCode::Char('c') if ctrl => return Flow::Cancel,
             KeyCode::Char('s') if ctrl => return self.submit(),
-            KeyCode::Char('p') if ctrl => {
+            KeyCode::Char('l') if ctrl => {
                 self.open_list();
                 return Flow::Continue;
             }
@@ -347,7 +347,7 @@ const HELP: &[(&str, &str)] = &[
     ("tab / shift-tab", "move between fields"),
     ("↑ ↓", "move between fields"),
     ("← →", "change a choice"),
-    ("^p or f2", "open the field as a list"),
+    ("^l or f2", "open the field as a list"),
     ("⏎", "create the issue"),
     ("^s", "create from the description"),
     ("^a ^e ^w ^u ^k", "edit the line like a shell does"),
@@ -400,7 +400,7 @@ impl CreateScreen {
             keys.push(("⏎", "create"));
         }
         if self.fields[self.focus].openable() {
-            keys.push(("^p", "list"));
+            keys.push(("^l", "list"));
         } else if matches!(self.fields[self.focus].value, Value::Choice(_)) {
             keys.push(("←→", "change"));
         }
@@ -601,7 +601,7 @@ mod tests {
         let mut screen = screen();
         typed(&mut screen, "Summary");
         screen.focus = PARENT;
-        screen.handle(ctrl('p'));
+        screen.handle(ctrl('l'));
         assert!(matches!(screen.overlay, Some(Overlay::Pick { .. })));
         typed(&mut screen, "100");
         screen.handle(key(KeyCode::Enter));
@@ -669,7 +669,7 @@ mod tests {
     fn the_open_list_draws_over_the_form() {
         let mut screen = screen();
         screen.focus = PARENT;
-        screen.handle(ctrl('p'));
+        screen.handle(ctrl('l'));
         let lines = render_lines(&mut screen, 80, 24).join("\n");
         assert!(lines.contains("PROJ-100"), "{lines}");
         assert!(lines.contains("SSO rollout"), "{lines}");
@@ -712,7 +712,7 @@ mod tests {
         }
         println!();
         s.focus = PARENT;
-        s.handle(ctrl('p'));
+        s.handle(ctrl('l'));
         for l in render_lines(&mut s, 90, 26) {
             println!("|{l}");
         }
@@ -736,7 +736,7 @@ mod tests {
             render_lines(&mut screen, w, h);
             screen.handle(key(KeyCode::Esc));
             screen.focus = PARENT;
-            screen.handle(ctrl('p'));
+            screen.handle(ctrl('l'));
             render_lines(&mut screen, w, h);
         }
     }

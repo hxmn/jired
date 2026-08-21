@@ -114,7 +114,7 @@ const HELP: &[(&str, &str)] = &[
     ("tab / shift-tab", "move between fields"),
     ("↑ ↓", "move between fields"),
     ("← →", "change a choice"),
-    ("^p or f2", "open the field as a list"),
+    ("^l or f2", "open the field as a list"),
     ("space", "tick a sprint in the list"),
     ("tab", "take the suggestion, where there is one"),
     ("⏎", "save to the file"),
@@ -189,7 +189,7 @@ impl EditScreen {
             Field::line(ASSIGNEE_LABEL, "nobody")
                 .with_items(people)
                 .suggesting()
-                .with_hint("type a name — tab completes it — or ^p for the list"),
+                .with_hint("type a name — tab completes it — or ^l for the list"),
             Field::line(LABELS_LABEL, "none")
                 .with_items(catalog.labels.iter().map(Item::new).collect())
                 .with_hint("comma-separated"),
@@ -199,7 +199,7 @@ impl EditScreen {
             Field::line(SPRINT_LABEL, BACKLOG)
                 .with_items(sprints.iter().map(Item::new).collect())
                 .multiple()
-                .with_hint("^p to tick sprints; the last one is where it moves to"),
+                .with_hint("^l to tick sprints; the last one is where it moves to"),
             Field::line(POINTS_LABEL, "none").with_hint("a number, or empty to clear"),
             Field::line(PARENT_LABEL, "none")
                 .with_items(issues)
@@ -296,7 +296,7 @@ impl EditScreen {
         if !self.fields[ASSIGNEE].complete() && !self.assignee_is_resolved() {
             self.focus = ASSIGNEE;
             self.error = Some(format!(
-                "nobody here matches `{}` — ^p to pick, or clear it",
+                "nobody here matches `{}` — ^l to pick, or clear it",
                 self.fields[ASSIGNEE].text().trim()
             ));
             return Flow::Continue;
@@ -432,7 +432,7 @@ impl EditScreen {
             keys.push(("tab", "complete"));
         }
         if self.fields[self.focus].openable() {
-            keys.push(("^p", "list"));
+            keys.push(("^l", "list"));
         } else if matches!(self.fields[self.focus].value, Value::Choice(_)) {
             keys.push(("←→", "change"));
         }
@@ -482,7 +482,7 @@ impl Screen for EditScreen {
         match key.code {
             KeyCode::Char('c') if ctrl => return Flow::Cancel,
             KeyCode::Char('s') if ctrl => return self.submit(),
-            KeyCode::Char('p') if ctrl => {
+            KeyCode::Char('l') if ctrl => {
                 self.open_list();
                 return Flow::Continue;
             }
@@ -754,7 +754,7 @@ mod tests {
         assert_eq!(screen.fields[SPRINT].text(), "Sprint 42");
 
         screen.focus = SPRINT;
-        screen.handle(ctrl('p'));
+        screen.handle(ctrl('l'));
         screen.handle(key(KeyCode::Down));
         screen.handle(key(KeyCode::Char(' ')));
         screen.handle(key(KeyCode::Enter));
@@ -768,7 +768,7 @@ mod tests {
     fn unticking_every_sprint_puts_the_issue_in_the_backlog() {
         let mut screen = screen();
         screen.focus = SPRINT;
-        screen.handle(ctrl('p'));
+        screen.handle(ctrl('l'));
         screen.handle(key(KeyCode::Char(' '))); // untick the one it is in
         screen.handle(key(KeyCode::Enter));
         assert_eq!(screen.fields[SPRINT].filled(), None);
@@ -890,13 +890,13 @@ mod tests {
     fn picking_a_label_adds_to_the_list_rather_than_replacing_it() {
         let mut screen = screen();
         screen.focus = LABELS;
-        screen.handle(ctrl('p'));
+        screen.handle(ctrl('l'));
         typed(&mut screen, "sso");
         screen.handle(key(KeyCode::Enter));
         assert_eq!(screen.fields[LABELS].text(), "auth, backend, sso");
 
         // And picking the same one twice does not duplicate it.
-        screen.handle(ctrl('p'));
+        screen.handle(ctrl('l'));
         typed(&mut screen, "sso");
         screen.handle(key(KeyCode::Enter));
         assert_eq!(screen.fields[LABELS].text(), "auth, backend, sso");
@@ -957,7 +957,7 @@ mod tests {
             render_lines(&mut screen, w, h);
             screen.handle(key(KeyCode::Esc));
             screen.focus = PARENT;
-            screen.handle(ctrl('p'));
+            screen.handle(ctrl('l'));
             render_lines(&mut screen, w, h);
         }
     }
@@ -1040,7 +1040,7 @@ mod tests {
         }
         println!();
         s.focus = SPRINT;
-        s.handle(ctrl('p'));
+        s.handle(ctrl('l'));
         for l in render_lines(&mut s, 90, 26) {
             println!("|{l}");
         }
