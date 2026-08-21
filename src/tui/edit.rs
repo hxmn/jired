@@ -544,6 +544,7 @@ mod tests {
                 key: "PROJ-100".into(),
                 summary: "SSO rollout".into(),
                 issue_type: "Epic".into(),
+                status: "To Do".into(),
             }],
             ..Catalog::default()
         }

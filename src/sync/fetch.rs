@@ -180,7 +180,7 @@ pub fn build_jql(
         let keys: Vec<String> = args
             .issues
             .iter()
-            .map(|k| k.trim().to_uppercase())
+            .map(|k| crate::project::naming::key_from_input(k))
             .filter(|k| !k.is_empty())
             .collect();
         clauses.push(format!("key in ({})", keys.join(", ")));

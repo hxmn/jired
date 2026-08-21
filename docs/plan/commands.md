@@ -145,7 +145,14 @@ terminal that cannot do raw mode, `TERM=dumb`, or `JIRED_NO_TUI=1`) → exit 7
 naming the missing summary (`--no-input`, or no terminal at all). Backing out of
 the form writes nothing and exits 1.
 
-### `jired edit ISSUE-KEY [--push]`
+### `jired edit [ISSUE] [--push]`
+With no issue named, a filtered list of everything in the working copy: type a
+subsequence of the key or the summary (`pl142`, `sso ro`), ↑↓ to move, ⏎ to open.
+Most recently touched first. The issue can also be named by key in any case, by
+file name, or by a path — which is what shell completion produces, and the
+likeliest thing to be typed for an issue whose summary is hard to spell. A
+locally created `NEW-8bf7b6` keeps the case its hex suffix was generated with.
+
 Opens the issue in a form: summary, status, type, priority, assignee, labels,
 components, story points, parent, description — the fields a push can actually
 send, and no others, so nothing offered is silently dropped. Options come from

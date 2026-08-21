@@ -459,11 +459,13 @@ mod tests {
                     key: "PROJ-100".into(),
                     summary: "SSO rollout".into(),
                     issue_type: "Epic".into(),
+                    status: "To Do".into(),
                 },
                 KnownIssue {
                     key: "PROJ-142".into(),
                     summary: "Fix login flow".into(),
                     issue_type: "Story".into(),
+                    status: "In Progress".into(),
                 },
             ],
             ..Catalog::default()

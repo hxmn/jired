@@ -27,7 +27,7 @@ pub struct LogArgs {
 pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let engine = Engine::open(&ctx)?;
-    let key = args.issue.to_uppercase();
+    let key = crate::project::naming::key_from_input(&args.issue);
 
     if engine.state.issue(&key)?.is_none() {
         return Err(JiredError::usage(format!("{key} is not in this workspace"))

@@ -2113,6 +2113,57 @@ fn editing_an_issue_the_workspace_does_not_have_is_a_usage_error() {
     assert_eq!(err["details"]["issue"], "PROJ-999");
 }
 
+/// With no issue named the command searches, which also needs a terminal.
+#[test]
+fn edit_with_nothing_named_and_no_terminal_says_to_name_one() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["edit"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(err["hint"].as_str().unwrap().contains("PROJ-142"), "{err}");
+}
+
+/// A locally created issue's key is lowercase hex, and the file name is the
+/// thing tab-completion produces: both have to reach the same issue.
+#[test]
+fn an_issue_is_found_by_key_in_any_case_or_by_its_file_name() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let created = ws.json(&[
+        "create",
+        "--summary",
+        "[CARE] Забота о сотрудниках",
+        "--type",
+        "Task",
+    ]);
+    let key = created["key"].as_str().unwrap().to_string();
+    let file = created["file"].as_str().unwrap().to_string();
+    assert!(key.starts_with("NEW-"), "{key}");
+
+    // `edit` resolves each spelling before deciding it needs a terminal, so the
+    // key it reports back is the proof the lookup worked.
+    for spelling in [
+        key.clone(),
+        key.to_uppercase(),
+        file.clone(),
+        format!("./{file}"),
+    ] {
+        let err = ws.json_err(&["edit", &spelling], 7);
+        assert_eq!(
+            err["details"]["issue"], key,
+            "`{spelling}` did not resolve to {key}"
+        );
+    }
+
+    // And the commands that stage a single change resolve them the same way.
+    let commented = ws.json(&["comment", &key.to_uppercase(), "-m", "works"]);
+    assert_eq!(commented["key"], key);
+}
+
 /// Story points are a custom field whose id differs per instance, which is why
 /// the form can offer them at all: push looks the id up in the field map.
 #[test]

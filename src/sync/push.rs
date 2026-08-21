@@ -172,7 +172,11 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         .get_u64("attachments.max_upload")?
         .unwrap_or(50 * 1024 * 1024);
     let done_transition = ctx.resolver.get_value("children.done_transition")?;
-    let mut wanted: Vec<String> = args.issues.iter().map(|k| k.to_uppercase()).collect();
+    let mut wanted: Vec<String> = args
+        .issues
+        .iter()
+        .map(|k| crate::project::naming::key_from_input(k))
+        .collect();
 
     // `--resume` narrows the run to issues an interrupted push left unfinished.
     // Replaying is safe because base was never advanced for them: the working

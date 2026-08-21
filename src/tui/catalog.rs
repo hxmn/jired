@@ -33,6 +33,7 @@ pub struct KnownIssue {
     pub key: String,
     pub summary: String,
     pub issue_type: String,
+    pub status: String,
 }
 
 /// Someone this workspace has seen, in the form the file spells them.
@@ -79,8 +80,9 @@ impl Catalog {
             };
 
             let issue_type = text(fields.pointer("/issuetype/name"));
+            let status = text(fields.pointer("/status/name"));
             types.add(&issue_type);
-            statuses.add(&text(fields.pointer("/status/name")));
+            statuses.add(&status);
             priorities.add(&text(fields.pointer("/priority/name")));
             for label in array(fields.get("labels")) {
                 labels.add(&text(Some(label)));
@@ -104,6 +106,7 @@ impl Catalog {
                     key: row.key.clone(),
                     summary: text(fields.get("summary")),
                     issue_type,
+                    status,
                 },
             ));
         }

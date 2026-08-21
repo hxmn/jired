@@ -29,7 +29,7 @@ pub struct AssignArgs {
 
 pub fn run(g: &GlobalArgs, args: &AssignArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let key = args.issue.to_uppercase();
+    let key = crate::project::naming::key_from_input(&args.issue);
 
     let assignee = resolve_assignee(&mut ctx, args, out)?;
 

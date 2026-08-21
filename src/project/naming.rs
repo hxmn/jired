@@ -140,6 +140,34 @@ pub fn key_from_file_name(name: &str) -> Option<String> {
     crate::doc::is_issue_key(candidate).then(|| unpadded_key(candidate))
 }
 
+/// The key a person means, from whatever they typed.
+///
+/// Three spellings all reach the same issue: the key itself in any case, the
+/// file's name, and a path to it — which is what a shell's tab-completion
+/// produces, and the most likely thing to be typed for an issue whose summary
+/// is hard to spell.
+///
+/// Case is not simply uppercased: a locally created `NEW-8bf7b6` carries a hex
+/// suffix that was generated in lowercase, and uppercasing it invents a key the
+/// workspace does not have.
+pub fn key_from_input(input: &str) -> String {
+    let input = input.trim().trim_matches('"');
+    // A path from tab-completion; the last component is the file name.
+    let tail = input.rsplit(['/', '\\']).next().unwrap_or(input);
+    let candidate = key_from_file_name(tail)
+        .unwrap_or_else(|| tail.strip_suffix(".md").unwrap_or(tail).to_string());
+
+    let temp = crate::doc::TEMP_KEY_PREFIX.trim_end_matches('-');
+    match candidate.split_once('-') {
+        Some((prefix, suffix)) if prefix.eq_ignore_ascii_case(temp) => format!(
+            "{}{}",
+            crate::doc::TEMP_KEY_PREFIX,
+            suffix.to_ascii_lowercase()
+        ),
+        _ => candidate.to_uppercase(),
+    }
+}
+
 /// Grouping folders are visible and fixed, so they can never collide with the
 /// dot-prefixed attachment folders (decision D13).
 pub const GROUP_PARENT: &str = "by-parent";
@@ -296,6 +324,36 @@ mod tests {
             file_name("NEW-5e0227", "Audit the SSO config"),
             "NEW-5e0227. Audit the SSO config.md"
         );
+    }
+
+    /// Every spelling a person might reasonably type has to reach the issue.
+    #[test]
+    fn a_key_is_recognized_however_it_was_typed() {
+        for input in [
+            "PROJ-142",
+            "proj-142",
+            "PROJ-0142",
+            "PROJ-0142. Fix login flow.md",
+            "./PROJ-0142. Fix login flow.md",
+            "/tmp/ws/PROJ-0142. Fix login flow.md",
+            "\"PROJ-142\"",
+        ] {
+            assert_eq!(key_from_input(input), "PROJ-142", "{input}");
+        }
+    }
+
+    /// The bug this exists for: a temp key's hex suffix is generated lowercase,
+    /// so uppercasing what was typed names an issue that does not exist.
+    #[test]
+    fn a_temporary_key_keeps_the_case_it_was_generated_with() {
+        for input in [
+            "NEW-8bf7b6",
+            "new-8bf7b6",
+            "NEW-8BF7B6",
+            "NEW-8bf7b6. [CARE] Забота о сотрудниках в спринте №6.md",
+        ] {
+            assert_eq!(key_from_input(input), "NEW-8bf7b6", "{input}");
+        }
     }
 
     #[test]

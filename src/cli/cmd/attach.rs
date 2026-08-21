@@ -45,7 +45,7 @@ pub struct AttachmentsListArgs {
 pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
-    let key = args.issue.to_uppercase();
+    let key = crate::project::naming::key_from_input(&args.issue);
 
     let engine = Engine::open(&ctx)?;
     let max_upload = ctx
@@ -112,7 +112,11 @@ fn list(g: &GlobalArgs, args: &AttachmentsListArgs, out: Out) -> Result<ExitCode
     let ctx = Context::open(g, out)?;
     let engine = Engine::open(&ctx)?;
     let files = engine.projector.scan()?;
-    let wanted: Vec<String> = args.issues.iter().map(|k| k.to_uppercase()).collect();
+    let wanted: Vec<String> = args
+        .issues
+        .iter()
+        .map(|k| crate::project::naming::key_from_input(k))
+        .collect();
 
     let mut rows = Vec::new();
     for row in engine.state.issues()? {
@@ -153,7 +157,11 @@ fn pull(g: &GlobalArgs, args: &AttachmentsPullArgs, out: Out) -> Result<ExitCode
     let engine = Engine::open(&ctx)?;
     let client = engine.client(&mut ctx)?;
     let files = engine.projector.scan()?;
-    let wanted: Vec<String> = args.issues.iter().map(|k| k.to_uppercase()).collect();
+    let wanted: Vec<String> = args
+        .issues
+        .iter()
+        .map(|k| crate::project::naming::key_from_input(k))
+        .collect();
     let max = args.max_size.unwrap_or(u64::MAX);
 
     let mut downloaded = Vec::new();

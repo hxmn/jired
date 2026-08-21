@@ -150,7 +150,8 @@ pub fn render() -> String {
     s.push_str(
         "Edit the `.md` file directly — that is the interface. `jired edit KEY` \
          opens the same fields in a form for a person at a terminal, and needs \
-         one: it exits 7 without it. `comment`, `transition` and `assign` are \
+         one: it exits 7 without it. The key may also be a file name or a path, \
+         and with none given it searches. `comment`, `transition` and `assign` are \
          the scriptable single-field equivalents.\n\n",
     );
 

@@ -40,7 +40,11 @@ pub fn run(g: &GlobalArgs, args: &ResolveArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let engine = Engine::open(&ctx)?;
 
-    let wanted: Vec<String> = args.issues.iter().map(|k| k.to_uppercase()).collect();
+    let wanted: Vec<String> = args
+        .issues
+        .iter()
+        .map(|k| crate::project::naming::key_from_input(k))
+        .collect();
     let conflicts: Vec<_> = engine
         .state
         .conflicts()?

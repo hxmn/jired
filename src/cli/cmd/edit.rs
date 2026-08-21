@@ -21,8 +21,8 @@ use clap::Args;
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct EditArgs {
-    /// Issue to edit
-    pub issue: String,
+    /// Issue to edit, by key or file name; omit to search for one
+    pub issue: Option<String>,
     /// Send the change to Jira straight away
     #[arg(long)]
     pub push: bool,
@@ -42,9 +42,14 @@ pub fn run(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
 
-    let key = args.issue.to_uppercase();
     let engine = Engine::open(&ctx)?;
-    let file = locate(&engine, &key)?;
+    let wanted = match &args.issue {
+        Some(issue) => issue.clone(),
+        // Nothing named: let them find it. Typing a key from memory is the
+        // thing this command was hardest to use without.
+        None => search(&mut ctx, &engine)?,
+    };
+    let (key, file) = locate(&engine, &wanted)?;
     let doc = engine.projector.read(&file)?;
     let before = Edits::of(&doc);
 
@@ -118,18 +123,68 @@ pub fn run(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
+/// Ask which issue, with a filtered list of what the workspace holds.
+///
+/// Only issues that have a file: `edit` works on the working copy, and offering
+/// one that was fetched but never written would hand back a key with nothing
+/// behind it.
+fn search(ctx: &mut Context, engine: &Engine) -> Result<String> {
+    if !crate::tui::available() {
+        return Err(
+            JiredError::missing_value("no issue given, and no terminal to search on")
+                .with_hint("name the issue: `jired edit PROJ-142`, or a file name"),
+        );
+    }
+
+    let files = engine.projector.scan()?;
+    let catalog = Catalog::from_rows(
+        &engine.state.issues()?,
+        ctx.resolver.get_quiet("workspace.project")?.as_deref(),
+    );
+    // The catalog is ordered most-recently-touched first, which is the order
+    // someone looking for "the issue I was just in" wants. Locally created
+    // issues are not in it — they have no snapshot — so they come after.
+    let mut issues: Vec<crate::tui::catalog::KnownIssue> = catalog
+        .issues
+        .into_iter()
+        .filter(|i| files.contains_key(&i.key))
+        .collect();
+    for (key, file) in &files {
+        if issues.iter().any(|i| &i.key == key) {
+            continue;
+        }
+        let doc = engine.projector.read(&file.relative)?;
+        issues.push(crate::tui::catalog::KnownIssue {
+            key: key.clone(),
+            summary: doc.frontmatter.summary.clone(),
+            issue_type: doc.frontmatter.issue_type.clone(),
+            status: doc.frontmatter.status.clone(),
+        });
+    }
+
+    let mut screen = crate::tui::pick::PickScreen::new("Edit which issue?", &issues);
+    if screen.is_empty() {
+        return Err(JiredError::usage("this workspace has no issue files yet")
+            .with_hint("run `jired pull`, or `jired create` to write one"));
+    }
+    crate::tui::run(&mut screen)?
+        .ok_or_else(|| JiredError::usage("no issue chosen").with_hint("nothing was changed"))
+}
+
 /// Find the issue's file, or say what to do about it not being here.
-fn locate(engine: &Engine, key: &str) -> Result<String> {
-    engine
-        .projector
-        .scan()?
-        .get(key)
-        .map(|f| f.relative.clone())
-        .ok_or_else(|| {
-            JiredError::usage(format!("{key} is not in this workspace"))
-                .with_detail("issue", key.to_string())
-                .with_hint("run `jired pull` first, or check the key")
-        })
+///
+/// A key, a file name and a path all work: tab-completion produces the last of
+/// those, and an issue whose summary is hard to type is exactly the one someone
+/// completes rather than types.
+fn locate(engine: &Engine, input: &str) -> Result<(String, String)> {
+    match engine.projector.locate(input)? {
+        Some(found) => Ok((found.key, found.relative)),
+        None => Err(
+            JiredError::usage(format!("`{input}` is not in this workspace"))
+                .with_detail("issue", input.to_string())
+                .with_hint("run `jired pull` first, or check the key"),
+        ),
+    }
 }
 
 /// Apply the form's result and write the file, renaming it when the summary
@@ -201,12 +256,9 @@ pub fn edit_issue(
     mutate: impl FnOnce(&mut IssueDoc) -> Result<()>,
 ) -> Result<String> {
     let engine = Engine::open(ctx)?;
-    let key = key.to_uppercase();
-    let files = engine.projector.scan()?;
-
-    let found = files.get(&key).ok_or_else(|| {
-        JiredError::usage(format!("{key} is not in this workspace"))
-            .with_detail("issue", key.clone())
+    let found = engine.projector.locate(key)?.ok_or_else(|| {
+        JiredError::usage(format!("`{key}` is not in this workspace"))
+            .with_detail("issue", key.to_string())
             .with_hint("run `jired pull` first, or check the key")
     })?;
 
@@ -221,7 +273,7 @@ pub fn edit_issue(
 /// Push just this issue, reusing the normal push path.
 pub fn push_one(ctx: &mut Context, key: &str) -> Result<PushReport> {
     let args = PushArgs {
-        issues: vec![key.to_uppercase()],
+        issues: vec![crate::project::naming::key_from_input(key)],
         ..Default::default()
     };
     crate::sync::push::run(ctx, &args)

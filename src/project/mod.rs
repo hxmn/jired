@@ -80,6 +80,22 @@ impl Projector {
         Ok(found)
     }
 
+    /// Find one issue's file from a key, a file name, or a path.
+    ///
+    /// The spelling is normalized first; the case-insensitive sweep after it is
+    /// for a file somebody renamed by hand into a different case than the key
+    /// it carries.
+    pub fn locate(&self, input: &str) -> Result<Option<FoundFile>> {
+        let key = naming::key_from_input(input);
+        let files = self.scan()?;
+        if let Some(found) = files.get(&key) {
+            return Ok(Some(found.clone()));
+        }
+        Ok(files
+            .into_values()
+            .find(|f| f.key.eq_ignore_ascii_case(&key)))
+    }
+
     pub fn path_of(&self, relative: &str) -> PathBuf {
         self.root.join(relative)
     }

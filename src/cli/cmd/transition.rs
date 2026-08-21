@@ -27,7 +27,7 @@ pub struct TransitionArgs {
 
 pub fn run(g: &GlobalArgs, args: &TransitionArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let key = args.issue.to_uppercase();
+    let key = crate::project::naming::key_from_input(&args.issue);
 
     // Transitions depend on the issue's current status and the workflow, so
     // they can only come from the server.

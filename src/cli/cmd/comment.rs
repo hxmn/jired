@@ -25,7 +25,7 @@ pub fn run(g: &GlobalArgs, args: &CommentArgs, out: Out) -> Result<ExitCode> {
     ctx.lock()?;
 
     let body = message_or_stdin(&args.message, "comment body")?;
-    let key = args.issue.to_uppercase();
+    let key = crate::project::naming::key_from_input(&args.issue);
 
     let file = edit_issue(&mut ctx, &key, |doc| {
         doc.comments.push(CommentBlock {

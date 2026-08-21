@@ -70,6 +70,7 @@ command works non-interactively today, so nothing is blocked on them.
 - [x] New-issue form: summary, type, priority, labels, parent, project, description, with the workspace's own values as options
 - [x] Edit-issue form (`jired edit KEY`): the fields a push can send, loaded from the file, marked as they move, written back as a normal local edit; `$EDITOR` on the file where a full-screen terminal is unavailable
 - [x] Init wizard: url → deployment and credential inferred → verify → project picker (line-based rather than full-screen; see M1.13)
+- [x] Issue picker: `jired edit` with no key searches the working copy by subsequence over key and summary
 - [ ] Project/board/sprint pickers (shared with `list --pick` flows and `assign` user picker)
 - [ ] Pull preview: issue tree with changed fields; accept/abort
 - [ ] Push preview: op list with per-op diff; confirm (requires `--yes` when non-interactive)

@@ -17,7 +17,7 @@ pub struct OpenArgs {
 pub fn run(g: &GlobalArgs, args: &OpenArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let base = ctx.resolver.require("server.url")?;
-    let key = args.issue.to_uppercase();
+    let key = crate::project::naming::key_from_input(&args.issue);
     let url = format!("{}/browse/{}", base.trim_end_matches('/'), key);
 
     // Launching a browser from a script or a JSON pipeline is never wanted.

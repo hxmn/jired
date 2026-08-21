@@ -115,7 +115,11 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
         base_url: &base_url,
     };
     let files = engine.projector.scan()?;
-    let wanted: Vec<String> = args.issues.iter().map(|k| k.to_uppercase()).collect();
+    let wanted: Vec<String> = args
+        .issues
+        .iter()
+        .map(|k| crate::project::naming::key_from_input(k))
+        .collect();
 
     let mut issues = Vec::new();
     let mut stat = Stat::default();
