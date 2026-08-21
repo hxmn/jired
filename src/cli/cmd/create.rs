@@ -255,6 +255,7 @@ fn blank() -> IssueDoc {
         preamble: String::new(),
         description: String::new(),
         checklist: Vec::new(),
+        children: Vec::new(),
         comments: Vec::new(),
         attachments: Vec::new(),
         extra_sections: Vec::new(),

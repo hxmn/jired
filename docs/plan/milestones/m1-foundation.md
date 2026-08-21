@@ -107,7 +107,7 @@ custom-field schema) has been observed yet.
 ### M1.11 Read-only pull (clean checkout) + projector v1
 - [x] Filename sanitizer (strip `/\:*?"<>|`, collapse ws, trim trailing dots, 120-char cap) + unit tests incl. Windows reserved names
 - [x] Frontmatter serialization (exact schema, stable key order)
-- [x] File writer: full body assembly (Description/Checklist placeholder/Comments/Attachments sections)
+- [x] File writer: full body assembly (Description/Checklist/Children/Comments/Attachments sections)
 - [x] Base advancement (`base_* := remote_*`, `base_md_hash`)
 - [x] Dirty-file guard: pull refuses to overwrite files whose hash ≠ `base_md_hash` (real merge is M2)
 - [x] Remote rename handling by KEY prefix (file + attachment folder)

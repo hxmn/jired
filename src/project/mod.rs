@@ -199,6 +199,7 @@ mod tests {
             preamble: String::new(),
             description: "body".into(),
             checklist: vec![],
+            children: vec![],
             comments: vec![],
             attachments: vec![],
             extra_sections: vec![],

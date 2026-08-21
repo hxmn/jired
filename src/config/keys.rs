@@ -166,12 +166,13 @@ pub const KEYS: &[KeyDef] = &[
         doc: "Refuse to upload attachments larger than this size (bytes)",
     },
     KeyDef {
-        key: "checklist.done_transition",
-        env: "JIRED_CHECKLIST_DONE_TRANSITION",
+        key: "children.done_transition",
+        env: "JIRED_CHILDREN_DONE_TRANSITION",
         flag: None,
         sensitivity: Sensitivity::Plain,
         ask: false,
-        doc: "Transition applied when a subtask checkbox is ticked (disabled when unset)",
+        doc: "Transition applied when a subtask checkbox under `## Children` is \
+              ticked (disabled when unset)",
     },
     KeyDef {
         key: "links.mode",

@@ -4,6 +4,7 @@
 //! wiki markup vs ADF, usernames vs GDPR account ids, Agile endpoints — are
 //! absorbed here so the sync engine never branches on deployment.
 
+pub mod checklist;
 pub mod client;
 pub mod cloud;
 pub mod custom;

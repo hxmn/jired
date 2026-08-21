@@ -129,7 +129,7 @@
               "properties": {
                 "field": {
                   "type": "string",
-                  "description": "status, summary, description, comments, checklist, or custom.<id>"
+                  "description": "status, summary, description, comments, children, checklist, or custom.<id>"
                 },
                 "label": {
                   "type": "string",

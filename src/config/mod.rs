@@ -464,7 +464,7 @@ mod tests {
             .prompter(Box::new(FixedPrompter("prompted")))
             .build();
         // No default, not askable: the answer is "unset", not a question.
-        assert!(r.get("checklist.done_transition").unwrap().is_none());
+        assert!(r.get("children.done_transition").unwrap().is_none());
         assert!(r.get("tls.ca_cert").unwrap().is_none());
     }
 

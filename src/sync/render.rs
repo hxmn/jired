@@ -8,7 +8,7 @@ use crate::api::{Markup, RemoteIssue};
 use crate::convert::{self, ast::RawBlock};
 use crate::doc::frontmatter::format_user;
 use crate::doc::{
-    AttachmentLine, ChecklistItem, CommentBlock, CommentId, Frontmatter, IssueDoc, SyncMeta,
+    AttachmentLine, ChildItem, CommentBlock, CommentId, Frontmatter, IssueDoc, SyncMeta,
 };
 use crate::error::Result;
 use crate::project::naming;
@@ -62,11 +62,11 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
         });
     }
 
-    let checklist = issue
+    let children = issue
         .fields
         .subtasks
         .iter()
-        .map(|s| ChecklistItem {
+        .map(|s| ChildItem {
             checked: s.done,
             key: Some(s.key.clone()),
             title: s.summary.clone(),
@@ -92,7 +92,8 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
         heading: issue.fields.summary.clone(),
         preamble: String::new(),
         description: description.markdown.trim().to_string(),
-        checklist,
+        checklist: issue.fields.checklist.clone(),
+        children,
         comments,
         attachments,
         extra_sections: Vec::new(),
@@ -218,6 +219,20 @@ mod tests {
                         done: true,
                     },
                 ],
+                checklist: vec![
+                    crate::doc::ChecklistEntry::Item(crate::doc::ChecklistItem {
+                        checked: false,
+                        status: Some("IN PROGRESS".into()),
+                        title: "Analyse the request".into(),
+                        description: Some("ask the analyst first".into()),
+                    }),
+                    crate::doc::ChecklistEntry::Item(crate::doc::ChecklistItem {
+                        checked: true,
+                        status: None,
+                        title: "Ship it".into(),
+                        description: None,
+                    }),
+                ],
                 ..Default::default()
             },
             comments: vec![RemoteComment {
@@ -267,12 +282,30 @@ mod tests {
     }
 
     #[test]
-    fn subtasks_become_the_checklist_with_their_done_state() {
+    fn subtasks_become_the_children_section_with_their_done_state() {
         let r = render_issue(&issue(), &ctx()).unwrap();
-        assert_eq!(r.doc.checklist.len(), 2);
-        assert_eq!(r.doc.checklist[0].key.as_deref(), Some("PROJ-143"));
-        assert!(!r.doc.checklist[0].checked);
-        assert!(r.doc.checklist[1].checked);
+        assert_eq!(r.doc.children.len(), 2);
+        assert_eq!(r.doc.children[0].key.as_deref(), Some("PROJ-143"));
+        assert!(!r.doc.children[0].checked);
+        assert!(r.doc.children[1].checked);
+    }
+
+    /// The plugin's checklist is a different list from the subtasks, and lands
+    /// in its own section.
+    #[test]
+    fn the_plugin_checklist_lands_under_its_own_heading() {
+        let r = render_issue(&issue(), &ctx()).unwrap();
+        let text = r.doc.render().unwrap();
+        let checklist = text
+            .split("## Checklist\n")
+            .nth(1)
+            .and_then(|s| s.split("## Children").next())
+            .unwrap_or_default()
+            .to_string();
+        assert!(checklist.contains("- [ ] `IN PROGRESS` Analyse the request"));
+        assert!(checklist.contains("  ask the analyst first"));
+        assert!(checklist.contains("- [x] Ship it"));
+        assert!(!checklist.contains("PROJ-143"));
     }
 
     #[test]
@@ -307,6 +340,7 @@ mod tests {
         let back = IssueDoc::parse(&text).unwrap();
         assert_eq!(back.frontmatter.key, "PROJ-142");
         assert_eq!(back.checklist.len(), 2);
+        assert_eq!(back.children.len(), 2);
         assert_eq!(back.comments.len(), 1);
     }
 
@@ -319,6 +353,7 @@ mod tests {
         assert_eq!(r.doc.description, back.description);
         assert_eq!(r.doc.comments[0].body, back.comments[0].body);
         assert_eq!(r.doc.checklist, back.checklist);
+        assert_eq!(r.doc.children, back.children);
     }
 
     #[test]

@@ -260,8 +260,11 @@ pub fn run(ctx: &mut Context, _args: &StatusArgs) -> Result<StatusReport> {
         if base_doc.doc.description != working.description {
             fields.push("description".into());
         }
-        if base_doc.doc.checklist != working.checklist {
-            fields.push("checklist".into());
+        // `## Checklist` is deliberately absent: it is a read-only rendering of
+        // the plugin's field, so an edit to it is not something push can carry
+        // and reporting it would leave the file dirty for good.
+        if base_doc.doc.children != working.children {
+            fields.push("children".into());
         }
         if working.new_comments().count() > 0 {
             fields.push("comments".into());

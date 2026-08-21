@@ -216,6 +216,7 @@ fn compare(
                 preamble: String::new(),
                 description: String::new(),
                 checklist: vec![],
+                children: vec![],
                 comments: vec![],
                 attachments: vec![],
                 extra_sections: vec![],
@@ -238,6 +239,10 @@ fn compare(
             }
             let (ca, cb) = (checklist_text(a), checklist_text(b));
             if let Some(d) = unified("Checklist", &ca, &cb) {
+                sections.push(d);
+            }
+            let (na, nb) = (children_text(a), children_text(b));
+            if let Some(d) = unified("Children", &na, &nb) {
                 sections.push(d);
             }
             for c in &b.comments {
@@ -269,6 +274,25 @@ fn compare(
 
 fn checklist_text(doc: &IssueDoc) -> String {
     doc.checklist
+        .iter()
+        .map(|entry| match entry {
+            crate::doc::ChecklistEntry::Header(h) => format!("### {h}"),
+            crate::doc::ChecklistEntry::Item(i) => format!(
+                "- [{}] {}{}",
+                if i.checked { 'x' } else { ' ' },
+                i.status
+                    .as_deref()
+                    .map(|s| format!("`{s}` "))
+                    .unwrap_or_default(),
+                i.title
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn children_text(doc: &IssueDoc) -> String {
+    doc.children
         .iter()
         .map(|i| {
             format!(
@@ -337,6 +361,7 @@ mod tests {
             preamble: String::new(),
             description: description.into(),
             checklist: vec![],
+            children: vec![],
             comments: vec![],
             attachments: vec![],
             extra_sections: vec![],
@@ -399,15 +424,36 @@ mod tests {
     }
 
     #[test]
-    fn checklist_changes_are_visible() {
+    fn child_changes_are_visible() {
         let a = doc("s", "b");
         let mut b = a.clone();
-        b.checklist.push(crate::doc::ChecklistItem {
+        b.children.push(crate::doc::ChildItem {
             checked: true,
             key: Some("PROJ-2".into()),
             title: "Sub".into(),
         });
         let d = compare("PROJ-1", Some(&a), Some(&b), "modified").unwrap();
-        assert!(d.sections.iter().any(|s| s.section == "Checklist"));
+        assert!(d.sections.iter().any(|s| s.section == "Children"));
+    }
+
+    #[test]
+    fn checklist_changes_are_visible() {
+        let a = doc("s", "b");
+        let mut b = a.clone();
+        b.checklist.push(crate::doc::ChecklistEntry::Item(
+            crate::doc::ChecklistItem {
+                checked: false,
+                status: Some("IN PROGRESS".into()),
+                title: "Analyse".into(),
+                description: None,
+            },
+        ));
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified").unwrap();
+        let section = d
+            .sections
+            .iter()
+            .find(|s| s.section == "Checklist")
+            .expect("the checklist section is diffed");
+        assert!(section.unified.contains("+- [ ] `IN PROGRESS` Analyse"));
     }
 }

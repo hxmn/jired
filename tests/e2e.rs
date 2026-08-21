@@ -2487,11 +2487,11 @@ fn doctor_reports_a_workspace_that_was_never_initialized() {
 }
 
 // ---------------------------------------------------------------------------
-// Checklists [M3.4]
+// Children and checklists [M3.4, M5.4]
 // ---------------------------------------------------------------------------
 
 #[test]
-fn subtasks_render_as_a_checklist_with_their_done_state() {
+fn subtasks_render_as_children_with_their_done_state() {
     let ws = Ws::new();
     ws.init();
     ws.json(&["pull"]);
@@ -2517,7 +2517,7 @@ fn ticking_a_box_does_nothing_until_a_done_transition_is_configured() {
     assert!(status["dirty"][0]["fields"]
         .as_array()
         .unwrap()
-        .contains(&Value::from("checklist")));
+        .contains(&Value::from("children")));
 
     // Nothing is planned, and push says why rather than leaving the file
     // mysteriously dirty.
@@ -2534,7 +2534,7 @@ fn ticking_a_box_does_nothing_until_a_done_transition_is_configured() {
     );
     let warning = dry["warnings"][0].as_str().unwrap_or_default();
     assert!(warning.contains("PROJ-143"), "{warning}");
-    assert!(warning.contains("checklist.done_transition"), "{warning}");
+    assert!(warning.contains("children.done_transition"), "{warning}");
 }
 
 #[test]
@@ -2542,7 +2542,7 @@ fn ticking_a_box_transitions_the_subtask_when_configured() {
     let ws = Ws::new();
     ws.init();
     ws.json(&["pull"]);
-    ws.json(&["config", "set", "checklist.done_transition", "Done"]);
+    ws.json(&["config", "set", "children.done_transition", "Done"]);
 
     let text = ws
         .read(ISSUE_FILE)
@@ -2556,7 +2556,7 @@ fn ticking_a_box_transitions_the_subtask_when_configured() {
         .iter()
         .find(|o| o["kind"] == "transition")
         .expect("the subtask transition was planned");
-    // The transition targets the subtask, not the issue holding the checklist.
+    // The transition targets the subtask, not the issue listing it.
     assert_eq!(op["request"]["path"], "/issue/PROJ-143/transitions");
     assert_eq!(op["request"]["body"]["to"], "Done");
 
@@ -2585,6 +2585,103 @@ fn ticking_a_box_transitions_the_subtask_when_configured() {
     assert!(ws
         .read("PROJ-0143. Add integration test.md")
         .contains("status: Done"));
+}
+
+/// The Data Center fixture carries a Smart Checklist, which the REST API hands
+/// back as the plugin's Java `toString()`. What the file shows is the checklist,
+/// not the dump — and not in `custom:`, where nobody could read it.
+#[test]
+fn a_plugin_checklist_renders_as_checkboxes_in_its_own_section() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws.read(Deployment::DataCenter.issue_file());
+
+    let checklist = section(&text, "## Checklist");
+    assert_eq!(
+        checklist.trim(),
+        "- [ ] `IN PROGRESS` Generate the replacement secret\n  \
+         Coordinate the window with @jane\n\
+         - [ ] Update the connector config\n\
+         - [x] Announce the freeze",
+        "{text}"
+    );
+
+    // Subtasks are a different list and live under their own heading.
+    assert_eq!(
+        section(&text, "## Children").trim(),
+        "- [ ] DC-79 Update the connector config"
+    );
+
+    assert!(
+        !text.contains("checklistId="),
+        "the raw dump leaked: {text}"
+    );
+    assert!(!text.contains("customfield_10205"), "{text}");
+    assert!(!text.contains("customfield_10207"), "{text}");
+}
+
+/// Read-only means the edit is refused out loud rather than silently kept or
+/// silently sent.
+#[test]
+fn editing_the_checklist_section_is_reported_and_then_undone_by_a_pull() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = Deployment::DataCenter.issue_file();
+
+    let text = ws.read(file).replace(
+        "- [ ] Update the connector config",
+        "- [x] I did this myself",
+    );
+    ws.write(file, &text);
+
+    // Push says why it is not sending it, and plans nothing.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let warning = dry["warnings"][0].as_str().unwrap_or_default();
+    assert!(warning.contains("Checklist"), "{dry}");
+    assert!(warning.contains("read-only"), "{dry}");
+
+    // And status does not call the issue dirty for it, or the file would stay
+    // dirty for ever: there is nothing push could do to clean it.
+    let status = ws.json(&["status"]);
+    assert!(
+        !status["dirty"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["key"] == "DC-77"),
+        "{status}"
+    );
+
+    // A real edit alongside it still goes through, and the rewrite that follows
+    // the push puts the checklist back to what the server holds.
+    let text = ws.read(file).replace(
+        "summary: Rotate the LDAP bind credential",
+        "summary: Rotate the LDAP bind credential now",
+    );
+    ws.write(file, &text);
+    let push = ws.json(&["push"]);
+    assert!(
+        push["results"][0]["ok"].as_bool().unwrap_or(false),
+        "{push}"
+    );
+
+    let after = ws.read("DC-0077. Rotate the LDAP bind credential now.md");
+    assert!(!after.contains("I did this myself"), "{after}");
+    assert!(
+        after.contains("- [ ] Update the connector config"),
+        "{after}"
+    );
+}
+
+/// Text between one heading and the next.
+fn section<'a>(text: &'a str, heading: &str) -> &'a str {
+    let body = text
+        .split_once(&format!("{heading}\n"))
+        .unwrap_or_else(|| panic!("{heading} is missing from:\n{text}"))
+        .1;
+    body.split_once("\n## ").map(|(s, _)| s).unwrap_or(body)
 }
 
 // ---------------------------------------------------------------------------

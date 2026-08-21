@@ -73,6 +73,11 @@ Login fails when SSO is enabled. See [PROJ-99](…) for background.
 
 ## Checklist
 
+- [ ] `IN PROGRESS` Reproduce on staging
+- [x] Confirm the SSO settings
+
+## Children
+
 - [ ] PROJ-143 Add integration test
 - [x] PROJ-144 Update runbook
 
@@ -94,6 +99,13 @@ frontmatter, the CLI, the API — stays `PROJ-142`. `jired doctor` renames files
 were written before this convention. Blocks between `<!--jired:raw:…-->` markers are
 Jira content Markdown cannot represent (panels, macros, media): leave them alone
 and they push back byte-identical; edit one and `push` stops with exit code 6.
+
+The two checkbox sections are different things. `## Children` lists the subtasks,
+which are issues of their own: ticking one applies `children.done_transition` if
+that setting is configured. `## Checklist` is the checklist plugin's list, read
+from its custom field and shown read-only — a status the checkbox does not
+already say is written in backticks ahead of the title, edits to it are reported
+by `push` rather than sent, and the next write from the server restores it.
 
 ## Exit codes
 

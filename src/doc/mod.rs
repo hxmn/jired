@@ -1,9 +1,14 @@
 //! The issue Markdown file: parse and render [M1.11, M2.1].
 //!
 //! Fixed section order — `# summary`, `## Description`, `## Checklist`,
-//! `## Comments`, `## Attachments` — so both humans and agents can locate
-//! content by heading. Section scanning is fence-aware: a `## ` inside a code
-//! block is content, not a heading.
+//! `## Children`, `## Comments`, `## Attachments` — so both humans and agents
+//! can locate content by heading. Section scanning is fence-aware: a `## `
+//! inside a code block is content, not a heading.
+//!
+//! The two checkbox sections are not the same thing and must not be confused:
+//! `## Checklist` is the checklist plugin's list, which lives inside this
+//! issue and is read-only; `## Children` lists the subtasks, which are issues
+//! of their own and can be transitioned by ticking a box.
 
 pub mod frontmatter;
 
@@ -13,6 +18,7 @@ use crate::error::{JiredError, Result};
 
 pub const SECTION_DESCRIPTION: &str = "Description";
 pub const SECTION_CHECKLIST: &str = "Checklist";
+pub const SECTION_CHILDREN: &str = "Children";
 pub const SECTION_COMMENTS: &str = "Comments";
 pub const SECTION_ATTACHMENTS: &str = "Attachments";
 
@@ -25,15 +31,37 @@ pub struct IssueDoc {
     /// Anything between the title and the first `## ` section, kept in place.
     pub preamble: String,
     pub description: String,
-    pub checklist: Vec<ChecklistItem>,
+    /// The checklist plugin's list, rendered read-only (D12).
+    pub checklist: Vec<ChecklistEntry>,
+    /// Subtasks, one checkbox each.
+    pub children: Vec<ChildItem>,
     pub comments: Vec<CommentBlock>,
     pub attachments: Vec<AttachmentLine>,
     /// Sections jired does not know about, preserved in place.
     pub extra_sections: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// One line of `## Checklist`: an item, or the header of a group of items.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChecklistEntry {
+    Header(String),
+    Item(ChecklistItem),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChecklistItem {
+    pub checked: bool,
+    /// Status name, kept only when the checkbox does not already say it —
+    /// `IN PROGRESS`, `SKIPPED`, or whatever the instance has configured.
+    pub status: Option<String>,
+    pub title: String,
+    /// The item's note, if it has one.
+    pub description: Option<String>,
+}
+
+/// One line of `## Children`: a subtask, or a line someone added by hand.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChildItem {
     pub checked: bool,
     /// Issue key when the item is a subtask; None for a line the user added.
     pub key: Option<String>,
@@ -108,6 +136,7 @@ impl IssueDoc {
             preamble: preamble.join("\n").trim().to_string(),
             description: String::new(),
             checklist: Vec::new(),
+            children: Vec::new(),
             comments: Vec::new(),
             attachments: Vec::new(),
             extra_sections: Vec::new(),
@@ -117,6 +146,7 @@ impl IssueDoc {
             match name.as_str() {
                 SECTION_DESCRIPTION => doc.description = content.trim().to_string(),
                 SECTION_CHECKLIST => doc.checklist = parse_checklist(&content),
+                SECTION_CHILDREN => doc.children = parse_children(&content),
                 SECTION_COMMENTS => doc.comments = parse_comments(&content)?,
                 SECTION_ATTACHMENTS => doc.attachments = parse_attachments(&content),
                 _ => doc.extra_sections.push((name, content.trim().to_string())),
@@ -144,11 +174,24 @@ impl IssueDoc {
         }
 
         out.push_str(&format!("## {SECTION_CHECKLIST}\n\n"));
-        for item in &self.checklist {
-            out.push_str(&render_checklist_item(item));
-            out.push('\n');
+        for (i, entry) in self.checklist.iter().enumerate() {
+            // A header opens a group, so it needs air above it — but not when
+            // it is the first thing in the section.
+            if i > 0 && matches!(entry, ChecklistEntry::Header(_)) {
+                out.push('\n');
+            }
+            out.push_str(&render_checklist_entry(entry));
         }
         if !self.checklist.is_empty() {
+            out.push('\n');
+        }
+
+        out.push_str(&format!("## {SECTION_CHILDREN}\n\n"));
+        for item in &self.children {
+            out.push_str(&render_child_item(item));
+            out.push('\n');
+        }
+        if !self.children.is_empty() {
             out.push('\n');
         }
 
@@ -310,16 +353,83 @@ impl<'a> Iterator for ScanLines<'a> {
     }
 }
 
-fn parse_checklist(content: &str) -> Vec<ChecklistItem> {
+/// `- [ ] `IN PROGRESS` Title`, with indented lines continuing the item.
+fn parse_checklist(content: &str) -> Vec<ChecklistEntry> {
+    let mut out: Vec<ChecklistEntry> = Vec::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(header) = line.trim().strip_prefix("### ") {
+            out.push(ChecklistEntry::Header(header.trim().to_string()));
+            continue;
+        }
+        match checkbox(line.trim()) {
+            Some((checked, rest)) => {
+                let (status, title) = split_leading_status(rest);
+                out.push(ChecklistEntry::Item(ChecklistItem {
+                    checked,
+                    status,
+                    title: title.to_string(),
+                    description: None,
+                }));
+            }
+            // Indented text under an item is that item's note.
+            None => {
+                if let Some(ChecklistEntry::Item(last)) = out.last_mut() {
+                    let note = line.trim();
+                    match &mut last.description {
+                        Some(existing) => {
+                            existing.push('\n');
+                            existing.push_str(note);
+                        }
+                        None => last.description = Some(note.to_string()),
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn render_checklist_entry(entry: &ChecklistEntry) -> String {
+    match entry {
+        ChecklistEntry::Header(h) => format!("### {h}\n\n"),
+        ChecklistEntry::Item(item) => {
+            let mark = if item.checked { 'x' } else { ' ' };
+            let status = item
+                .status
+                .as_deref()
+                .map(|s| format!("`{s}` "))
+                .unwrap_or_default();
+            let mut line = format!("- [{mark}] {status}{}\n", item.title);
+            for note in item.description.iter().flat_map(|d| d.lines()) {
+                line.push_str(&format!("  {note}\n"));
+            }
+            line
+        }
+    }
+}
+
+/// A status is written in backticks ahead of the title, so that a title which
+/// merely contains an upper-case word is not mistaken for one.
+fn split_leading_status(text: &str) -> (Option<String>, &str) {
+    let Some(rest) = text.strip_prefix('`') else {
+        return (None, text);
+    };
+    match rest.find('`') {
+        Some(end) => (Some(rest[..end].to_string()), rest[end + 1..].trim_start()),
+        None => (None, text),
+    }
+}
+
+fn parse_children(content: &str) -> Vec<ChildItem> {
     content
         .lines()
         .filter_map(|line| {
-            let t = line.trim();
-            let rest = t.strip_prefix("- [").or_else(|| t.strip_prefix("* ["))?;
-            let checked = rest.starts_with('x') || rest.starts_with('X');
-            let rest = rest.get(1..)?.strip_prefix(']')?.trim();
+            let (checked, rest) = checkbox(line.trim())?;
             let (key, title) = split_leading_key(rest);
-            Some(ChecklistItem {
+            Some(ChildItem {
                 checked,
                 key,
                 title: title.to_string(),
@@ -328,12 +438,21 @@ fn parse_checklist(content: &str) -> Vec<ChecklistItem> {
         .collect()
 }
 
-fn render_checklist_item(item: &ChecklistItem) -> String {
+fn render_child_item(item: &ChildItem) -> String {
     let mark = if item.checked { 'x' } else { ' ' };
     match &item.key {
         Some(k) => format!("- [{mark}] {k} {}", item.title),
         None => format!("- [{mark}] {}", item.title),
     }
+}
+
+/// `- [x] rest` → `(true, "rest")`.
+fn checkbox(line: &str) -> Option<(bool, &str)> {
+    let rest = line
+        .strip_prefix("- [")
+        .or_else(|| line.strip_prefix("* ["))?;
+    let checked = rest.starts_with('x') || rest.starts_with('X');
+    Some((checked, rest.get(1..)?.strip_prefix(']')?.trim()))
 }
 
 /// Recognize a leading issue key so subtask lines keep their identity.
@@ -501,7 +620,8 @@ mod tests {
         s.push_str("type: Story\nstatus: In Progress\nurl: https://x/browse/PROJ-142\n");
         s.push_str("jired:\n  base_updated: 2026-08-16T14:03:00Z\n  content_hash: \"sha256:a\"\n  lossy: false\n");
         s.push_str("---\n\n# Fix login flow\n\n## Description\n\nLogin fails when SSO is on.\n\n");
-        s.push_str("## Checklist\n\n- [ ] PROJ-143 Add integration test\n- [x] PROJ-144 Update runbook\n- [ ] a local note\n\n");
+        s.push_str("## Checklist\n\n### Analysis\n\n- [ ] `IN PROGRESS` Analyse the request\n  ask the analyst first\n- [x] Refine the ticket\n\n");
+        s.push_str("## Children\n\n- [ ] PROJ-143 Add integration test\n- [x] PROJ-144 Update runbook\n- [ ] a local note\n\n");
         s.push_str(
             "## Comments\n\n### [c-10812] Jane Doe — 2026-08-15T10:32:00Z\n\nRepro confirmed.\n\n",
         );
@@ -518,12 +638,30 @@ mod tests {
         assert_eq!(doc.frontmatter.key, "PROJ-142");
         assert_eq!(doc.heading, "Fix login flow");
         assert_eq!(doc.description, "Login fails when SSO is on.");
-        assert_eq!(doc.checklist.len(), 3);
-        assert_eq!(doc.checklist[0].key.as_deref(), Some("PROJ-143"));
-        assert!(!doc.checklist[0].checked);
-        assert!(doc.checklist[1].checked);
-        assert_eq!(doc.checklist[2].key, None);
-        assert_eq!(doc.checklist[2].title, "a local note");
+        assert_eq!(
+            doc.checklist,
+            vec![
+                ChecklistEntry::Header("Analysis".into()),
+                ChecklistEntry::Item(ChecklistItem {
+                    checked: false,
+                    status: Some("IN PROGRESS".into()),
+                    title: "Analyse the request".into(),
+                    description: Some("ask the analyst first".into()),
+                }),
+                ChecklistEntry::Item(ChecklistItem {
+                    checked: true,
+                    status: None,
+                    title: "Refine the ticket".into(),
+                    description: None,
+                }),
+            ]
+        );
+        assert_eq!(doc.children.len(), 3);
+        assert_eq!(doc.children[0].key.as_deref(), Some("PROJ-143"));
+        assert!(!doc.children[0].checked);
+        assert!(doc.children[1].checked);
+        assert_eq!(doc.children[2].key, None);
+        assert_eq!(doc.children[2].title, "a local note");
         assert_eq!(doc.comments.len(), 2);
         assert_eq!(doc.comments[0].id, CommentId::Existing("10812".into()));
         assert_eq!(doc.comments[0].author, "Jane Doe");
@@ -542,6 +680,46 @@ mod tests {
         assert_eq!(doc, again);
         // And rendering is idempotent, so a no-op pull writes no diff.
         assert_eq!(text, again.render().unwrap());
+    }
+
+    /// The two checkbox sections mean different things, so a key belongs to a
+    /// child issue and nothing in the checklist is ever taken for one.
+    #[test]
+    fn checklist_items_are_not_mistaken_for_subtasks() {
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Checklist\n\n- [ ] PROJ-143 looks like a key\n\n## Children\n\n- [ ] PROJ-143 Add test\n");
+        let doc = IssueDoc::parse(&s).unwrap();
+        assert_eq!(
+            doc.checklist,
+            vec![ChecklistEntry::Item(ChecklistItem {
+                checked: false,
+                status: None,
+                title: "PROJ-143 looks like a key".into(),
+                description: None,
+            })]
+        );
+        assert_eq!(doc.children[0].key.as_deref(), Some("PROJ-143"));
+        assert_eq!(doc.children[0].title, "Add test");
+    }
+
+    /// A title that happens to start with inline code is not a status.
+    #[test]
+    fn a_status_is_only_read_from_its_own_backticks() {
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Checklist\n\n- [ ] plain `code` in the middle\n");
+        let doc = IssueDoc::parse(&s).unwrap();
+        let ChecklistEntry::Item(item) = &doc.checklist[0] else {
+            panic!("expected an item");
+        };
+        assert_eq!(item.status, None);
+        assert_eq!(item.title, "plain `code` in the middle");
+        assert_eq!(
+            doc.render().unwrap(),
+            IssueDoc::parse(&doc.render().unwrap())
+                .unwrap()
+                .render()
+                .unwrap()
+        );
     }
 
     #[test]

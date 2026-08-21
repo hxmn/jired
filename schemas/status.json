@@ -169,7 +169,7 @@
             "enum": [
               "frontmatter",
               "board-move",
-              "checklist"
+              "children"
             ]
           }
         }

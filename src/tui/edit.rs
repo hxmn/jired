@@ -768,6 +768,7 @@ mod tests {
             preamble: String::new(),
             description: "Login fails when SSO is enabled.".into(),
             checklist: vec![],
+            children: vec![],
             comments: vec![CommentBlock {
                 id: CommentId::Existing("c1".into()),
                 author: "Jane D".into(),

@@ -88,8 +88,8 @@ pub fn render() -> String {
     s.push_str("## File structure\n\n");
     s.push_str(
         "YAML frontmatter, then fixed sections in this order: `# <summary>`, \
-         `## Description`, `## Checklist`, `## Comments`, `## Attachments`. \
-         Keep the section order and heading text intact.\n\n",
+         `## Description`, `## Checklist`, `## Children`, `## Comments`, \
+         `## Attachments`. Keep the section order and heading text intact.\n\n",
     );
     s.push_str(
         "Editable frontmatter fields: `type`, `status`, `priority`, `summary`, `labels`, \
@@ -120,11 +120,20 @@ pub fn render() -> String {
     s.push_str("- New: add a `### [new]` section; push creates it and rewrites the heading with the real id.\n");
     s.push_str("- Deleting a section only deletes the comment with `--allow-comment-delete`.\n\n");
 
-    s.push_str("## Checklists\n\n");
+    s.push_str("## Children and checklists\n\n");
+    s.push_str("Two checkbox sections, two different things.\n\n");
     s.push_str(
-        "`## Checklist` lists subtasks as `- [ ] PROJ-143 Title`. Ticking a box applies a \
-         done-transition only when `checklist.done_transition` is configured; otherwise it \
-         is reported and ignored.\n\n",
+        "- `## Children` lists the subtasks as `- [ ] PROJ-143 Title`, each of them an \
+         issue of its own. Ticking a box applies a done-transition only when \
+         `children.done_transition` is configured; otherwise it is reported and ignored.\n",
+    );
+    s.push_str(
+        "- `## Checklist` is the checklist plugin's list inside this issue, as \
+         `- [ ] `IN PROGRESS` Title` — a status is written in backticks ahead of the \
+         title, and only when the checkbox does not already say it. `### ` lines group \
+         items; indented lines under an item are its note. It is read-only: an edit is \
+         reported by push rather than sent, and the next write from the server \
+         replaces it.\n\n",
     );
 
     s.push_str("## Credentials\n\n");

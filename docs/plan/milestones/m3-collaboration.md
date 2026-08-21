@@ -18,7 +18,7 @@ as unimplemented rather than doing something approximate.
 - [x] Add / edit / delete (gated) comments round-trip on Cloud and DC
 - [x] Attachment stubs, `attachments pull`, and new-file upload work with sha256 verification
 - [x] `create` produces a `NEW-*` file that becomes a real issue (file renamed, mapping reported) on push
-- [x] Subtask checklist renders and (with `checklist.done_transition` configured) checking a box transitions the subtask
+- [x] Subtasks render under `## Children` and (with `children.done_transition` configured) checking a box transitions the subtask
 - [x] `resolve` clears recorded conflicts non-interactively
 - [x] Full agent workflow E2E test green against fixtures for Cloud and DC
 
@@ -46,9 +46,9 @@ as unimplemented rather than doing something approximate.
 - **Done when:** stub→download→upload cycle passes E2E with hash verification.
 
 ### M3.4 Checklists (cases a + b)
-- [x] (a) Subtasks rendered `- [ ] KEY Title` under `## Checklist`
+- [x] (a) Subtasks rendered `- [ ] KEY Title` under `## Children`
 - [ ] Subtask title edits push the summary; new unprefixed lines create subtasks
-- [x] Checkbox → `checklist.done_transition` mapping, **off by default** (D12); preview in `push --dry-run`
+- [x] Checkbox → `children.done_transition` mapping, **off by default** (D12); preview in `push --dry-run`
 - [ ] (b) ADF taskList in description round-trips as GFM task list; checked-state pushes
 - **Done when:** both cases pass fixture tests; unchecked default confirmed by test.
 

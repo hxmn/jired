@@ -8,7 +8,7 @@ use crate::api::normalize::FieldMap;
 use crate::api::{Markup, RemoteIssue};
 use crate::cli::cmd::pull::{PullArgs, Strategy};
 use crate::cli::context::Context;
-use crate::doc::{CommentBlock, CommentId, IssueDoc};
+use crate::doc::{ChecklistEntry, CommentBlock, CommentId, IssueDoc};
 use crate::error::{JiredError, Result};
 use crate::json::Out;
 use crate::sync::merge::{self, Decision};
@@ -555,13 +555,36 @@ fn field_changes(base: &IssueDoc, remote: &IssueDoc, names: &FieldMap) -> Vec<Fi
         out.push(change);
     }
 
+    if base.children != remote.children {
+        let done = |d: &IssueDoc| d.children.iter().filter(|i| i.checked).count();
+        out.push(FieldChange {
+            field: "children".into(),
+            label: None,
+            from: Some(format!("{}/{} done", done(base), base.children.len())),
+            to: Some(format!("{}/{} done", done(remote), remote.children.len())),
+            added: None,
+            removed: None,
+        });
+    }
+
     if base.checklist != remote.checklist {
-        let done = |d: &IssueDoc| d.checklist.iter().filter(|i| i.checked).count();
+        let done = |d: &IssueDoc| {
+            d.checklist
+                .iter()
+                .filter(|e| matches!(e, ChecklistEntry::Item(i) if i.checked))
+                .count()
+        };
+        let total = |d: &IssueDoc| {
+            d.checklist
+                .iter()
+                .filter(|e| matches!(e, ChecklistEntry::Item(_)))
+                .count()
+        };
         out.push(FieldChange {
             field: "checklist".into(),
             label: None,
-            from: Some(format!("{}/{} done", done(base), base.checklist.len())),
-            to: Some(format!("{}/{} done", done(remote), remote.checklist.len())),
+            from: Some(format!("{}/{} done", done(base), total(base))),
+            to: Some(format!("{}/{} done", done(remote), total(remote))),
             added: None,
             removed: None,
         });
@@ -704,8 +727,14 @@ pub fn merge_docs(
     field!("links", frontmatter.links);
     field!("story_points", frontmatter.story_points);
     field!("custom", frontmatter.custom);
-    field!("checklist", checklist);
+    field!("children", children);
     field!("extra_sections", extra_sections);
+
+    // `## Checklist` is a read-only rendering, so the server always wins: it
+    // starts from `remote` and no local edit to it is worth a conflict.
+    if base.checklist != remote.checklist {
+        merged.push("checklist".into());
+    }
     field!("preamble", preamble);
 
     // Body text merges at hunk granularity rather than all-or-nothing.
@@ -794,6 +823,7 @@ mod tests {
             preamble: String::new(),
             description: description.into(),
             checklist: vec![],
+            children: vec![],
             comments: vec![],
             attachments: vec![],
             extra_sections: vec![],

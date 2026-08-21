@@ -23,7 +23,7 @@ them with Jira Cloud (REST v3, ADF) or Jira Data Center (REST v2, wiki markup).
 | M2 | [m2-sync-engine.md](milestones/m2-sync-engine.md) | Three-way merge, `diff`, MD→ADF/wiki, `push`, `status` | done |
 | M3 | [m3-collaboration.md](milestones/m3-collaboration.md) | Comments, attachments, checklists, `create`/`transition`/`assign`/`log`/`resolve`/`clean` | done but for `search --pull` and per-field resolve |
 | M4 | [m4-grouping-tui.md](milestones/m4-grouping-tui.md) | Grouping folders, link fallback, board moves, TUI | grouping done; TUI framework and the `create` form done; **other screens not built** |
-| M5 | [m5-agent-json-polish.md](milestones/m5-agent-json-polish.md) | JSON schemas, agent docs, completion, hardening, release | contract and security done; **plugin adapter and packaging not built** |
+| M5 | [m5-agent-json-polish.md](milestones/m5-agent-json-polish.md) | JSON schemas, agent docs, completion, hardening, release | contract, security and the checklist adapter done; **packaging not built** |
 
 ## Where the project stands
 
@@ -54,7 +54,7 @@ Guards that hold the design in place, each verified rather than asserted:
 | Leak tests (themselves leak-tested) | A credential reaching output, a fixture or a config file |
 | Scale benchmark | Silent quadratic behaviour as a workspace grows |
 
-**Not built:** the TUI, the checklist-plugin adapter, release packaging, and
+**Not built:** the TUI, release packaging, and
 recording fixtures from real instances (`jired-record` exists but needs
 credentials to run).
 
@@ -82,7 +82,7 @@ Full rationale lives with each decision ID in the reference docs.
 | D8 | Optimistic concurrency = GET `updated` → compare base → PUT (no server CAS exists) |
 | D9/D10 | `comrak` for Markdown AST; `serde-yaml-ng` instead of archived `serde_yaml` |
 | D11 | Headless secrets: scrypt(`JIRED_SECRET_KEY`) encrypted blob; plaintext only with `--insecure-store` ⚠ |
-| D12 | Checkbox→done-transition off until `checklist.done_transition` configured ⚠ |
+| D12 | Checkbox→done-transition off until `children.done_transition` configured ⚠ |
 | D13 | Grouping roots: `by-parent/`, `sprints/`, `boards/` |
 | D14 | Temp keys `NEW-<6 hex>` |
 | D15 | Exit codes: 0 ok, 1 generic, 2 usage, 3 auth, 4 network, 5 conflict, 6 lossy-blocked, 7 missing value (non-interactive), 8 locked, 9 corrupt state, 10 unsupported server |

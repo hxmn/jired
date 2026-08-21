@@ -30,7 +30,7 @@ with a block marker becoming a table or list.
 
 ### M2.1 Working-copy parser
 - [x] Frontmatter parse with editable/RO classification; RO edits → warning; `key`/`id` edits → error
-- [x] Section splitter by fixed headings (Description/Checklist/Comments/Attachments), tolerant of missing sections
+- [x] Section splitter by fixed headings (Description/Checklist/Children/Comments/Attachments), tolerant of missing sections
 - [x] Comment-section parser (`[c-ID]`, `[new]`, deleted detection)
 - [x] Markdown → JiredAst (comrak) incl. raw-marker reassembly from `raw_block`
 - [x] Malformed-file taxonomy: recoverable warnings vs hard errors (exit 1 with file+line)

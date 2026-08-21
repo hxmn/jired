@@ -3,5 +3,8 @@
   { "id": "customfield_10106", "name": "Story Points", "custom": true, "schema_type": "number" },
   { "id": "customfield_10100", "name": "Epic Link", "custom": true, "schema_type": "any" },
   { "id": "customfield_10104", "name": "Sprint", "custom": true, "schema_type": "array" },
-  { "id": "customfield_10300", "name": "Change Window", "custom": true, "schema_type": "string" }
+  { "id": "customfield_10300", "name": "Change Window", "custom": true, "schema_type": "string" },
+  { "id": "customfield_10205", "name": "Checklist", "custom": true, "schema_type": "any" },
+  { "id": "customfield_10206", "name": "Checklist Text", "custom": true, "schema_type": "string" },
+  { "id": "customfield_10207", "name": "Checklist Progress", "custom": true, "schema_type": "string" }
 ]

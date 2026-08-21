@@ -19,6 +19,11 @@ pub struct FieldMap {
     pub story_points: Option<String>,
     pub epic_link: Option<String>,
     pub sprint: Option<String>,
+    /// The checklist plugin's own field, and the text mirror of it that the
+    /// plugin keeps alongside — either one is enough to render the checklist.
+    pub checklist: Option<String>,
+    pub checklist_text: Option<String>,
+    pub checklist_progress: Option<String>,
     pub names: BTreeMap<String, String>,
 }
 
@@ -38,6 +43,15 @@ impl FieldMap {
                 "sprint" => {
                     map.sprint.get_or_insert(f.id.clone());
                 }
+                "checklist" | "smart checklist" => {
+                    map.checklist.get_or_insert(f.id.clone());
+                }
+                "checklist text" | "smart checklist text" => {
+                    map.checklist_text.get_or_insert(f.id.clone());
+                }
+                "checklist progress" | "smart checklist progress" => {
+                    map.checklist_progress.get_or_insert(f.id.clone());
+                }
                 _ => {}
             }
             map.names.insert(f.id.clone(), f.name.clone());
@@ -46,9 +60,16 @@ impl FieldMap {
     }
 
     fn is_well_known(&self, id: &str) -> bool {
-        [&self.story_points, &self.epic_link, &self.sprint]
-            .iter()
-            .any(|f| f.as_deref() == Some(id))
+        [
+            &self.story_points,
+            &self.epic_link,
+            &self.sprint,
+            &self.checklist,
+            &self.checklist_text,
+            &self.checklist_progress,
+        ]
+        .iter()
+        .any(|f| f.as_deref() == Some(id))
     }
 }
 
@@ -112,6 +133,7 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
             .and_then(|id| f.get(id))
             .and_then(Value::as_f64),
         subtasks: subtasks(f.get("subtasks")),
+        checklist: checklist(f, map),
         custom: custom_fields(f, map),
     };
 
@@ -294,6 +316,21 @@ fn subtasks(v: Option<&Value>) -> Vec<SubtaskRef> {
         .unwrap_or_default()
 }
 
+/// The plugin's own field says the most; the text mirror is the fallback for
+/// instances that expose only that one.
+fn checklist(f: &Value, map: &FieldMap) -> Vec<crate::doc::ChecklistEntry> {
+    for id in [&map.checklist, &map.checklist_text].into_iter().flatten() {
+        let entries = f
+            .get(id)
+            .map(crate::api::checklist::from_field)
+            .unwrap_or_default();
+        if !entries.is_empty() {
+            return entries;
+        }
+    }
+    Vec::new()
+}
+
 fn custom_fields(f: &Value, map: &FieldMap) -> BTreeMap<String, Value> {
     let Some(obj) = f.as_object() else {
         return BTreeMap::new();
@@ -378,6 +415,20 @@ mod tests {
                 schema_type: Some("array".into()),
                 items: Some("json".into()),
             },
+            FieldMeta {
+                id: "customfield_10205".into(),
+                name: "Checklist".into(),
+                custom: true,
+                schema_type: Some("any".into()),
+                items: None,
+            },
+            FieldMeta {
+                id: "customfield_10207".into(),
+                name: "Checklist Progress".into(),
+                custom: true,
+                schema_type: Some("string".into()),
+                items: None,
+            },
         ])
     }
 
@@ -403,6 +454,8 @@ mod tests {
                 "customfield_10014": "PROJ-90",
                 "customfield_10020": [{"id": 42, "name": "Sprint 42", "state": "active"}],
                 "customfield_10456": {"value": "Platform"},
+                "customfield_10205": ["Checklist(id=793, issueId=50383, _items=[Item(id=23, checklistId=793, value=Analyse the request, rank=0, status=Status(id=2, rank=1, statusState=UNCHECKED, name=IN PROGRESS, color=BLUE, default=true, global=true, projectIds=[]), quotes=[], assignees=[], mandatory=false, description=null, weight=null)])"],
+                "customfield_10207": "0/1",
                 "customfield_10999": null,
                 "issuelinks": [
                     {"type": {"outward": "blocks", "inward": "is blocked by"},
@@ -476,6 +529,26 @@ mod tests {
         assert_eq!(issue.fields.subtasks.len(), 2);
         assert!(!issue.fields.subtasks[0].done);
         assert!(issue.fields.subtasks[1].done);
+    }
+
+    /// The plugin's fields are found by name, parsed, and kept out of `custom`:
+    /// their raw form is a Java debug dump nobody can usefully edit.
+    #[test]
+    fn a_checklist_field_is_parsed_rather_than_shown_raw() {
+        let issue = issue_from_json(&cloud_issue(), Markup::Adf, &field_map()).unwrap();
+        assert_eq!(
+            issue.fields.checklist,
+            vec![crate::doc::ChecklistEntry::Item(
+                crate::doc::ChecklistItem {
+                    checked: false,
+                    status: Some("IN PROGRESS".into()),
+                    title: "Analyse the request".into(),
+                    description: None,
+                }
+            )]
+        );
+        assert!(!issue.fields.custom.contains_key("customfield_10205"));
+        assert!(!issue.fields.custom.contains_key("customfield_10207"));
     }
 
     #[test]

@@ -40,6 +40,11 @@ Steps:
 
 ## Checklist
 
+- [ ] `IN PROGRESS` Reproduce on staging
+- [x] Confirm the SSO settings
+
+## Children
+
 - [ ] PROJ-143 Add integration test
 - [x] PROJ-144 Update runbook
 
@@ -60,8 +65,8 @@ Fixed by rotating the IdP cert — see attached HAR.
 ````
 
 Fixed section order, parseable by heading: `# summary` → `## Description` →
-`## Checklist` → `## Comments` → `## Attachments`. Frontmatter `summary` is the
-source of truth over the `#` heading (D6).
+`## Checklist` → `## Children` → `## Comments` → `## Attachments`. Frontmatter
+`summary` is the source of truth over the `#` heading (D6).
 
 ## Conversion pipeline
 
@@ -107,9 +112,9 @@ editing text inside it makes `push` fail with
 
 | Case | Behavior |
 |---|---|
-| (a) Subtasks | Rendered `- [ ] KEY Title` under `## Checklist`. Checking a box maps to the configured done-transition — **off** until `checklist.done_transition` is set (D12). Title edits push subtask summary; new unprefixed lines create subtasks. |
+| (a) Subtasks | Rendered `- [ ] KEY Title` under `## Children` — they are issues of their own, not lines of a list. Checking a box maps to the configured done-transition — **off** until `children.done_transition` is set (D12). Title edits push subtask summary; new unprefixed lines create subtasks. |
 | (b) ADF task lists in description (Cloud) | Round-trip in place as GFM task lists; checked state pushes. |
-| (c) Plugin checklists ("Checklist for Jira" etc.) | Behind a `ChecklistAdapter` trait keyed on custom-field schema; v1: detection + read-only rendering only. |
+| (c) Plugin checklists (Smart Checklist and the like) | Fields found by display name (`Checklist`, `Checklist Text`, `Checklist Progress`), parsed by `api::checklist` from whichever form the server sends — the Data Center `toString()` dump, the plugin's text syntax, or JSON — and rendered read-only under `## Checklist` as `- [ ] `STATUS` Title`. The fields stay out of `custom:`; an edit to the section is warned about by push, never sent. |
 
 ## Attachments
 

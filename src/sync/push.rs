@@ -150,7 +150,7 @@ enum Action {
         filename: String,
         bytes: Vec<u8>,
     },
-    /// Transition a *different* issue: ticking a subtask's checklist box.
+    /// Transition a *different* issue: ticking a subtask's box under `## Children`.
     TransitionOther {
         key: String,
         to_status: String,
@@ -171,7 +171,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         .resolver
         .get_u64("attachments.max_upload")?
         .unwrap_or(50 * 1024 * 1024);
-    let done_transition = ctx.resolver.get_value("checklist.done_transition")?;
+    let done_transition = ctx.resolver.get_value("children.done_transition")?;
     let mut wanted: Vec<String> = args.issues.iter().map(|k| k.to_uppercase()).collect();
 
     // `--resume` narrows the run to issues an interrupted push left unfinished.
@@ -761,16 +761,27 @@ fn plan(
         }
     }
 
-    // A ticked checklist box means "this subtask is done". Acting on it is off
-    // until `checklist.done_transition` is configured (decision D12): silently
+    // The checklist plugin's list is rendered read-only: jired can show what
+    // the plugin holds but has no supported way to write it back, and inventing
+    // one would corrupt the field for everyone else looking at the issue.
+    if working.checklist != base.checklist {
+        warnings.push(format!(
+            "the Checklist section of {} is read-only, so the edit was not pushed; \
+             the next pull restores what the server holds",
+            base.frontmatter.key
+        ));
+    }
+
+    // A ticked child box means "this subtask is done". Acting on it is off
+    // until `children.done_transition` is configured (decision D12): silently
     // transitioning an issue because a box was ticked is too surprising to be
     // the default.
-    for item in &working.checklist {
+    for item in &working.children {
         let Some(key) = &item.key else {
             continue;
         };
         let was_checked = base
-            .checklist
+            .children
             .iter()
             .find(|b| b.key.as_deref() == Some(key.as_str()))
             .map(|b| b.checked);
@@ -779,7 +790,7 @@ fn plan(
         }
         let Some(to_status) = done_transition else {
             warnings.push(format!(
-                "{key} is ticked in {} but checklist.done_transition is not set, \
+                "{key} is ticked in {} but children.done_transition is not set, \
                  so nothing was transitioned",
                 base.frontmatter.key
             ));
@@ -787,7 +798,7 @@ fn plan(
         };
         ops.push(Op {
             kind: "transition",
-            summary: format!("{key} → {to_status} (checklist)"),
+            summary: format!("{key} → {to_status} (children)"),
             request: json!({
                 "method": "POST",
                 "path": format!("/issue/{key}/transitions"),
@@ -1009,7 +1020,7 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                             "available",
                             json!(available.iter().map(|t| &t.to_status).collect::<Vec<_>>()),
                         )
-                        .with_hint("check checklist.done_transition against the workflow")
+                        .with_hint("check children.done_transition against the workflow")
                     })?;
                 client.do_transition(other, &target.id, None).await
             }

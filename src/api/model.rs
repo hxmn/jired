@@ -159,6 +159,8 @@ pub struct IssueFields {
     pub links: Vec<IssueLink>,
     pub story_points: Option<f64>,
     pub subtasks: Vec<SubtaskRef>,
+    /// The checklist plugin's list, if the instance has one [M5.4].
+    pub checklist: Vec<crate::doc::ChecklistEntry>,
     /// Custom fields with no well-known mapping, keyed by field id.
     pub custom: std::collections::BTreeMap<String, serde_json::Value>,
 }

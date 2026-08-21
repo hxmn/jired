@@ -17,7 +17,7 @@ Security is signed off: threat model published in [docs/security.md](../../secur
 leak guards verified by injecting a leak, `cargo deny` clean, and the scale
 benchmark run and recorded.
 
-Not done: the checklist-plugin adapter (M5.4), progress reporting for long
+Not done: progress reporting for long
 fetches, and release packaging (M5.7).
 
 ## Acceptance criteria
@@ -49,8 +49,9 @@ fetches, and release packaging (M5.7).
 - **Done when:** completions generate and smoke-load in bash and zsh CI steps.
 
 ### M5.4 Checklist plugin adapter (read-only)
-- [ ] `ChecklistAdapter` trait keyed on custom-field schema detection
-- [ ] "Checklist for Jira" read-only rendering under `## Checklist` (clearly marked read-only; edits warn)
+- [x] Plugin fields detected by display name (`Checklist`, `Checklist Text`, `Checklist Progress`) and kept out of `custom:`
+- [x] `api::checklist` parses all three forms a server sends: the Data Center `toString()` dump, the plugin's text syntax, and JSON
+- [x] Read-only rendering under `## Checklist` (subtasks moved to `## Children`); edits warn on push, and the section is server-wins on pull
 - **Done when:** plugin fixture renders and local edits produce the warning, not a push.
 
 ### M5.5 Security hardening & audit

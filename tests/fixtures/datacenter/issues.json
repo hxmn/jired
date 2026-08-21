@@ -22,6 +22,11 @@
         "com.atlassian.greenhopper.service.sprint.Sprint@4d7f[id=88,rapidViewId=12,state=ACTIVE,name=Ops Sprint 12,startDate=2026-08-10T09:00:00.000+02:00,endDate=2026-08-24T09:00:00.000+02:00]"
       ],
       "customfield_10300": "2026-08-20 22:00 CEST",
+      "customfield_10205": [
+        "Checklist(id=793, issueId=20501, _items=[Item(id=24, checklistId=793, value=Update the connector config, rank=1, status=Status(id=1, rank=0, statusState=UNCHECKED, name=TO DO, color=GRAY, default=true, global=true, projectIds=[]), quotes=[], assignees=[], history=History(id=48, itemId=24, checklistId=793, type=ITEM_CREATED, from=, to=TO DO, date=2026-08-11 08:18:50.248, user=Ilya A), mandatory=false, description=null, weight=null), Item(id=23, checklistId=793, value=Generate the replacement secret, rank=0, status=Status(id=2, rank=1, statusState=UNCHECKED, name=IN PROGRESS, color=BLUE, default=true, global=true, projectIds=[]), quotes=[], assignees=[], history=History(id=52, itemId=23, checklistId=793, type=STATUS_CHANGED, from=TO DO, to=IN PROGRESS, date=2026-08-12 08:59:41.389, user=Ilya A), mandatory=false, description=Coordinate the window with @jane, weight=null), Item(id=25, checklistId=793, value=Announce the freeze, rank=2, status=Status(id=3, rank=2, statusState=CHECKED, name=DONE, color=GREEN, default=true, global=true, projectIds=[]), quotes=[], assignees=[Assignee(id=3, userName=jane, displayName=Jane D)], history=History(id=53, itemId=25, checklistId=793, type=ITEM_UPDATED, from=TO DO, to=DONE, date=2026-08-12 09:52:29.92, user=Jane D), mandatory=false, description=null, weight=null)])"
+      ],
+      "customfield_10206": "~ Generate the replacement secret\n>> Coordinate the window with @jane\n- Update the connector config\n+ Announce the freeze\n",
+      "customfield_10207": "1/3",
       "issuelinks": [
         {
           "type": { "outward": "relates to", "inward": "relates to" },
