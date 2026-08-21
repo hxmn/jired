@@ -1915,6 +1915,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
+ "unicode-width",
  "urlencoding",
  "walkdir",
  "x509-parser",

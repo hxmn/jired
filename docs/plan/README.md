@@ -22,7 +22,7 @@ them with Jira Cloud (REST v3, ADF) or Jira Data Center (REST v2, wiki markup).
 | M1 | [m1-foundation.md](milestones/m1-foundation.md) | Skeleton, config, auth, API clients, `init`/`fetch`, read-only pull | done |
 | M2 | [m2-sync-engine.md](milestones/m2-sync-engine.md) | Three-way merge, `diff`, MD→ADF/wiki, `push`, `status` | done |
 | M3 | [m3-collaboration.md](milestones/m3-collaboration.md) | Comments, attachments, checklists, `create`/`transition`/`assign`/`log`/`resolve`/`clean` | done but for `search --pull` and per-field resolve |
-| M4 | [m4-grouping-tui.md](milestones/m4-grouping-tui.md) | Grouping folders, link fallback, board moves, TUI | grouping done; **TUI not built** |
+| M4 | [m4-grouping-tui.md](milestones/m4-grouping-tui.md) | Grouping folders, link fallback, board moves, TUI | grouping done; TUI framework and the `create` form done; **other screens not built** |
 | M5 | [m5-agent-json-polish.md](milestones/m5-agent-json-polish.md) | JSON schemas, agent docs, completion, hardening, release | contract and security done; **plugin adapter and packaging not built** |
 
 ## Where the project stands

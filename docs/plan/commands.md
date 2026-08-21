@@ -129,9 +129,21 @@ Cached changelog (fetched with `expand=changelog`). Offline.
 ### `jired comment ISSUE-KEY -m "text" [--push]`
 Appends `### [new]` section to the file; `--push` sends immediately.
 
-### `jired create [--type Story] [--template T] [--summary S]`
+### `jired create [--type Story] [--template T] [--summary S] [-i]`
 Writes `NEW-<6hex>. Summary.md` (D14) from template; real key assigned on push
 (file renamed; JSON reports the mapping).
+
+With `--summary` nothing is asked, so a scripted `create` behaves the same with or
+without a terminal. Without one — or with `-i`, which asks anyway — it opens the
+new-issue form: summary, type, priority, labels, parent and project, with the
+options taken from what the workspace has already pulled (ranked by use) rather
+than from the server. It is offline like the rest of the command. The form draws
+on the alternate screen over stderr, so `--json` stdout stays a single document.
+
+Degradation: full-screen form → line prompts for summary, type and project (a
+terminal that cannot do raw mode, `TERM=dumb`, or `JIRED_NO_TUI=1`) → exit 7
+naming the missing summary (`--no-input`, or no terminal at all). Backing out of
+the form writes nothing and exits 1.
 
 ### `jired transition ISSUE-KEY --to "In Review" [--fields k=v…]`
 Validates against cached/live transitions; missing required fields → exit 2 with a

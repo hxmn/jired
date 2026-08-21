@@ -62,6 +62,9 @@ urlencoding = "2"
 dirs = "6"
 walkdir = "2"
 unicode-segmentation = "1"
+# Already in the tree via ratatui; named here because the TUI measures text in
+# terminal cells, not code points.
+unicode-width = "0.2"
 is-terminal = "0.4"
 x509-parser = "0.18"
 

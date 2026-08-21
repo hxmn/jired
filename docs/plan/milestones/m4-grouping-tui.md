@@ -13,8 +13,11 @@ Grouping is delivered: `by-parent/`, `sprints/` and `boards/` are rebuilt from
 symlink → hard link → stub, and dragging a card between board columns stages a
 transition that `status` and `push --dry-run` both account for.
 
-The TUI (M4.6, M4.7) is not built. Every command works non-interactively today,
-so nothing is blocked on it; what is missing is the interactive affordance.
+The TUI framework (M4.6) is built and `create` is the first screen on it: a
+component kit of text input, form field, filtered list and confirm dialog, all
+state machines the `TestBackend` drives without a terminal. The remaining screens
+(M4.7 — init wizard, pull/push previews, conflict resolver) are not built. Every
+command works non-interactively today, so nothing is blocked on them.
 
 ## Acceptance criteria
 
@@ -22,7 +25,8 @@ so nothing is blocked on it; what is missing is the interactive affordance.
 - [ ] Verified on macOS and Windows, and without symlink privilege (needs CI to run)
 - [x] Moving a board symlink between column folders stages a transition visible in `status` and `push --dry-run` (D4)
 - [ ] `init` wizard, pickers, pull/push previews, and conflict resolver work interactively and degrade per spec in `--no-input`
-- [ ] TUI writes nothing to stdout (stdout reserved for `--json`)
+- [x] The `create` form works interactively and degrades to line prompts, then to exit 7
+- [x] TUI writes nothing to stdout (stdout reserved for `--json`)
 
 ## Tasks
 
@@ -56,12 +60,14 @@ so nothing is blocked on it; what is missing is the interactive affordance.
 - **Done when:** deleting all grouping folders + `clean --regroup` restores them byte-for-byte.
 
 ### M4.6 TUI framework
-- [ ] Shared ratatui component kit: list+fuzzy filter, form, diff pane, confirm dialog; keys `jk`/arrows, `/`, `enter`, `q`/`esc`, `?`
-- [ ] Prompt widget as the last rung of the config resolver (exit 7 in `--no-input`)
-- [ ] All TUI output on the alternate screen / stderr; stdout untouched
+- [x] Shared ratatui component kit: list+fuzzy filter, form, confirm dialog; keys arrows/tab, `enter`, `esc`, `f1`
+- [ ] Diff pane (waits for the first screen that shows a diff)
+- [x] Prompt widget as the last rung of the config resolver (exit 7 in `--no-input`)
+- [x] All TUI output on the alternate screen / stderr; stdout untouched
 - **Done when:** component kit has smoke tests via `ratatui` TestBackend.
 
 ### M4.7 TUI screens
+- [x] New-issue form: summary, type, priority, labels, parent, project, description, with the workspace's own values as options
 - [ ] Init wizard: url → auth kind → creds → verify → project picker → options
 - [ ] Project/board/sprint pickers (shared with `list --pick` flows and `assign` user picker)
 - [ ] Pull preview: issue tree with changed fields; accept/abort

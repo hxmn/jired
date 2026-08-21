@@ -1556,6 +1556,51 @@ fn create_requires_a_summary() {
     assert_eq!(err["kind"], "missing_value");
 }
 
+#[test]
+fn the_create_form_is_refused_rather_than_skipped_when_it_cannot_be_shown() {
+    // `--interactive` asks for the form; `--no-input` forbids asking. Silently
+    // creating something from the defaults would be the wrong resolution.
+    let ws = Ws::new();
+    ws.init();
+    let err = ws.json_err(&["create", "-i", "--summary", "Anything"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(
+        err["message"].as_str().unwrap().contains("terminal"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_template_supplies_every_field_a_flag_did_not() {
+    let ws = Ws::new();
+    ws.init();
+    std::fs::write(
+        ws.path().join(".jired/templates/incident.md"),
+        "---\nkey: NEW-000000\nid: ''\ntype: Bug\npriority: High\nlabels:\n- incident\n- auth\njired: {}\n---\n\n\
+         ## Description\n\nWhat happened, and what it affected.\n",
+    )
+    .unwrap();
+
+    let report = ws.json(&["create", "--template", "incident", "-s", "Login is down"]);
+    assert_eq!(report["type"], "Bug");
+    let file = ws.read(report["file"].as_str().unwrap());
+    assert!(file.contains("priority: High"), "{file}");
+    assert!(file.contains("- incident"), "{file}");
+    assert!(file.contains("What happened"), "{file}");
+
+    // An explicit flag still wins over what the template says.
+    let overridden = ws.json(&[
+        "create",
+        "--template",
+        "incident",
+        "-s",
+        "Login is slow",
+        "--type",
+        "Task",
+    ]);
+    assert_eq!(overridden["type"], "Task");
+}
+
 // ---------------------------------------------------------------------------
 // Attachments [M3.3]
 // ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@
 //! | [`doc`] | issue file format: frontmatter and sections |
 //! | [`sync`] | fetch/pull/push engine and three-way merge |
 //! | [`project`] | filesystem projector: names, files, links |
+//! | [`tui`] | full-screen interactive screens |
 
 pub mod api;
 pub mod auth;
@@ -27,6 +28,7 @@ pub mod json;
 pub mod project;
 pub mod store;
 pub mod sync;
+pub mod tui;
 pub mod workspace;
 
 pub use error::{ExitCode, JiredError, Result};
