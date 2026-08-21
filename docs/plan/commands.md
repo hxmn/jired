@@ -145,6 +145,23 @@ terminal that cannot do raw mode, `TERM=dumb`, or `JIRED_NO_TUI=1`) → exit 7
 naming the missing summary (`--no-input`, or no terminal at all). Backing out of
 the form writes nothing and exits 1.
 
+### `jired edit ISSUE-KEY [--push]`
+Opens the issue in a form: summary, status, type, priority, assignee, labels,
+components, story points, parent, description — the fields a push can actually
+send, and no others, so nothing offered is silently dropped. Options come from
+the workspace's own snapshots (statuses and types it uses, people it has seen,
+its issues as parents), never from the network. Saving writes the file, renaming
+it when the summary changed; the change then behaves like any other local edit —
+visible in `status` and `diff`, sent by `push`, or immediately with `--push`.
+A status change is staged as a transition, as it is when edited by hand.
+
+Everything the form does not show — comments, custom fields, links, sprint — is
+left exactly as it was. Without a full-screen terminal the file is handed to
+`$VISUAL`/`$EDITOR` instead, and is re-parsed afterwards so a stray edit is
+reported here rather than in the next command. With no terminal at all: exit 7,
+pointing at `comment`, `transition`, `assign` and the file itself.
+JSON: `{"schema":"jired/edit/1","key":"PROJ-142","file":"…","changed":["status"]}`.
+
 ### `jired transition ISSUE-KEY --to "In Review" [--fields k=v…]`
 Validates against cached/live transitions; missing required fields → exit 2 with a
 machine-readable list.

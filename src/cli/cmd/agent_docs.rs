@@ -137,6 +137,14 @@ pub fn render() -> String {
          moves the credential; it never has to be entered twice.\n\n",
     );
 
+    s.push_str("## Editing\n\n");
+    s.push_str(
+        "Edit the `.md` file directly — that is the interface. `jired edit KEY` \
+         opens the same fields in a form for a person at a terminal, and needs \
+         one: it exits 7 without it. `comment`, `transition` and `assign` are \
+         the scriptable single-field equivalents.\n\n",
+    );
+
     s.push_str("## Repairing a workspace\n\n");
     s.push_str(
         "`jired doctor` checks the layout, the config file, the credentials, the filenames \

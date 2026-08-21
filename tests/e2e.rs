@@ -2086,6 +2086,52 @@ fn clean_leaves_a_healthy_workspace_alone() {
 }
 
 // ---------------------------------------------------------------------------
+// edit [M4.7]
+// ---------------------------------------------------------------------------
+
+/// The form needs a terminal. Without one the command has to say so rather
+/// than half-work, because there is no flags-only path to fall back to.
+#[test]
+fn edit_without_a_terminal_says_what_to_use_instead() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["edit", "PROJ-142"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(err["hint"].as_str().unwrap().contains("comment"), "{err}");
+}
+
+#[test]
+fn editing_an_issue_the_workspace_does_not_have_is_a_usage_error() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["edit", "PROJ-999"], 2);
+    assert_eq!(err["kind"], "usage");
+    assert_eq!(err["details"]["issue"], "PROJ-999");
+}
+
+/// Story points are a custom field whose id differs per instance, which is why
+/// the form can offer them at all: push looks the id up in the field map.
+#[test]
+fn a_story_point_change_is_pushed_to_the_instances_own_field() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("story_points: 5.0", "story_points: 8.0");
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let body = &dry["results"][0]["ops"][0]["request"]["body"]["fields"];
+    assert_eq!(body["customfield_10016"], 8.0, "{body}");
+}
+
+// ---------------------------------------------------------------------------
 // Custom fields [M2.3]
 // ---------------------------------------------------------------------------
 

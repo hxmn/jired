@@ -97,6 +97,11 @@ pub struct Field {
     /// One dim line under the value: what the workspace already uses, or how
     /// the value is read.
     pub hint: String,
+    /// Shown dim after the value: what the value points at, for a field that
+    /// names something else.
+    pub detail: Option<String>,
+    /// Marked in the label when the value no longer matches what was loaded.
+    pub changed: bool,
 }
 
 impl Field {
@@ -109,6 +114,8 @@ impl Field {
             items: Vec::new(),
             optional: true,
             hint: String::new(),
+            detail: None,
+            changed: false,
         }
     }
 
@@ -121,6 +128,8 @@ impl Field {
             items: Vec::new(),
             optional: true,
             hint: String::new(),
+            detail: None,
+            changed: false,
         }
     }
 
@@ -134,6 +143,8 @@ impl Field {
             items,
             optional,
             hint: String::new(),
+            detail: None,
+            changed: false,
         }
     }
 

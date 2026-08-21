@@ -338,6 +338,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             &working,
             &base.raw,
             &field_meta,
+            fields.story_points.as_deref(),
             markup,
             &raw,
             &engine,
@@ -582,6 +583,7 @@ fn plan(
     // original shape of each custom field still exists.
     base_raw: &Value,
     field_meta: &std::collections::BTreeMap<String, crate::api::FieldMeta>,
+    story_points_field: Option<&str>,
     markup: Markup,
     raw: &[crate::convert::ast::RawBlock],
     engine: &Engine,
@@ -664,6 +666,18 @@ fn plan(
                 .map(|p| json!({ "key": p }))
                 .unwrap_or(Value::Null),
         );
+    }
+    // Story points live in a custom field whose id differs per instance, which
+    // is why it is set through the field map rather than by name.
+    if bf.story_points != wf.story_points {
+        match story_points_field {
+            Some(id) => {
+                fields.insert(id.to_string(), json!(wf.story_points));
+            }
+            None => warnings.push(
+                "this instance has no Story Points field; the change was not sent".to_string(),
+            ),
+        }
     }
     plan_custom_fields(bf, wf, base_raw, field_meta, engine, &mut fields);
 

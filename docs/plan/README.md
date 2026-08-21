@@ -34,7 +34,7 @@ init → pull → edit → status/diff → push --dry-run → push
 ```
 
 plus `comment`, `transition`, `assign`, `create`, `attach`,
-`attachments pull`, `log`, `search`, `resolve`, `clean`, `doctor`, `config`,
+`attachments pull`, `log`, `search`, `resolve`, `clean`, `doctor`, `edit`, `config`,
 `whoami`, `projects`/`boards`/`sprints`, `open`, `completion`, `schema` and
 `agent-docs`.
 

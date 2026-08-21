@@ -1,16 +1,196 @@
-//! Shared plumbing for the commands that edit one issue file [M3].
+//! `jired edit` [M4.7] — change an issue in a form, and the shared plumbing the
+//! other single-issue commands use.
 //!
 //! `comment`, `transition` and `assign` are conveniences, not a second way to
 //! reach the server: each stages its change in the working copy so it shows up
 //! in `status` and `diff` and goes out through the normal `push` path. `--push`
-//! only runs that same path immediately.
+//! only runs that same path immediately. `edit` is the same thing with a form
+//! in front of it rather than a flag.
 
 use crate::cli::cmd::push::PushArgs;
 use crate::cli::context::Context;
+use crate::cli::GlobalArgs;
 use crate::doc::IssueDoc;
-use crate::error::{JiredError, Result};
+use crate::error::{ExitCode, JiredError, Result};
+use crate::json::Out;
 use crate::sync::push::PushReport;
 use crate::sync::Engine;
+use crate::tui::catalog::Catalog;
+use crate::tui::edit::{EditScreen, Edits};
+use clap::Args;
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct EditArgs {
+    /// Issue to edit
+    pub issue: String,
+    /// Send the change to Jira straight away
+    #[arg(long)]
+    pub push: bool,
+}
+
+#[derive(serde::Serialize)]
+struct EditReport {
+    key: String,
+    file: String,
+    /// Frontmatter fields the edit moved; empty when nothing was changed.
+    changed: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pushed: Option<PushReport>,
+}
+
+pub fn run(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
+    let mut ctx = Context::open(g, out)?;
+    ctx.lock()?;
+
+    let key = args.issue.to_uppercase();
+    let engine = Engine::open(&ctx)?;
+    let file = locate(&engine, &key)?;
+    let doc = engine.projector.read(&file)?;
+    let before = Edits::of(&doc);
+
+    // Three rungs, in the order the terminal can support them: the form, the
+    // user's own editor on the file, and — with neither — exit 7. There is no
+    // flags-only path here on purpose: `edit` exists to be interactive, and a
+    // script has `comment`, `transition`, `assign` and the file itself.
+    let (relative, after) = if crate::tui::available() {
+        let catalog = Catalog::from_rows(
+            &engine.state.issues()?,
+            ctx.resolver.get_quiet("workspace.project")?.as_deref(),
+        );
+        let mut screen = EditScreen::new(&key, &catalog, &before);
+        match crate::tui::run(&mut screen)? {
+            Some(edits) => (write_back(&engine, doc, &file, &edits)?, edits),
+            None => {
+                out.say("no changes");
+                out.emit(
+                    "edit",
+                    &EditReport {
+                        key,
+                        file,
+                        changed: Vec::new(),
+                        pushed: None,
+                    },
+                );
+                return Ok(ExitCode::Success);
+            }
+        }
+    } else if ctx.resolver.interactive() {
+        // A terminal that cannot do full-screen still has an editor on it, and
+        // the file *is* the issue — nothing is lost by handing it over.
+        external_editor(&engine, &file, out)?;
+        let doc = engine.projector.read(&file)?;
+        (file.clone(), Edits::of(&doc))
+    } else {
+        return Err(
+            JiredError::missing_value("`jired edit` needs a terminal to draw on")
+                .with_detail("issue", key)
+                .with_hint(
+                    "edit the file directly, or use `jired comment`, `transition`, `assign`",
+                ),
+        );
+    };
+
+    let changed = changed_fields(&before, &after);
+    if changed.is_empty() {
+        out.say("no changes");
+    } else {
+        out.say(format!("{key}: {} — {relative}", changed.join(", ")));
+    }
+
+    let pushed = if args.push && !changed.is_empty() {
+        Some(push_one(&mut ctx, &key)?)
+    } else {
+        None
+    };
+    if pushed.is_none() && !changed.is_empty() {
+        out.say("run `jired push` to send it");
+    }
+
+    out.emit(
+        "edit",
+        &EditReport {
+            key,
+            file: relative,
+            changed,
+            pushed,
+        },
+    );
+    Ok(ExitCode::Success)
+}
+
+/// Find the issue's file, or say what to do about it not being here.
+fn locate(engine: &Engine, key: &str) -> Result<String> {
+    engine
+        .projector
+        .scan()?
+        .get(key)
+        .map(|f| f.relative.clone())
+        .ok_or_else(|| {
+            JiredError::usage(format!("{key} is not in this workspace"))
+                .with_detail("issue", key.to_string())
+                .with_hint("run `jired pull` first, or check the key")
+        })
+}
+
+/// Apply the form's result and write the file, renaming it when the summary
+/// changed so the name keeps describing the issue.
+fn write_back(engine: &Engine, mut doc: IssueDoc, file: &str, edits: &Edits) -> Result<String> {
+    edits.apply(&mut doc);
+    Ok(engine.projector.write(&doc, Some(file))?.relative)
+}
+
+/// Hand the file to `$VISUAL`/`$EDITOR`, then check it still parses.
+fn external_editor(engine: &Engine, file: &str, out: Out) -> Result<()> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let path = engine.projector.path_of(file);
+    out.say(format!("opening {file} in {editor}"));
+
+    // The editor owns the terminal until it exits; splitting the command lets
+    // `EDITOR="code -w"` work as well as a bare name.
+    let mut parts = editor.split_whitespace();
+    let program = parts.next().unwrap_or("vi");
+    let status = std::process::Command::new(program)
+        .args(parts)
+        .arg(&path)
+        .status()
+        .map_err(|e| {
+            JiredError::generic(format!("cannot run {editor}: {e}"))
+                .with_hint("set $EDITOR to something on your PATH")
+        })?;
+    if !status.success() {
+        return Err(JiredError::generic(format!(
+            "{editor} exited with {status}"
+        )));
+    }
+    // Parsing it now turns a stray edit into a message here rather than a
+    // confusing failure in the next command.
+    engine.projector.read(file)?;
+    Ok(())
+}
+
+/// Which fields the edit moved, in the order the file lists them.
+fn changed_fields(before: &Edits, after: &Edits) -> Vec<&'static str> {
+    let mut changed = Vec::new();
+    for (name, moved) in [
+        ("summary", before.summary != after.summary),
+        ("status", before.status != after.status),
+        ("type", before.issue_type != after.issue_type),
+        ("priority", before.priority != after.priority),
+        ("assignee", before.assignee != after.assignee),
+        ("labels", before.labels != after.labels),
+        ("components", before.components != after.components),
+        ("story_points", before.story_points != after.story_points),
+        ("parent", before.parent != after.parent),
+        ("description", before.description != after.description),
+    ] {
+        if moved {
+            changed.push(name);
+        }
+    }
+    changed
+}
 
 /// Locate an issue's file, apply `mutate`, and write it back.
 ///

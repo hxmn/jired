@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/edit/1",
+  "title": "jired edit result",
+  "description": "One issue after being edited in the form; the change is in the working copy until pushed",
+  "type": "object",
+  "required": [
+    "schema",
+    "key",
+    "file",
+    "changed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/edit/1"
+    },
+    "key": {
+      "type": "string"
+    },
+    "file": {
+      "type": "string"
+    },
+    "changed": {
+      "type": "array",
+      "description": "Frontmatter fields the edit moved; empty when nothing changed",
+      "items": {
+        "type": "string",
+        "enum": [
+          "summary",
+          "status",
+          "type",
+          "priority",
+          "assignee",
+          "labels",
+          "components",
+          "story_points",
+          "parent",
+          "description"
+        ]
+      }
+    },
+    "pushed": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

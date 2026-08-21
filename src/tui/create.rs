@@ -12,14 +12,14 @@
 //! drive a whole session through a `TestBackend`.
 
 use crate::tui::field::{Field, Value};
+use crate::tui::form::{self, Card};
 use crate::tui::picker::{self, Item, Picker};
 use crate::tui::{theme, Flow, Screen};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::{Constraint, Rect};
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+
+pub use crate::tui::catalog::{Catalog, KnownIssue};
 
 /// Issue types every Jira has, used only when the workspace knows none.
 const STOCK_TYPES: &[&str] = &["Task", "Story", "Bug", "Epic", "Sub-task"];
@@ -29,26 +29,6 @@ const STOCK_PRIORITIES: &[&str] = &["Highest", "High", "Medium", "Low", "Lowest"
 
 /// How many labels to name in the hint line before saying "and more".
 const LABEL_HINT: usize = 6;
-
-/// What the workspace already knows, offered as suggestions.
-///
-/// Every list is ordered by how often the workspace uses the value, so the
-/// first option is usually the right one.
-#[derive(Debug, Clone, Default)]
-pub struct Catalog {
-    pub projects: Vec<String>,
-    pub types: Vec<String>,
-    pub priorities: Vec<String>,
-    pub labels: Vec<String>,
-    pub issues: Vec<KnownIssue>,
-}
-
-#[derive(Debug, Clone)]
-pub struct KnownIssue {
-    pub key: String,
-    pub summary: String,
-    pub issue_type: String,
-}
 
 /// Values the command line already supplied; the form starts from these.
 #[derive(Debug, Clone, Default)]
@@ -339,58 +319,39 @@ impl Screen for CreateScreen {
     }
 
     fn render(&mut self, frame: &mut Frame) {
-        let card = card_area(frame.area(), self.needed_height());
-        let project = self.fields[PROJECT].text().to_string();
-        let block = Block::bordered()
-            .border_type(theme::BORDER)
-            .border_style(theme::idle_frame())
-            .title_top(Line::from(vec![
-                Span::raw(" "),
-                Span::styled("New issue", theme::title()),
-                Span::raw(" "),
-            ]))
-            .title_top(
-                Line::from(vec![
-                    Span::raw(" "),
-                    Span::styled(project, theme::dim()),
-                    Span::raw(" "),
-                ])
-                .right_aligned(),
-            );
-        let inner = block.inner(card);
-        frame.render_widget(Clear, card);
-        frame.render_widget(block, card);
-
-        // The last three rows are the status line and the key hints, with a
-        // rule above them; the rest belongs to the fields.
-        let footer_height = 3.min(inner.height);
-        let fields = Rect {
-            height: inner.height - footer_height,
-            ..inner
+        // The parent field shows the summary of what it points at, which is the
+        // check the user actually wants: did I pick the right issue?
+        self.fields[PARENT].detail = self.parent_detail();
+        let card = Card {
+            title: "New issue",
+            subtitle: self.fields[PROJECT].text().to_string(),
+            gaps: &[TYPE, DESCRIPTION],
+            body: Some(DESCRIPTION),
+            status: self.status_line(),
+            keys: self.key_hints(),
         };
-        let footer = Rect {
-            y: inner.y + inner.height - footer_height,
-            height: footer_height,
-            ..inner
-        };
-        self.render_fields(frame, fields);
-        self.render_footer(frame, footer);
+        let focus = self.overlay.is_none().then_some(self.focus);
+        let area = form::render(frame, &card, &mut self.fields, focus, &mut self.body_scroll);
 
         match &mut self.overlay {
-            Some(Overlay::Pick { picker, .. }) => render_picker(frame, card, picker),
-            Some(Overlay::Help) => render_help(frame, card),
-            Some(Overlay::Discard) => render_discard(frame, card),
+            Some(Overlay::Pick { picker, .. }) => form::render_picker(frame, area, picker),
+            Some(Overlay::Help) => form::render_help(frame, area, HELP),
+            Some(Overlay::Discard) => form::render_confirm(frame, area, "Discard this issue?"),
             None => {}
         }
     }
 }
 
-/// Width of the label gutter, including the focus marker.
-const GUTTER: u16 = 13;
-
-/// Widest the card gets; a form stretched across a 200-column terminal is
-/// harder to read, not easier.
-const MAX_WIDTH: u16 = 78;
+const HELP: &[(&str, &str)] = &[
+    ("tab / shift-tab", "move between fields"),
+    ("↑ ↓", "move between fields"),
+    ("← →", "change a choice"),
+    ("^p or f2", "open the field as a list"),
+    ("⏎", "create the issue"),
+    ("^s", "create from the description"),
+    ("^a ^e ^w ^u ^k", "edit the line like a shell does"),
+    ("esc", "cancel"),
+];
 
 const SUMMARY_LABEL: &str = "Summary";
 const TYPE_LABEL: &str = "Type";
@@ -401,199 +362,6 @@ const PROJECT_LABEL: &str = "Project";
 const DESCRIPTION_LABEL: &str = "Description";
 
 impl CreateScreen {
-    /// Rows the card wants: one per single-line field, the body's own height,
-    /// the blank lines between groups, the footer, and the border.
-    fn needed_height(&self) -> u16 {
-        let fields: u16 = self.fields.iter().map(|f| f.height).sum();
-        /// Blank rows separating the summary, the metadata and the body.
-        const GAPS: u16 = 2;
-        /// The description's label, which sits above its text.
-        const BODY_LABEL: u16 = 1;
-        /// The rule, the status line and the key hints.
-        const FOOTER: u16 = 3;
-        /// Top and bottom of the card.
-        const BORDER: u16 = 2;
-        fields + GAPS + BODY_LABEL + FOOTER + BORDER
-    }
-
-    fn render_fields(&mut self, frame: &mut Frame, area: Rect) {
-        let mut y = area.y;
-        for index in 0..self.fields.len() {
-            // A blank line separates the summary from the metadata, and the
-            // metadata from the body.
-            if matches!(index, TYPE | DESCRIPTION) {
-                y += 1;
-            }
-            let height = if index == DESCRIPTION {
-                self.fields[index].height + 1
-            } else {
-                1
-            };
-            if y + height > area.y + area.height {
-                break;
-            }
-            let row = Rect {
-                x: area.x,
-                y,
-                width: area.width,
-                height,
-            };
-            self.render_field(frame, row, index);
-            y += height;
-        }
-    }
-
-    fn render_field(&mut self, frame: &mut Frame, area: Rect, index: usize) {
-        let focused = index == self.focus && self.overlay.is_none();
-        // Read out of the field before anything borrows it mutably.
-        let label = self.fields[index].label;
-        let placeholder = self.fields[index].placeholder;
-        let marker = Span::styled(
-            if focused { "▌" } else { " " },
-            if focused {
-                theme::focus_frame()
-            } else {
-                theme::dim()
-            },
-        );
-        let label_style = if focused {
-            theme::label_focused()
-        } else {
-            theme::label()
-        };
-
-        // The description's label sits on its own row with the text beneath it;
-        // everything else shares one row with its label.
-        if index == DESCRIPTION {
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    marker,
-                    Span::raw(" "),
-                    Span::styled(label, label_style),
-                ])),
-                Rect { height: 1, ..area },
-            );
-            let body = Rect {
-                x: area.x + 2,
-                y: area.y + 1,
-                width: area.width.saturating_sub(3),
-                height: area.height.saturating_sub(1),
-            };
-            self.render_body(frame, body, index, focused);
-            return;
-        }
-
-        let value_x = area.x + GUTTER;
-        let value_width = area.width.saturating_sub(GUTTER + 1);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                marker,
-                Span::raw(" "),
-                Span::styled(label, label_style),
-            ])),
-            area,
-        );
-        let value_area = Rect {
-            x: value_x,
-            width: value_width,
-            ..area
-        };
-
-        match &mut self.fields[index].value {
-            Value::Choice(choice) => {
-                let text = choice.selected().unwrap_or("—").to_string();
-                frame.render_widget(
-                    Paragraph::new(Line::from(vec![
-                        Span::styled("‹ ", theme::dim()),
-                        Span::styled(
-                            text,
-                            if choice.selected().is_some() {
-                                theme::value()
-                            } else {
-                                theme::placeholder()
-                            },
-                        ),
-                        Span::styled(" ›", theme::dim()),
-                    ])),
-                    value_area,
-                );
-            }
-            Value::Line(input) | Value::Body(input) => {
-                let (text, col) = input.line_view(value_width as usize);
-                let span = if text.is_empty() {
-                    Span::styled(placeholder, theme::placeholder())
-                } else {
-                    Span::styled(text.to_string(), theme::value())
-                };
-                frame.render_widget(Paragraph::new(Line::from(span)), value_area);
-                if focused {
-                    frame.set_cursor_position((value_x + col as u16, area.y));
-                }
-            }
-        }
-
-        // The parent field shows what it points at, which is the check the
-        // user actually wants: did I pick the right issue?
-        if index == PARENT {
-            if let Some(detail) = self.parent_detail() {
-                let used = self.fields[index].text().chars().count() as u16 + 2;
-                if value_width > used + 4 {
-                    frame.render_widget(
-                        Paragraph::new(Span::styled(detail, theme::dim())),
-                        Rect {
-                            x: value_x + used,
-                            width: value_width - used,
-                            ..area
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    fn render_body(&mut self, frame: &mut Frame, area: Rect, index: usize, focused: bool) {
-        let width = area.width.max(1) as usize;
-        let height = area.height.max(1) as usize;
-        let placeholder = self.fields[index].placeholder;
-        let Some(input) = self.fields[index].input_mut() else {
-            return;
-        };
-        input.set_width(width);
-        let rows = input.rows();
-        let (cursor_row, cursor_col) = input.cursor_at();
-
-        if cursor_row < self.body_scroll {
-            self.body_scroll = cursor_row;
-        } else if cursor_row >= self.body_scroll + height {
-            self.body_scroll = cursor_row + 1 - height;
-        }
-
-        let input = self.fields[index].input().expect("a body is a text input");
-        let value = input.value();
-        if value.is_empty() {
-            frame.render_widget(
-                Paragraph::new(Span::styled(placeholder, theme::placeholder())),
-                Rect { height: 1, ..area },
-            );
-        }
-        for (offset, row) in rows.iter().skip(self.body_scroll).take(height).enumerate() {
-            frame.render_widget(
-                Paragraph::new(Span::styled(&value[row.start..row.end], theme::value())),
-                Rect {
-                    y: area.y + offset as u16,
-                    height: 1,
-                    ..area
-                },
-            );
-        }
-        if focused {
-            frame.set_cursor_position((
-                area.x + cursor_col as u16,
-                area.y + (cursor_row - self.body_scroll) as u16,
-            ));
-        }
-    }
-
     /// The summary of the issue the parent field names, when the workspace
     /// knows it.
     fn parent_detail(&self) -> Option<String> {
@@ -605,48 +373,25 @@ impl CreateScreen {
             .map(|i| i.detail.clone())
     }
 
-    fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        if area.height == 0 {
-            return;
+    /// Whichever is most useful right now: a complaint, then the file that will
+    /// be written, then help for this field.
+    fn status_line(&self) -> Line<'static> {
+        if let Some(error) = &self.error {
+            return Line::from(Span::styled(format!("✗ {error}"), theme::error()));
         }
-        frame.render_widget(
-            Block::new()
-                .borders(Borders::TOP)
-                .border_style(theme::idle_frame()),
-            area,
-        );
-        if area.height < 2 {
-            return;
-        }
-
-        // The status line is whichever is most useful right now: a complaint,
-        // then the file that will be written, then help for this field.
-        let status = if let Some(error) = &self.error {
-            Line::from(Span::styled(format!("✗ {error}"), theme::error()))
-        } else if !self.filename().is_empty() {
-            Line::from(vec![
+        if !self.filename().is_empty() {
+            return Line::from(vec![
                 Span::styled("writes ", theme::dim()),
                 Span::styled(self.filename(), theme::value()),
-            ])
-        } else {
-            Line::from(Span::styled(
-                self.fields[self.focus].hint.clone(),
-                theme::dim(),
-            ))
-        };
-        frame.render_widget(
-            Paragraph::new(status),
-            Rect {
-                x: area.x + 1,
-                y: area.y + 1,
-                width: area.width.saturating_sub(2),
-                height: 1,
-            },
-        );
-
-        if area.height < 3 {
-            return;
+            ]);
         }
+        Line::from(Span::styled(
+            self.fields[self.focus].hint.clone(),
+            theme::dim(),
+        ))
+    }
+
+    fn key_hints(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = vec![("tab", "field")];
         if self.focus == DESCRIPTION {
             keys.push(("^s", "create"));
@@ -660,204 +405,8 @@ impl CreateScreen {
         }
         keys.push(("esc", "cancel"));
         keys.push(("f1", "keys"));
-        frame.render_widget(
-            Paragraph::new(key_hints(&keys)),
-            Rect {
-                x: area.x + 1,
-                y: area.y + 2,
-                width: area.width.saturating_sub(2),
-                height: 1,
-            },
-        );
+        keys
     }
-}
-
-fn key_hints(keys: &[(&str, &str)]) -> Line<'static> {
-    let mut spans = Vec::new();
-    for (i, (key, what)) in keys.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled("  ·  ", theme::dim()));
-        }
-        spans.push(Span::styled(key.to_string(), theme::key()));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(what.to_string(), theme::dim()));
-    }
-    Line::from(spans)
-}
-
-/// Centre the card, capping its size so it stays readable, and let it shrink
-/// rather than overflow on a small terminal.
-fn card_area(area: Rect, wanted_height: u16) -> Rect {
-    let width = area.width.min(MAX_WIDTH);
-    let height = area.height.min(wanted_height);
-    area.centered(Constraint::Length(width), Constraint::Length(height))
-}
-
-fn render_picker(frame: &mut Frame, card: Rect, picker: &mut Picker) {
-    // Sit above the footer rather than across it: the key hints are what tell
-    // the user how to get out of the list they just opened.
-    let over = Rect {
-        height: card.height.saturating_sub(3).max(3),
-        ..card
-    };
-    let area = over.centered(
-        Constraint::Length(card.width.saturating_sub(6).max(20)),
-        Constraint::Length(over.height.saturating_sub(2).max(3)),
-    );
-    let block = Block::bordered()
-        .border_type(theme::BORDER)
-        .border_style(theme::focus_frame())
-        .title_top(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(picker.title.clone(), theme::title()),
-            Span::raw(" "),
-        ]))
-        .title_bottom(
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    format!("{} of {}", picker.matched(), picker.total()),
-                    theme::dim(),
-                ),
-                Span::raw(" "),
-            ])
-            .right_aligned(),
-        );
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    if inner.height == 0 {
-        return;
-    }
-
-    // The filter is the top row and always has the cursor: typing is the
-    // primary way to drive a list.
-    let (text, col) = picker
-        .filter()
-        .line_view(inner.width.saturating_sub(2) as usize);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("/ ", theme::key()),
-            if text.is_empty() {
-                Span::styled("type to filter", theme::placeholder())
-            } else {
-                Span::styled(text.to_string(), theme::value())
-            },
-        ])),
-        Rect { height: 1, ..inner },
-    );
-    frame.set_cursor_position((inner.x + 2 + col as u16, inner.y));
-
-    let list = Rect {
-        y: inner.y + 1,
-        height: inner.height - 1,
-        ..inner
-    };
-    picker.scroll_to_fit(list.height as usize);
-    if picker.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "nothing matches — ⏎ uses what you typed",
-                theme::dim(),
-            )),
-            list,
-        );
-        return;
-    }
-    for (offset, (item, selected)) in picker.visible(list.height as usize).iter().enumerate() {
-        let row = Rect {
-            y: list.y + offset as u16,
-            height: 1,
-            ..list
-        };
-        let style = if *selected {
-            theme::selected()
-        } else {
-            Style::default()
-        };
-        let line = match item {
-            Some(item) => Line::from(vec![
-                Span::styled(format!(" {:<12}", item.label), style),
-                Span::styled(
-                    item.detail.clone(),
-                    if *selected { style } else { theme::dim() },
-                ),
-            ]),
-            None => Line::from(Span::styled(
-                " (leave empty)",
-                if *selected {
-                    style
-                } else {
-                    theme::placeholder()
-                },
-            )),
-        };
-        frame.render_widget(Paragraph::new(line), row);
-    }
-}
-
-fn render_help(frame: &mut Frame, card: Rect) {
-    let rows: &[(&str, &str)] = &[
-        ("tab / shift-tab", "move between fields"),
-        ("↑ ↓", "move between fields"),
-        ("← →", "change a choice"),
-        ("^p or f2", "open the field as a list"),
-        ("⏎", "create the issue"),
-        ("^s", "create from the description"),
-        ("^a ^e ^w ^u ^k", "edit the line like a shell does"),
-        ("esc", "cancel"),
-    ];
-    let area = card.centered(
-        Constraint::Length(card.width.saturating_sub(8).max(24)),
-        Constraint::Length(rows.len() as u16 + 2),
-    );
-    let block = Block::bordered()
-        .border_type(theme::BORDER)
-        .border_style(theme::focus_frame())
-        .title_top(Line::from(vec![
-            Span::raw(" "),
-            Span::styled("Keys", theme::title()),
-            Span::raw(" "),
-        ]));
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    for (i, (key, what)) in rows.iter().enumerate() {
-        if i as u16 >= inner.height {
-            break;
-        }
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(format!(" {key:<16}"), theme::key()),
-                Span::styled(*what, theme::dim()),
-            ])),
-            Rect {
-                y: inner.y + i as u16,
-                height: 1,
-                ..inner
-            },
-        );
-    }
-}
-
-fn render_discard(frame: &mut Frame, card: Rect) {
-    let area = card.centered(
-        Constraint::Length(40.min(card.width)),
-        Constraint::Length(4),
-    );
-    let block = Block::bordered()
-        .border_type(theme::BORDER)
-        .border_style(theme::error());
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(" Discard this issue?", theme::value())),
-            key_hints(&[("y", "discard"), ("any other key", "keep editing")]),
-        ]),
-        inner,
-    );
 }
 
 /// Prefer what the workspace uses; fall back to Jira's stock list.
@@ -917,6 +466,7 @@ mod tests {
                     issue_type: "Story".into(),
                 },
             ],
+            ..Catalog::default()
         }
     }
 

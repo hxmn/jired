@@ -143,6 +143,8 @@ pub enum Command {
     Comment(cmd::comment::CommentArgs),
     /// Create a new issue locally
     Create(cmd::create::CreateArgs),
+    /// Edit an issue in a form
+    Edit(cmd::edit::EditArgs),
     /// Change an issue's workflow status
     Transition(cmd::transition::TransitionArgs),
     /// Assign an issue
@@ -217,6 +219,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Log(a) => cmd::log::run(g, a, out),
         Command::Comment(a) => cmd::comment::run(g, a, out),
         Command::Create(a) => cmd::create::run(g, a, out),
+        Command::Edit(a) => cmd::edit::run(g, a, out),
         Command::Transition(a) => cmd::transition::run(g, a, out),
         Command::Assign(a) => cmd::assign::run(g, a, out),
         Command::Attach(a) => cmd::attach::run(g, a, out),

@@ -20,6 +20,7 @@ jired status            # what's dirty, behind, or conflicted
 jired pull              # write issue files, and say what changed
 $EDITOR "PROJ-0142. Fix login flow.md"
 jired create            # fill in a new issue on a form, or pass --summary
+jired edit PROJ-142     # or change it in a form
 jired diff              # confirm only the intended changes
 jired push --dry-run    # exact API calls, nothing sent
 jired push              # apply

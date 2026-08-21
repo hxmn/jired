@@ -11,8 +11,11 @@
 //! this layer is only reachable when [`available`] says the terminal can do it,
 //! and callers degrade to prompts and then to exit 7 when it cannot.
 
+pub mod catalog;
 pub mod create;
+pub mod edit;
 mod field;
+mod form;
 mod input;
 mod picker;
 mod theme;

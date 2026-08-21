@@ -36,6 +36,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ),
     ("create", include_str!("../../../schemas/create.json")),
     ("diff", include_str!("../../../schemas/diff.json")),
+    ("edit", include_str!("../../../schemas/edit.json")),
     ("doctor", include_str!("../../../schemas/doctor.json")),
     ("error", include_str!("../../../schemas/error.json")),
     ("fetch", include_str!("../../../schemas/fetch.json")),

@@ -15,11 +15,10 @@ use crate::cli::GlobalArgs;
 use crate::doc::{Frontmatter, IssueDoc, SyncMeta};
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
-use crate::store::state::IssueRow;
 use crate::sync::Engine;
-use crate::tui::create::{Catalog, CreateScreen, Draft, KnownIssue, Seed};
+use crate::tui::catalog::Catalog;
+use crate::tui::create::{CreateScreen, Draft, Seed};
 use clap::Args;
-use std::collections::HashMap;
 
 /// Issue type used when neither a flag, a template, nor a person says otherwise.
 const DEFAULT_TYPE: &str = "Task";
@@ -129,7 +128,7 @@ fn draft(
     // is: a scripted `create` behaves the same whether or not a terminal is
     // attached. `--interactive` is how someone opts back into the form.
     if interactive && (args.interactive || seed.summary.is_none()) {
-        let catalog = catalog(&engine.state.issues()?, seed.project.as_deref());
+        let catalog = Catalog::from_rows(&engine.state.issues()?, seed.project.as_deref());
         if crate::tui::available() {
             return crate::tui::run(&mut CreateScreen::new(key, &catalog, &seed));
         }
@@ -199,109 +198,6 @@ fn ask(ui: &Ui, catalog: &Catalog, seed: Seed) -> Result<Draft> {
     })
 }
 
-/// What the workspace already knows, for the form to offer.
-///
-/// The snapshots are read with plain lookups rather than the normalizer: this
-/// only needs four well-known fields whose shape is the same on both
-/// deployments, and a workspace of ten thousand issues should not pay for a
-/// full parse to populate a menu.
-fn catalog(rows: &[IssueRow], project_hint: Option<&str>) -> Catalog {
-    let mut types = Tally::default();
-    let mut priorities = Tally::default();
-    let mut labels = Tally::default();
-    let mut projects = Tally::default();
-    let mut issues = Vec::new();
-
-    for row in rows {
-        // A `NEW-*` issue has no server key yet, so it can be neither a parent
-        // nor evidence of what a project uses.
-        if row.key.starts_with("NEW-") {
-            continue;
-        }
-        if let Some((project, _)) = row.key.rsplit_once('-') {
-            projects.add(project);
-        }
-        let Some(fields) = row
-            .remote
-            .as_ref()
-            .map(|r| &r.raw)
-            .or(row.base.as_ref().map(|b| &b.raw))
-            .and_then(|raw| raw.get("fields"))
-        else {
-            continue;
-        };
-
-        let issue_type = text(fields.pointer("/issuetype/name"));
-        types.add(&issue_type);
-        priorities.add(&text(fields.pointer("/priority/name")));
-        for label in fields
-            .get("labels")
-            .and_then(|l| l.as_array())
-            .unwrap_or(&Vec::new())
-        {
-            labels.add(&text(Some(label)));
-        }
-        issues.push((
-            row.remote
-                .as_ref()
-                .map(|r| r.updated)
-                .or(row.base.as_ref().map(|b| b.updated)),
-            KnownIssue {
-                key: row.key.clone(),
-                summary: text(fields.get("summary")),
-                issue_type,
-            },
-        ));
-    }
-
-    // Most recently touched first: the issue someone is filing a subtask under
-    // is usually the one they were just looking at.
-    issues.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.key.cmp(&b.1.key)));
-
-    let mut projects = projects.ranked();
-    // The workspace's own project belongs first whether or not it has the most
-    // issues in the snapshot.
-    if let Some(hint) = project_hint.map(str::to_uppercase) {
-        projects.retain(|p| *p != hint);
-        projects.insert(0, hint);
-    }
-
-    Catalog {
-        projects,
-        types: types.ranked(),
-        priorities: priorities.ranked(),
-        labels: labels.ranked(),
-        issues: issues.into_iter().map(|(_, issue)| issue).collect(),
-    }
-}
-
-/// Counts of values seen, ordered by how common they are.
-#[derive(Default)]
-struct Tally(HashMap<String, usize>);
-
-impl Tally {
-    fn add(&mut self, value: &str) {
-        if !value.is_empty() {
-            *self.0.entry(value.to_string()).or_default() += 1;
-        }
-    }
-
-    /// Most common first, ties broken alphabetically so the order is stable
-    /// from one run to the next.
-    fn ranked(self) -> Vec<String> {
-        let mut all: Vec<(String, usize)> = self.0.into_iter().collect();
-        all.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        all.into_iter().map(|(value, _)| value).collect()
-    }
-}
-
-fn text(value: Option<&serde_json::Value>) -> String {
-    value
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string()
-}
-
 fn some(value: &str) -> Option<String> {
     Some(value.trim())
         .filter(|v| !v.is_empty())
@@ -362,141 +258,5 @@ fn blank() -> IssueDoc {
         comments: Vec::new(),
         attachments: Vec::new(),
         extra_sections: Vec::new(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::state::{BaseSnapshot, RemoteSnapshot};
-    use chrono::{DateTime, Utc};
-
-    fn at(s: &str) -> DateTime<Utc> {
-        crate::api::parse_timestamp(s).expect("timestamp")
-    }
-
-    fn row(key: &str, updated: &str, fields: serde_json::Value) -> IssueRow {
-        IssueRow {
-            key: key.to_string(),
-            id: "1".into(),
-            base: None,
-            remote: Some(RemoteSnapshot {
-                raw: serde_json::json!({ "fields": fields }),
-                updated: at(updated),
-                fetched_at: None,
-            }),
-            file_path: None,
-            parent_key: None,
-            deleted_remote: false,
-        }
-    }
-
-    fn fixture() -> Vec<IssueRow> {
-        vec![
-            row(
-                "PROJ-1",
-                "2026-08-01T00:00:00Z",
-                serde_json::json!({
-                    "summary": "Fix login flow",
-                    "issuetype": {"name": "Story"},
-                    "priority": {"name": "High"},
-                    "labels": ["auth", "backend"],
-                }),
-            ),
-            row(
-                "PROJ-2",
-                "2026-08-09T00:00:00Z",
-                serde_json::json!({
-                    "summary": "Rotate the IdP certificate",
-                    "issuetype": {"name": "Task"},
-                    "priority": {"name": "High"},
-                    "labels": ["auth"],
-                }),
-            ),
-            row(
-                "OPS-3",
-                "2026-08-05T00:00:00Z",
-                serde_json::json!({
-                    "summary": "SSO rollout",
-                    "issuetype": {"name": "Task"},
-                    "labels": [],
-                }),
-            ),
-        ]
-    }
-
-    #[test]
-    fn the_catalog_ranks_what_the_workspace_uses_most() {
-        let catalog = catalog(&fixture(), None);
-        assert_eq!(catalog.types, vec!["Task", "Story"]);
-        assert_eq!(catalog.priorities, vec!["High"]);
-        assert_eq!(catalog.labels, vec!["auth", "backend"]);
-        // Two projects, PROJ ahead of OPS because it has more issues.
-        assert_eq!(catalog.projects, vec!["PROJ", "OPS"]);
-    }
-
-    #[test]
-    fn the_workspaces_own_project_leads_the_list() {
-        let catalog = catalog(&fixture(), Some("ops"));
-        assert_eq!(catalog.projects, vec!["OPS", "PROJ"]);
-        // A project the snapshot has never seen is still offered first.
-        let fresh = catalog_of(&[], Some("NEW1"));
-        assert_eq!(fresh.projects, vec!["NEW1"]);
-    }
-
-    fn catalog_of(rows: &[IssueRow], hint: Option<&str>) -> Catalog {
-        catalog(rows, hint)
-    }
-
-    #[test]
-    fn parent_candidates_are_the_issues_touched_most_recently() {
-        let catalog = catalog(&fixture(), None);
-        let keys: Vec<&str> = catalog.issues.iter().map(|i| i.key.as_str()).collect();
-        assert_eq!(keys, vec!["PROJ-2", "OPS-3", "PROJ-1"]);
-        assert_eq!(catalog.issues[0].summary, "Rotate the IdP certificate");
-    }
-
-    #[test]
-    fn locally_created_issues_are_not_offered_as_parents() {
-        let mut rows = fixture();
-        rows.push(row(
-            "NEW-a1b2c3",
-            "2026-08-20T00:00:00Z",
-            serde_json::json!({"summary": "not on the server yet"}),
-        ));
-        let catalog = catalog(&rows, None);
-        assert!(!catalog.issues.iter().any(|i| i.key.starts_with("NEW-")));
-        assert!(!catalog.projects.iter().any(|p| p == "NEW"));
-    }
-
-    #[test]
-    fn a_snapshot_that_was_never_fetched_still_contributes_what_it_has() {
-        // A pulled-then-never-refetched issue only has a base snapshot.
-        let mut only_base = row("PROJ-9", "2026-08-01T00:00:00Z", serde_json::json!({}));
-        only_base.base = Some(BaseSnapshot {
-            raw: serde_json::json!({"fields": {"summary": "From base", "issuetype": {"name": "Bug"}}}),
-            updated: at("2026-08-01T00:00:00Z"),
-            description: String::new(),
-            md_hash: String::new(),
-        });
-        only_base.remote = None;
-        let catalog = catalog(&[only_base], None);
-        assert_eq!(catalog.types, vec!["Bug"]);
-        assert_eq!(catalog.issues[0].summary, "From base");
-    }
-
-    #[test]
-    fn a_missing_or_odd_snapshot_never_panics() {
-        let mut bare = row("PROJ-1", "2026-08-01T00:00:00Z", serde_json::json!({}));
-        bare.remote = None;
-        let odd = row(
-            "PROJ-2",
-            "2026-08-01T00:00:00Z",
-            serde_json::json!({"issuetype": "a string, not an object", "labels": "also wrong"}),
-        );
-        let catalog = catalog(&[bare, odd], None);
-        assert!(catalog.types.is_empty());
-        assert!(catalog.labels.is_empty());
-        assert_eq!(catalog.projects, vec!["PROJ"]);
     }
 }
