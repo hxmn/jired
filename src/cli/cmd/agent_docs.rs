@@ -162,7 +162,9 @@ pub fn render() -> String {
     s.push_str(
         "- Book time with `jired logwork KEY \"2h 30m\" -m \"what it went on\"`, \
          which stages `### [new] 2h 30m — <when>` for the next push; writing that \
-         heading by hand does the same thing.\n",
+         heading by hand does the same thing. Given both values it never asks \
+         anything, so it is safe to script; with either missing it wants a \
+         terminal to ask on and exits 7 without one.\n",
     );
     s.push_str(
         "- The duration is Jira's own notation — weeks, days, hours, minutes — \

@@ -29,6 +29,12 @@ const MAX_WIDTH: u16 = 78;
 /// The rule, the status line and the key hints.
 const FOOTER: u16 = 3;
 
+/// The label column in a picker never shrinks below this, so short values stay
+/// in a column rather than jittering with the filter, nor grows past it, so one
+/// long label cannot push every detail off the right-hand edge.
+const MIN_LABEL: usize = 12;
+const MAX_LABEL: usize = 28;
+
 /// Top and bottom of the card.
 const BORDER: u16 = 2;
 
@@ -460,6 +466,12 @@ pub fn render_picker(frame: &mut Frame, card: Rect, picker: &mut Picker) {
         );
         return;
     }
+    // The label column is as wide as the widest label the filter left, so a
+    // long value — an issue key, a timestamp — cannot run into its own detail.
+    // Measured across every match rather than the visible ones, or the column
+    // would shift under the cursor while scrolling.
+    let label_width = picker.label_width().clamp(MIN_LABEL, MAX_LABEL);
+
     for (offset, (item, selected)) in picker.visible(list.height as usize).iter().enumerate() {
         let row = Rect {
             y: list.y + offset as u16,
@@ -481,7 +493,7 @@ pub fn render_picker(frame: &mut Frame, card: Rect, picker: &mut Picker) {
                     },
                     if *selected { style } else { theme::key() },
                 ),
-                Span::styled(format!("{:<12}", item.label), style),
+                Span::styled(format!("{:<label_width$} ", item.label), style),
                 Span::styled(
                     item.detail.clone(),
                     if *selected { style } else { theme::dim() },

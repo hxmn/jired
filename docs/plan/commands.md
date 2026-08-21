@@ -183,7 +183,7 @@ Appends a `### [new]` section to the file; `--push` sends immediately. Without
 `-m` it opens `$VISUAL`/`$EDITOR` on a scratch file (an empty buffer aborts), or
 reads the body from stdin when one is piped.
 
-### `jired logwork ISSUE-KEY TIME [-m "text"] [--started TS] [--push]`
+### `jired logwork [ISSUE] [TIME] [-m "text"] [--started TS] [-i] [--push]`
 Books time against the issue by appending a `### [new] 2h 30m — <when>` section
 under `## Worklogs`; `--push` sends immediately. `--started` defaults to now, so
 the entry is dated when the work happened rather than when the push does.
@@ -192,6 +192,22 @@ The duration is Jira's own notation — `2h 30m`, `1d`, `45m` — validated here
 syntax only and sent as the text it was written as: how long a day is is an
 instance setting, and converting to seconds would answer that question wrongly.
 A bare number is refused rather than read as minutes.
+
+With both the issue and the time given nothing is asked, so a scripted
+`logwork` behaves the same with or without a terminal; `-i` opens the form
+anyway. Without them there are three rungs, as `create` has: the full-screen
+form, line prompts, then exit 7 naming what is missing.
+
+The form asks for four things — issue, time, start, note — and checks the first
+three while they are being typed rather than after it closes, since every
+complaint it can make is one the command would otherwise make with the
+half-filled form already gone. The issue field completes as you type: type any
+part of a key or summary, tab takes the suggestion shown beside it, and only the
+issues that have a file in the working copy are offered, because the file is
+where the entry is staged. Time and Start each open a list of the values people
+actually type — a quarter of an hour through a day, and start times counted back
+from when the screen opened — and the start time reads back in words (`4 hours
+ago`) so an ISO string is never the only thing on screen.
 
 `## Worklogs` holds what the server has, oldest first, one heading each:
 `### [w-10500] 2h 30m — Jane Doe — 2026-08-15T09:00:00Z`, with the note below

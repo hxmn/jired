@@ -142,6 +142,19 @@ impl Picker {
         self.matches.iter().filter(|&&m| m != CLEAR).count()
     }
 
+    /// The widest label among the rows the filter kept, in display columns.
+    ///
+    /// Measured across every match rather than the visible ones, so the column
+    /// the caller draws does not shift under the cursor while scrolling.
+    pub fn label_width(&self) -> usize {
+        self.matches
+            .iter()
+            .filter(|&&m| m != CLEAR)
+            .map(|&m| self.items[m].label.graphemes(true).count())
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Start the list on the value the field already holds, so opening it and
     /// pressing enter changes nothing.
     pub fn select(&mut self, value: &str) {
@@ -352,6 +365,27 @@ mod tests {
             Item::new("PLAT-150").with_detail("Rotate IdP certificate"),
             Item::new("OPS-7").with_detail("SSO rollout"),
         ]
+    }
+
+    /// The column the caller lays labels out in follows the filter, so a long
+    /// value never runs into its own detail — and never jumps as you scroll.
+    #[test]
+    fn the_label_column_is_as_wide_as_the_widest_match() {
+        let mut picker = Picker::new(
+            "When",
+            vec![
+                Item::new("2026-08-21T13:00:00Z").with_detail("just now"),
+                Item::new("short").with_detail("also a row"),
+            ],
+            true,
+        );
+        assert_eq!(picker.label_width(), 20);
+
+        typed(&mut picker, "short");
+        assert_eq!(picker.label_width(), 5, "the filter narrows the column too");
+
+        // The clear row is chrome, not a label, and an empty list has no width.
+        assert_eq!(Picker::new("When", Vec::new(), true).label_width(), 0);
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod edit;
 mod field;
 mod form;
 mod input;
+pub mod logwork;
 pub mod pick;
 mod picker;
 mod theme;

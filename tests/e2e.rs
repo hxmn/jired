@@ -1633,6 +1633,29 @@ fn removing_a_worklog_is_reported_rather_than_deleted_by_default() {
     assert!(!ws.read(ISSUE_FILE).contains("### [w-10500]"));
 }
 
+/// The two values can be asked for, so leaving them off is not a parse error:
+/// with no terminal to ask on it is exit 7 naming them, the same rung `create`
+/// lands on.
+#[test]
+fn logwork_with_nothing_to_go_on_asks_rather_than_failing_to_parse() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    for args in [vec!["logwork"], vec!["logwork", "PROJ-142"]] {
+        let err = ws.json_err(&args, 7);
+        assert_eq!(err["kind"], "missing_value");
+        assert!(
+            err["hint"].as_str().unwrap().contains("in a terminal"),
+            "{err}"
+        );
+    }
+
+    // And the form cannot be demanded where there is nothing to draw it on.
+    let err = ws.json_err(&["logwork", "-i", "PROJ-142", "1h"], 7);
+    assert!(err["message"].as_str().unwrap().contains("--interactive"));
+}
+
 #[test]
 fn logging_work_on_an_unknown_issue_is_a_usage_error() {
     let ws = Ws::new();
