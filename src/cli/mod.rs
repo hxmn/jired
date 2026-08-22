@@ -169,7 +169,7 @@ pub enum Command {
     /// One-screen overview of the workspace
     #[command(visible_alias = "st")]
     Status(cmd::status::StatusArgs),
-    /// Show an issue's cached changelog
+    /// Show what changed, newest first — the whole workspace, or one issue
     Log(cmd::log::LogArgs),
     /// Add a comment to an issue
     Comment(cmd::comment::CommentArgs),

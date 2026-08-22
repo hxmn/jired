@@ -2201,6 +2201,54 @@ fn log_shows_the_changelog_newest_first_and_caches_it() {
     assert_eq!(cached["entries"].as_array().unwrap().len(), 2);
 }
 
+/// With no issue named, `log` reads like `git log`: one merged list over every
+/// issue in the workspace, each entry saying which issue it belongs to.
+#[test]
+fn log_with_no_issue_covers_the_whole_workspace() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["log"]);
+    assert_eq!(report["scope"], "workspace");
+    assert!(report["key"].is_null(), "no single issue was asked for");
+
+    let entries = report["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["key"], "PROJ-142");
+    assert_eq!(entries[0]["id"], "70002", "newest first");
+    assert_eq!(entries[1]["id"], "70001");
+
+    // The narrow form still works, and still says which issue it read.
+    let one = ws.json(&["log", "PROJ-142"]);
+    assert_eq!(one["scope"], "issue");
+    assert_eq!(one["key"], "PROJ-142");
+    assert_eq!(one["entries"][0]["key"], "PROJ-142");
+}
+
+/// PROJ-143 and PROJ-150 have no history at all. An empty changelog is a real
+/// answer, so the second run must not go back to the server to hear it again.
+#[test]
+fn log_over_the_workspace_is_offline_after_the_first_run() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["log"]);
+
+    let out = ws
+        .cmd(&["log", "--json"])
+        .env("JIRED_FIXTURES", "")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "a second workspace log must not need the network: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cached: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(cached["entries"].as_array().unwrap().len(), 2);
+}
+
 #[test]
 fn log_honours_the_limit() {
     let ws = Ws::new();

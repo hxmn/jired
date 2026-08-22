@@ -40,6 +40,15 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Added
 
+- **`jired log` with no issue reads like `git log`.** It merges every issue's
+  history into one newest-first list, each entry tagged with the issue it belongs
+  to; naming an issue still narrows to it. The first run fetches the changelogs it
+  is missing, and every run after it is offline: freshness is now the issue's own
+  `updated` at the time its changelog was cached, so an issue with no history —
+  a real answer, not an empty cache — is no longer asked about on every run, and
+  one the server has moved on from is refetched exactly once. `jired/log/1` gains
+  `scope` and a per-entry `key`, and its top-level `key` is null in workspace mode.
+
 - **`jired reset [ISSUES…]`** drops local changes: every dirty file is re-rendered
   from its base snapshot, byte-identical to what the last pull wrote, so the issue
   has nothing left for `push` to send. The mirror of `pull --force` pointing the
@@ -52,6 +61,7 @@ before something destructive, what an error says, and what the docs claim.
   either back; `--include-new` opts into deleting the second. `-n/--dry-run` lists
   what would go, field by field; the listing precedes the confirmation, and a
   non-interactive run needs `-y` or exits 7.
+
 - **Install and licence.** `LICENSE-MIT` and `LICENSE-APACHE`, and a README
   install section: `cargo install --git … --locked --bin jired`, Rust ≥ 1.89, and
   what a Linux machine without a Secret Service provider needs.

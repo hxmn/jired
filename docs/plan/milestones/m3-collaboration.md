@@ -66,7 +66,8 @@ as unimplemented rather than doing something approximate.
 ### M3.7 `jired search` / `jired log` / `jired open`
 - [x] `search --jql [--limit]` table + `jired/search/1` JSON
 - [ ] `search --pull` to bring matches into the workspace
-- [x] `log KEY [--limit] [--refresh]`, cached per issue. Fetched on demand rather than with every `fetch`: changelogs are large and rarely wanted, and pulling them wholesale is the difference between a fast sync and a slow one
+- [x] `log [KEY] [--limit] [--refresh]`, cached per issue. Fetched on demand rather than with every `fetch`: changelogs are large and rarely wanted, and pulling them wholesale is the difference between a fast sync and a slow one
+- [x] No key means the whole workspace, merged newest-first like `git log`; each entry is tagged with its issue. Cache freshness is the issue's `updated`, so an issue with no history is not refetched on every run
 - [x] `open [KEY]` via `open` crate; URL printed in JSON/non-TTY; a bare `open` picks the issue off the M4.7 list
 - **Done when:** all three pass fixture-backed E2E tests offline where applicable.
 

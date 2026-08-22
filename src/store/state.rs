@@ -433,10 +433,15 @@ impl StateStore {
             "raw_block",
             "pending_op",
             "conflict",
+            "changelog",
         ] {
             tx.execute(&format!("DELETE FROM {table} WHERE issue_key = ?1"), [key])?;
         }
         tx.execute("DELETE FROM issue WHERE key = ?1", [key])?;
+        tx.execute(
+            "DELETE FROM workspace WHERE key = ?1",
+            [format!("changelog_synced:{key}")],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -711,6 +716,26 @@ impl StateStore {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// The issue's `updated` as it stood when its changelog was last fetched.
+    ///
+    /// An empty changelog is a real answer — a freshly created issue has no
+    /// history — so "is the cache empty?" cannot decide whether to ask the
+    /// server. Recording the watermark instead keeps `jired log` offline for
+    /// issues nothing has happened to, and refetches exactly the ones the
+    /// server has moved on from.
+    pub fn changelog_synced_at(&self, issue_key: &str) -> Result<Option<DateTime<Utc>>> {
+        Ok(self
+            .get_meta(&format!("changelog_synced:{issue_key}"))?
+            .and_then(|s| parse_timestamp(&s)))
+    }
+
+    pub fn set_changelog_synced_at(&self, issue_key: &str, at: &DateTime<Utc>) -> Result<()> {
+        self.set_meta(
+            &format!("changelog_synced:{issue_key}"),
+            &crate::api::model::format_timestamp(at),
+        )
     }
 
     pub fn changelog(&self, issue_key: &str) -> Result<Vec<crate::api::ChangelogEntry>> {

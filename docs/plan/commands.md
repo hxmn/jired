@@ -175,8 +175,18 @@ moves), conflicts, last fetch age, pending push journal, and a git-style trailer
 saying what to run next. `--all` additionally lists the unchanged issues. JSON
 mirrors it. Offline. Visible alias `st`.
 
-### `jired log ISSUE [--limit N] [--refresh]`
-Cached changelog (fetched with `expand=changelog`). Offline unless `--refresh`.
+### `jired log [ISSUE] [--limit N] [--refresh]`
+Changelog entries newest first, each tagged with its issue. With no `ISSUE` it
+covers the whole workspace, the way `git log` does; naming one narrows to it.
+
+Changelogs are fetched per issue (`expand=changelog`) and cached, so the first
+log over a workspace fetches what it is missing and every run after it is
+offline. Freshness is the issue's own `updated` at the time its changelog was
+cached, not "is the cache empty": an issue with no history is a real answer and
+must not be asked about twice, and one the server has moved on from is asked
+about exactly once. `--refresh` overrides both. In workspace mode a single
+unreadable issue warns and stops the fetch rather than losing the rest of the
+log.
 
 ### `jired comment ISSUE [-m "text"] [--push] [--dry-run]`
 Appends a `### [new]` section to the file; `--push` sends immediately. Without

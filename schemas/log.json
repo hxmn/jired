@@ -2,25 +2,41 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jired/log/1",
   "title": "jired log result",
-  "description": "Issue changelog, newest first",
+  "description": "Changelog entries, newest first: one issue's, or the whole workspace's",
   "type": "object",
   "required": [
     "schema",
     "key",
+    "scope",
     "entries"
   ],
   "properties": {
     "schema": {
       "const": "jired/log/1"
     },
+    "scope": {
+      "description": "`issue` when an issue was named, `workspace` when the log covers every issue",
+      "enum": [
+        "issue",
+        "workspace"
+      ]
+    },
     "key": {
-      "type": "string"
+      "description": "The issue asked for; null when the log covers the whole workspace",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "entries": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
+          "key": {
+            "description": "The issue this entry belongs to",
+            "type": "string"
+          },
           "id": {
             "type": "string"
           },
@@ -64,6 +80,7 @@
           }
         },
         "required": [
+          "key",
           "id",
           "items"
         ]

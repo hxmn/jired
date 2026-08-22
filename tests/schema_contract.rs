@@ -176,6 +176,7 @@ fn command_output_matches_its_published_schema() {
         vec!["config", "get", "workspace.project"],
         vec!["fetch"],
         vec!["log", "PROJ-142"],
+        vec!["log"],
         vec!["search", "--jql", "project = PROJ"],
         vec!["open", "PROJ-142", "--print"],
         vec!["comment", "PROJ-142", "-m", "note"],
