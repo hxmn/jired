@@ -2683,6 +2683,39 @@ fn a_story_point_change_is_pushed_to_the_instances_own_field() {
 }
 
 // ---------------------------------------------------------------------------
+// open [M3.7]
+// ---------------------------------------------------------------------------
+
+/// The URL is built from the stored server and the key, however the key was
+/// spelled; nothing is launched when the answer is going into a pipeline.
+#[test]
+fn open_prints_the_browse_url_for_any_spelling_of_the_key() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    for spelling in ["PROJ-142", "proj-142", ISSUE_FILE] {
+        let doc = ws.json(&["open", spelling, "--print"]);
+        assert_eq!(doc["key"], "PROJ-142");
+        assert_eq!(doc["url"], "https://fixture.invalid/browse/PROJ-142");
+        assert_eq!(doc["launched"], false, "{doc}");
+    }
+}
+
+/// With no key the command searches, which needs a terminal to draw the list
+/// on. Without one it says what to type instead of half-working.
+#[test]
+fn open_with_nothing_named_and_no_terminal_says_to_name_one() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["open"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(err["hint"].as_str().unwrap().contains("PROJ-142"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
 // Sprints
 // ---------------------------------------------------------------------------
 

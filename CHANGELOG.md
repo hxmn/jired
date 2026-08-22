@@ -77,6 +77,12 @@ before something destructive, what an error says, and what the docs claim.
 - `$VISUAL`/`$EDITOR` support: `comment` without `-m` at a terminal opens an
   editor (empty buffer aborts), and `config edit` opens the config file.
 - `create` prompts for what it needs interactively and takes `--push`.
+- `jired open` with no issue asks which one, on the filtered list `edit` searches.
+  It offers every issue the workspace has a snapshot of rather than only the ones
+  with a file, because a browser URL needs no file — and leaves out locally
+  created `NEW-*` issues, which have no server key to browse. Without a terminal
+  to draw the list on it is exit 7 naming what to type, in place of clap's
+  "required arguments were not provided".
 - `--color auto|always|never` (honouring `NO_COLOR`), progress reporting during
   fetch/pull/push, git-style "what to run next" trailers in `status`, and a
   counted summary from `push`.

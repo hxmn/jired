@@ -226,7 +226,7 @@ the filename you were just editing instead of retyping the key.
 | `resolve` | list and clear recorded conflicts — see above |
 | `reset [ISSUES…]` | drop local changes and put the files back to the last sync; lists what would go and asks first, `-n/--dry-run` just lists, `--include-new` also deletes locally created issues |
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
-| `open ISSUE` | open it in a browser, or `--print` the URL |
+| `open [ISSUE]` | open it in a browser, or `--print` the URL; without an issue, pick one from a filtered list |
 | `whoami` | which account, which server, and where the credential is kept |
 | `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address |
 | `doctor` | check the workspace over and repair it — see below |

@@ -285,8 +285,12 @@ picker: the TUI is M4 work and nothing in the tree draws one today.
 `attachments pull` replaces stubs with real files (streamed, sha256-verified);
 `attachments list` reports which contents are present. Policy: lazy by default (D5).
 
-### `jired open ISSUE [--print]`
+### `jired open [ISSUE] [--print]`
 Browser via `open` crate; `--print` (and `--json`/non-TTY) prints the URL instead.
+With no issue, the same picker `edit` uses, over every issue the state store
+holds rather than only the ones with a file — `open` browses the server, so a
+snapshot is enough. Locally created `NEW-*` issues are left out: they have no
+server key to browse. No terminal for the picker → exit 7 naming what to type.
 
 ### `jired search "project = PROJ AND status = Open" [--limit N]`
 JQL is positional; `--jql` is the same value spelled as a flag, and the two
