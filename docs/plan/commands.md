@@ -228,6 +228,35 @@ an update on push; removing a section is reported and ignored unless
 `--allow-worklog-delete` is passed, since deleting somebody's booked time cannot
 be undone from the working copy.
 
+### `jired report time [--days N] [--show-issues]`
+Who booked how much time, totalled off the `## Worklogs` sections of the files
+already on disk. A read, so it works offline and costs one pass over the working
+copy; what it cannot see is time booked since the last `pull`, which is why
+every rendering carries the age of the snapshot.
+
+The window is `--days N` whole UTC days ending with today (default 7), not a
+rolling `N × 24h`: the question is asked in days, and an entry booked at 09:00
+seven days ago should not drop out of a seven-day report because it is now
+10:00. It has no upper edge — time booked for later today is still time booked,
+and hiding it would print a total that does not add up.
+
+Totals are shown in hours and minutes and never in days, for the same reason
+`logwork` sends the duration as written: how long a working day is is an
+instance setting. Entries staged locally count towards whoever will push them —
+a `### [new]` heading names no author because the author is decided by the push
+— and are reported separately (`staged_seconds`, drawn hollow in the bar) so
+"on the server" and "on my disk" never look like the same claim. A worklog whose
+start or duration cannot be read is counted under `skipped` rather than dropped
+silently.
+
+In a terminal it opens as a screen: one row per person, most time first, with a
+bar for their share. With `--show-issues` a person opens (→, ⏎ or space; ← to
+close, `a` for all of them) into the issues their time went to, biggest first —
+the level exists on a screen because on a printed report it either buries the
+totals or never gets asked for. Everywhere else — a pipe, `--json`, `--quiet`,
+`--no-input`, a dumb terminal — the same figures print as a table, and the JSON
+document (`jired schema report-time`) carries the issue breakdown either way.
+
 ### `jired create [--type Story] [--template T] [--summary S] [-i]`
 Writes `NEW-<6hex>. Summary.md` (D14) from template; real key assigned on push
 (file renamed; JSON reports the mapping).

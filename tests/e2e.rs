@@ -1871,6 +1871,112 @@ fn a_template_supplies_every_field_a_flag_did_not() {
 }
 
 // ---------------------------------------------------------------------------
+// Reports
+// ---------------------------------------------------------------------------
+
+/// The report is read off the working copy, so it counts everybody's time —
+/// not only the account's — and breaks each person down by issue.
+///
+/// The window is asked for explicitly: the fixture bookings carry fixed dates,
+/// and a default seven days would stop reaching them the week after next.
+#[test]
+fn report_time_totals_what_everyone_booked() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["report", "time", "--days", "3650"]);
+    assert_eq!(report["days"], 3650);
+    assert_eq!(report["project"], "PROJ");
+    assert_eq!(report["seconds"], 9000 + 3600);
+    assert_eq!(report["entries"], 2);
+    assert_eq!(report["skipped"], 0);
+
+    // Most time first: two and a half hours from Jane, one from the account.
+    let people = report["people"].as_array().unwrap();
+    assert_eq!(people.len(), 2, "{report}");
+    assert_eq!(people[0]["name"], "Jane D");
+    assert_eq!(people[0]["seconds"], 9000);
+    assert_eq!(people[1]["name"], "Ilya A");
+    assert_eq!(people[1]["seconds"], 3600);
+
+    // And under each of them, where the time went.
+    assert_eq!(people[0]["issues"][0]["key"], "PROJ-142");
+    assert_eq!(people[0]["issues"][0]["summary"], "Fix login flow");
+    assert_eq!(people[0]["issues"][0]["seconds"], 9000);
+}
+
+/// Time staged locally has no author yet — the author is whoever pushes it — so
+/// it counts towards the account, flagged as not yet on the server.
+#[test]
+fn report_time_counts_staged_bookings_and_says_they_are_staged() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["logwork", "PROJ-142", "45m", "-m", "triage"]);
+
+    let report = ws.json(&["report", "time", "--days", "3650"]);
+    assert_eq!(report["staged_seconds"], 2700);
+    let mine = report["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "Ilya A")
+        .unwrap_or_else(|| panic!("no row for the account: {report}"));
+    assert_eq!(mine["seconds"], 3600 + 2700);
+    assert_eq!(mine["staged_seconds"], 2700);
+}
+
+/// `--days` is the whole question the report answers, so it has to bite: an
+/// entry booked now lands in a one-day window, and the older ones do not.
+#[test]
+fn report_time_counts_only_the_days_asked_for() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let seconds = |doc: &Value| doc["seconds"].as_u64().unwrap();
+    let before = seconds(&ws.json(&["report", "time", "--days", "1"]));
+    ws.json(&["logwork", "PROJ-142", "45m"]);
+    let after = ws.json(&["report", "time", "--days", "1"]);
+
+    assert_eq!(seconds(&after) - before, 2700, "{after}");
+    assert_eq!(after["days"], 1);
+
+    // A window has to have days in it.
+    let out = ws.cmd(&["report", "time", "--days", "0"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--days"), "{stderr}");
+}
+
+/// Without a terminal the report is a table on stdout, and `--show-issues` is
+/// what puts the second level into it.
+#[test]
+fn report_time_prints_a_table_when_there_is_no_terminal() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws
+        .cmd(&["report", "time", "--days", "3650"])
+        .output()
+        .unwrap();
+    let flat = String::from_utf8_lossy(&out.stdout);
+    assert!(flat.contains("Jane D"), "{flat}");
+    assert!(flat.contains("2h 30m"), "{flat}");
+    assert!(!flat.contains("Fix login flow"), "{flat}");
+
+    let out = ws
+        .cmd(&["report", "time", "--days", "3650", "--show-issues"])
+        .output()
+        .unwrap();
+    let deep = String::from_utf8_lossy(&out.stdout);
+    assert!(deep.contains("PROJ-142"), "{deep}");
+    assert!(deep.contains("Fix login flow"), "{deep}");
+}
+
+// ---------------------------------------------------------------------------
 // Attachments [M3.3]
 // ---------------------------------------------------------------------------
 

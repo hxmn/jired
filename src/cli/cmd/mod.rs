@@ -20,6 +20,7 @@ pub mod open;
 pub mod prompt;
 pub mod pull;
 pub mod push;
+pub mod report;
 pub mod reset;
 pub mod resolve;
 pub mod schema;

@@ -171,6 +171,9 @@ pub enum Command {
     Status(cmd::status::StatusArgs),
     /// Show what changed, newest first — the whole workspace, or one issue
     Log(cmd::log::LogArgs),
+    /// Read the working copy back as figures
+    #[command(subcommand)]
+    Report(cmd::report::ReportCmd),
     /// Add a comment to an issue
     Comment(cmd::comment::CommentArgs),
     /// Book time against an issue
@@ -269,6 +272,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Diff(a) => cmd::diff::run(g, a, out),
         Command::Status(a) => cmd::status::run(g, a, out),
         Command::Log(a) => cmd::log::run(g, a, out),
+        Command::Report(a) => cmd::report::run(g, a, out),
         Command::Comment(a) => cmd::comment::run(g, a, out),
         Command::Logwork(a) => cmd::logwork::run(g, a, out),
         Command::Create(a) => cmd::create::run(g, a, out),

@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/report-time/1",
+  "title": "jired report time result",
+  "description": "Time booked in a window, totalled per person and per issue",
+  "type": "object",
+  "required": [
+    "schema",
+    "days",
+    "since",
+    "until",
+    "seconds",
+    "staged_seconds",
+    "entries",
+    "skipped",
+    "people"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/report-time/1"
+    },
+    "days": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Whole days counted, today included"
+    },
+    "since": {
+      "type": "string",
+      "description": "Midnight UTC of the first day counted, ISO-8601"
+    },
+    "until": {
+      "type": "string",
+      "description": "When the report was taken, ISO-8601 in UTC"
+    },
+    "project": {
+      "type": ["string", "null"],
+      "description": "The project the workspace is scoped to, if it has one"
+    },
+    "last_fetch_at": {
+      "type": ["string", "null"],
+      "description": "When the snapshot behind the report was last refreshed"
+    },
+    "last_fetch_age_seconds": {
+      "type": ["integer", "null"]
+    },
+    "seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Everything booked in the window"
+    },
+    "staged_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The part of `seconds` not yet pushed to Jira"
+    },
+    "entries": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "skipped": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Worklogs with no readable start or duration, left out"
+    },
+    "people": {
+      "type": "array",
+      "description": "Most time first, then by name",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "seconds",
+          "staged_seconds",
+          "entries",
+          "issues"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "staged_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "entries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "issues": {
+            "type": "array",
+            "description": "Most time first, then by key",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "summary",
+                "seconds",
+                "staged_seconds",
+                "entries"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "seconds": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "staged_seconds": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "entries": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

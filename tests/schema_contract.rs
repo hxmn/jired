@@ -181,6 +181,7 @@ fn command_output_matches_its_published_schema() {
         vec!["open", "PROJ-142", "--print"],
         vec!["comment", "PROJ-142", "-m", "note"],
         vec!["logwork", "PROJ-142", "30m", "-m", "triage"],
+        vec!["report", "time"],
         vec!["transition", "PROJ-142", "--list"],
         vec!["assign", "PROJ-142", "--me"],
         vec!["create", "--summary", "New thing"],

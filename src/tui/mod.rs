@@ -20,6 +20,7 @@ mod input;
 pub mod logwork;
 pub mod pick;
 mod picker;
+pub mod report;
 mod theme;
 
 use crate::error::{JiredError, Result};

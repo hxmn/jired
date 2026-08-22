@@ -225,6 +225,8 @@ the filename you were just editing instead of retyping the key.
 | `assign ISSUE --me\|--user Q\|--none` | stage an assignee change |
 | `attach ISSUE FILE…` | stage an upload into the issue's attachment folder |
 | `attachments pull [ISSUES…]` / `list` | download attachment content over the stubs, or show what is present |
+| `logwork [ISSUE] [TIME]` | book time — `jired logwork PROJ-142 "2h 30m"`; with either missing it opens a form, `--push` sends it straight away |
+| `report time` | how much time everyone booked, off the files already on disk; `--days N` (default 7), `--show-issues` opens each person into the issues their time went to |
 | `log [ISSUE]` | what changed, newest first — every issue in the workspace, or just one; `--refresh` asks the server |
 | `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag) |
 | `resolve` | list and clear recorded conflicts — see above |
