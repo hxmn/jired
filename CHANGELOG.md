@@ -55,6 +55,11 @@ before something destructive, what an error says, and what the docs claim.
 - **Install and licence.** `LICENSE-MIT` and `LICENSE-APACHE`, and a README
   install section: `cargo install --git … --locked --bin jired`, Rust ≥ 1.89, and
   what a Linux machine without a Secret Service provider needs.
+- `make install` now writes the bash and zsh completions as well as the binary,
+  into the XDG user directories, so an upgrade cannot leave a script completing
+  flags the binary no longer takes. `make install-completions` refreshes them on
+  their own, `make uninstall` removes them, and `BASH_COMPLETION_DIR` /
+  `ZSH_COMPLETION_DIR` move them.
 - **README sections** for the file format (editable vs read-only vs identity
   frontmatter, `### [new]` comments, checklist semantics, `links:`, `lossy: true`,
   conflict markers), for the ~17 commands it never mentioned, for grouping folders

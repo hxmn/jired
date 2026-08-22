@@ -22,6 +22,10 @@ Rust 1.89 or newer (`File::try_lock`, which the workspace lock uses). `--locked`
 builds against the versions the tree was tested with; drop it and you are on your
 own with a fresh resolver.
 
+From a clone, `make install` does the same thing and then rewrites the bash and
+zsh completions, so a new command or flag starts completing with the upgrade
+rather than a step later. See [Shell completions](#shell-completions).
+
 On Linux the default credential store is the OS keychain, which means a running
 Secret Service provider — GNOME Keyring, KWallet, `keepassxc` with Secret Service
 enabled. Headless machines and containers usually have none; set `JIRED_SECRET_KEY`
@@ -266,6 +270,14 @@ jired completion fish > ~/.config/fish/completions/jired.fish
 
 `jired completion --help` lists the rest. Config keys, schema names and enum
 values complete; issue keys do not, because completion must not open the database.
+
+From a clone, `make install` writes the bash and zsh ones for you — as does
+`make install-completions` on its own, when only they need refreshing. Both go
+to the XDG user directories, `~/.local/share/bash-completion/completions/jired`
+and `~/.local/share/zsh/site-functions/_jired`, so neither needs root; override
+`BASH_COMPLETION_DIR` or `ZSH_COMPLETION_DIR` to put them elsewhere. zsh only
+reads its directory if that is on `fpath`, which the target checks and tells you
+how to fix. `make uninstall` takes both files back out.
 
 ## Exit codes
 
