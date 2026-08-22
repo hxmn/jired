@@ -59,6 +59,10 @@ pub struct TimeReport {
     /// When the snapshot was last refreshed, so a stale report can say so.
     pub last_fetch_at: Option<String>,
     pub last_fetch_age_seconds: Option<i64>,
+    /// The same instant as `last_fetch_at`, kept so the printed line can be
+    /// shown in the reader's timezone while the JSON field stays UTC.
+    #[serde(skip)]
+    pub last_fetch: Option<DateTime<Utc>>,
     /// Everything booked in the window.
     pub seconds: u64,
     /// The part of it still staged locally, which is a subset of `seconds`.
@@ -102,7 +106,7 @@ impl TimeReport {
         for issue in issues {
             for w in &issue.worklogs {
                 let staged = w.id == WorklogId::New;
-                let started = match crate::api::model::parse_timestamp(&w.started) {
+                let started = match crate::api::model::parse_local_timestamp(&w.started) {
                     Some(t) => t,
                     // A staged entry that names no start is time booked now,
                     // which is what pushing it will date it as.
@@ -180,6 +184,7 @@ impl TimeReport {
             project: None,
             last_fetch_at: None,
             last_fetch_age_seconds: None,
+            last_fetch: None,
             seconds: people.iter().map(|p| p.seconds).sum(),
             staged_seconds: people.iter().map(|p| p.staged_seconds).sum(),
             entries: people.iter().map(|p| p.entries).sum(),
@@ -208,7 +213,7 @@ impl TimeReport {
 
     /// How fresh the snapshot behind the report is, if it has ever been pulled.
     pub fn freshness(&self) -> Option<String> {
-        let at = self.last_fetch_at.as_ref()?;
+        let at = crate::api::model::format_local(self.last_fetch.as_ref()?);
         Some(match self.last_fetch_age_seconds {
             Some(age) => format!(
                 "last fetch {at} ({})",

@@ -473,6 +473,7 @@ mod tests {
             project: Some("PROJ".into()),
             last_fetch_at: None,
             last_fetch_age_seconds: None,
+            last_fetch: None,
             seconds: people.iter().map(|p| p.seconds).sum(),
             staged_seconds: 0,
             entries: 3,

@@ -61,6 +61,7 @@ fn time(g: &GlobalArgs, args: &TimeArgs, out: Out) -> Result<ExitCode> {
         .filter(|p| !p.is_empty());
     if let Some(at) = engine.state.last_fetch_at()? {
         report.last_fetch_at = Some(crate::api::model::format_timestamp(&at));
+        report.last_fetch = Some(at);
         report.last_fetch_age_seconds = Some((chrono::Utc::now() - at).num_seconds().max(0));
     }
 

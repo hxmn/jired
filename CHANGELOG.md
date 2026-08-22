@@ -40,9 +40,11 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Added
 
-- **Times print in your own timezone.** `jired log`, `jired status` and every
-  message jired writes to a terminal now show `2026-08-16 14:03:00` — your clock,
-  no zone marker — instead of the UTC the server happened to record. What jired
+- **Times print in your own timezone.** `jired log`, `jired status`,
+  `jired report time` and every message jired writes to a terminal now show
+  `2026-08-16 14:03:00` — your clock, no zone marker — instead of the UTC the
+  server happened to record. (`report time` still counts whole UTC days, so its
+  `2026-08-16 → 2026-08-22` span is unchanged; only the `last fetch` line moved.) What jired
   *keeps* is unchanged and still UTC: `--json` documents, issue files and their
   frontmatter, `.jired/state.db`, and everything sent to Jira, because a record
   has to mean the same thing on every machine that reads it. Where the two meet —
