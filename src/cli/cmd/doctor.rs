@@ -16,6 +16,7 @@ use crate::json::Out;
 use crate::project::naming;
 use crate::store::session::SessionStore;
 use crate::store::state::StateStore;
+use crate::style::{self, BOLD, DIM, GREEN, RED, YELLOW};
 use clap::Args;
 use serde::Serialize;
 
@@ -53,6 +54,17 @@ impl Status {
             Status::Fixed => "fixed",
             Status::WouldFix => "todo",
             Status::Problem => "!",
+        }
+    }
+
+    /// The colour the mark is read in: green for settled, yellow for something
+    /// still to do, red for something doctor cannot do itself.
+    fn color(self) -> &'static str {
+        match self {
+            Status::Ok => crate::style::DIM,
+            Status::Fixed => crate::style::GREEN,
+            Status::WouldFix => crate::style::YELLOW,
+            Status::Problem => crate::style::RED,
         }
     }
 }
@@ -177,14 +189,20 @@ fn collect(ctx: &mut Context, args: &DoctorArgs) -> Result<Vec<Check>> {
 
 fn render(checks: &[Check], out: Out) {
     for c in checks {
+        // Padded before painting: escape codes count towards a format width.
         out.say(format!(
-            "{:<5} {:<12} {}",
-            c.status.mark(),
-            c.name,
+            "{} {} {}",
+            style::out(c.status.color(), format!("{:<5}", c.status.mark())),
+            style::out(BOLD, format!("{:<12}", c.name)),
             c.detail
         ));
         for change in &c.changes {
-            out.say(format!("            {} → {}", change.from, change.to));
+            out.say(format!(
+                "            {} {} {}",
+                style::out(RED, &change.from),
+                style::out(DIM, "→"),
+                style::out(GREEN, &change.to)
+            ));
         }
     }
 }
@@ -201,12 +219,16 @@ fn finish(checks: Vec<Check>, dry_run: bool, out: Out) -> Result<ExitCode> {
         .count();
 
     out.say("");
-    out.say(match (problems, pending, fixed) {
-        (0, 0, 0) => "the workspace is healthy".to_string(),
-        (0, 0, n) => format!("repaired {n} thing(s)"),
-        (0, n, _) => format!("{n} thing(s) to repair — re-run without --dry-run"),
-        (p, _, _) => format!("{p} thing(s) need attention"),
-    });
+    let (color, verdict) = match (problems, pending, fixed) {
+        (0, 0, 0) => (GREEN, "the workspace is healthy".to_string()),
+        (0, 0, n) => (GREEN, format!("repaired {n} thing(s)")),
+        (0, n, _) => (
+            YELLOW,
+            format!("{n} thing(s) to repair — re-run without --dry-run"),
+        ),
+        (p, _, _) => (RED, format!("{p} thing(s) need attention")),
+    };
+    out.say(style::out(color, verdict));
 
     let report = DoctorReport {
         dry_run,

@@ -5,6 +5,7 @@ use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ErrorKind, ExitCode, JiredError, Result};
 use crate::json::Out;
+use crate::style::{self, CYAN, DIM};
 use crate::sync::Engine;
 use clap::Args;
 
@@ -173,6 +174,13 @@ fn render_list(available: &[crate::api::Transition], out: Out) {
         } else {
             format!("  (requires {})", t.required_fields.join(", "))
         };
-        out.say(format!("{:<width$} → {}{}", t.name, t.to_status, required));
+        // Padded before painting: escape codes count towards a format width.
+        out.say(format!(
+            "{} {} {}{}",
+            style::out(CYAN, format!("{:<width$}", t.name)),
+            style::out(DIM, "→"),
+            t.to_status,
+            style::out(DIM, required)
+        ));
     }
 }

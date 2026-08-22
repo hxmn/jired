@@ -3,7 +3,7 @@
 ## Global contract
 
 **Flags on every command:** `--json`, `--no-input`, `-y/--yes`, `-q/--quiet`,
-`-v/-vv`, `--color auto|always|never`, `--dir PATH`, `--config PATH`,
+`-v/-vv`, `--color auto|always|never`, `--no-color`, `--dir PATH`, `--config PATH`,
 `--project KEY`, `--ca-cert PATH`, `--insecure`. They are grouped under their own
 help heading and displayed after the command's own options.
 
@@ -22,6 +22,20 @@ variables that are not settings; both feed the help text and the agent docs.
 `--profile`/`JIRED_PROFILE`/`workspace.profile` were removed: nothing read them
 (the session store hardcodes the `default` profile). They come back with
 multi-profile support, not before.
+
+**Colour:** on when the stream is a terminal, off when it is a pipe, decided per
+stream (stdout can be redirected while stderr is not). `--no-color` is the
+shorthand for `--color never` and conflicts with `--color`, so naming both is a
+usage error rather than a precedence rule to remember. `NO_COLOR` and `TERM=dumb`
+turn `auto` off; an explicit `--color always` outranks them, because it is a
+preference someone just typed rather than one a profile set months ago. The
+vocabulary is `style.rs`: issue keys cyan, headings bold, meta and hints dim,
+what was there red and what replaced it green, warnings yellow. Statuses go
+through `style::status`, which colours by Jira's category — `new` dim,
+`indeterminate` yellow, `done` green — and leaves a category it does not
+recognise uncoloured rather than guessing. Every column is padded *before* it is
+painted: escape codes count towards a format width and would knock the following
+columns out of line.
 
 **Timestamps:** what jired *keeps* is UTC — `state.db`, issue files, API payloads
 and every `--json` document — because a record has to mean the same thing on

@@ -4,6 +4,7 @@ use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, Result};
 use crate::json::Out;
+use crate::style::{self, BOLD, CYAN, DIM};
 use clap::Args;
 
 #[derive(Args, Debug, Clone, Default)]
@@ -52,16 +53,22 @@ pub fn run(g: &GlobalArgs, args: &WhoamiArgs, out: Out) -> Result<ExitCode> {
     };
 
     out.say(format!(
-        "{} <{}> on {} ({})",
-        report.display_name.as_deref().unwrap_or("?"),
-        report.identity.as_deref().unwrap_or("?"),
-        report.base_url,
-        report.deployment
+        "{} {} on {} {}",
+        style::out(BOLD, report.display_name.as_deref().unwrap_or("?")),
+        style::out(
+            DIM,
+            format!("<{}>", report.identity.as_deref().unwrap_or("?"))
+        ),
+        style::out(CYAN, &report.base_url),
+        style::out(DIM, format!("({})", report.deployment))
     ));
-    out.say(format!(
-        "credential in {} ({})",
-        account.secret_location().describe(),
-        report.secret_storage
+    out.say(style::out(
+        DIM,
+        format!(
+            "credential in {} ({})",
+            account.secret_location().describe(),
+            report.secret_storage
+        ),
     ));
     out.emit("whoami", &report);
     Ok(ExitCode::Success)

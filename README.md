@@ -209,6 +209,29 @@ $EDITOR "PROJ-0142. Fix login flow.md" && jired resolve --done
 `--done` refuses any file that still contains markers, so `<<<<<<<` cannot reach
 Jira.
 
+### Colour
+
+Output is coloured when it goes to a terminal and plain when it goes to a pipe or
+a file, decided for stdout and stderr separately — so `jired status > out.txt`
+gets clean text while the warnings on stderr stay readable.
+
+Issue keys are cyan, headings bold, meta and hints dim; what was there is red and
+what replaced it is green, the same reading in `log`, `diff`, `pull` and `doctor`.
+Statuses follow Jira's own categories rather than their names — `To Do` dim,
+`In Progress` yellow, `Done` green — so an instance that renamed its workflow to
+`Ready for QA` still reads correctly, and a category jired does not recognise is
+left uncoloured rather than guessed at.
+
+```sh
+jired log --no-color        # plain, the spelling every other tool uses
+jired log --color never     # the same thing
+jired log --color always    # colour even into a pipe, e.g. for `less -R`
+NO_COLOR=1 jired log        # off for good, from a shell profile
+```
+
+`--no-color` and `--color` conflict: naming both is a usage error rather than a
+precedence rule to remember. An explicit `--color always` outranks `NO_COLOR`.
+
 ### Times
 
 What jired prints is your own clock:

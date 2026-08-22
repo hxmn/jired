@@ -4,6 +4,7 @@ use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
+use crate::style::{self, CYAN};
 use clap::Args;
 
 /// The server's own ceiling for one page of results.
@@ -75,6 +76,7 @@ pub fn run(g: &GlobalArgs, args: &SearchArgs, out: Out) -> Result<ExitCode> {
                 "key": i.key,
                 "summary": i.summary(),
                 "status": i.status(),
+                "status_category": i.status_category(),
                 "assignee": i.assignee_name(),
             })
         })
@@ -96,10 +98,18 @@ pub fn run(g: &GlobalArgs, args: &SearchArgs, out: Out) -> Result<ExitCode> {
             .unwrap_or(10)
             .clamp(6, 20);
         for r in &rows {
+            // Padded before painting: escape codes count towards a format
+            // width and would knock every following column out of line.
             out.say(format!(
-                "{:<key_width$} {:<status_width$} {}",
-                r["key"].as_str().unwrap_or(""),
-                r["status"].as_str().unwrap_or("-"),
+                "{} {} {}",
+                style::out(
+                    CYAN,
+                    format!("{:<key_width$}", r["key"].as_str().unwrap_or(""))
+                ),
+                style::status(
+                    &format!("{:<status_width$}", r["status"].as_str().unwrap_or("-")),
+                    r["status_category"].as_str().unwrap_or_default()
+                ),
                 r["summary"].as_str().unwrap_or("")
             ));
         }

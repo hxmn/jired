@@ -16,6 +16,7 @@ use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::store::state::IssueRow;
+use crate::style::{self, BOLD, CYAN, DIM, GREEN, RED};
 use crate::sync::progress::Progress;
 use crate::sync::Engine;
 use chrono::{DateTime, Utc};
@@ -205,17 +206,26 @@ fn render(entries: &[LogEntry], total: usize, one: Option<&str>, args: &LogArgs,
             .map(crate::api::model::format_local)
             .unwrap_or_default();
         let who = e.entry.author.as_deref().unwrap_or("unknown");
+        // Padded before painting: escape codes count towards a format width and
+        // would knock every following column out of line.
+        let head = format!("{}  {}", style::out(DIM, when), style::out(BOLD, who));
         if width > 0 {
-            out.say(format!("{:<width$}  {when}  {who}", e.key, width = width));
+            out.say(format!(
+                "{}  {head}",
+                style::out(CYAN, format!("{:<width$}", e.key, width = width))
+            ));
         } else {
-            out.say(format!("{when}  {who}"));
+            out.say(head);
         }
         for item in &e.entry.items {
+            // Red out, green in: the same reading `diff` and `pull` already ask
+            // for, so a changelog entry needs no second vocabulary.
             out.say(format!(
-                "    {:<16} {} → {}",
-                item.field,
-                item.from.as_deref().unwrap_or("(none)"),
-                item.to.as_deref().unwrap_or("(none)")
+                "    {} {} {} {}",
+                format_args!("{:<16}", item.field),
+                style::out(RED, item.from.as_deref().unwrap_or("(none)")),
+                style::out(DIM, "→"),
+                style::out(GREEN, item.to.as_deref().unwrap_or("(none)"))
             ));
         }
     }

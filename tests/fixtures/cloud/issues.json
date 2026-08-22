@@ -9,7 +9,12 @@
       },
       "status": {
         "id": "3",
-        "name": "In Progress"
+        "name": "In Progress",
+        "statusCategory": {
+          "id": 4,
+          "key": "indeterminate",
+          "name": "In Progress"
+        }
       },
       "priority": {
         "name": "High"
@@ -249,7 +254,12 @@
       },
       "status": {
         "id": "1",
-        "name": "To Do"
+        "name": "To Do",
+        "statusCategory": {
+          "id": 2,
+          "key": "new",
+          "name": "To Do"
+        }
       },
       "priority": {
         "name": "Medium"
@@ -293,7 +303,12 @@
       },
       "status": {
         "id": "1",
-        "name": "To Do"
+        "name": "To Do",
+        "statusCategory": {
+          "id": 2,
+          "key": "new",
+          "name": "To Do"
+        }
       },
       "priority": {
         "name": "Highest"

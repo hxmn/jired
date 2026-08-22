@@ -40,6 +40,15 @@
               "null"
             ]
           },
+          "status_category": {
+            "description": "Which of Jira's three buckets the status falls in; empty when the server did not say",
+            "enum": [
+              "new",
+              "indeterminate",
+              "done",
+              ""
+            ]
+          },
           "assignee": {
             "type": [
               "string",

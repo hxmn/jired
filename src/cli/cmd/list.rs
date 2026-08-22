@@ -4,6 +4,7 @@ use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, Result};
 use crate::json::Out;
+use crate::style::{self, CYAN, DIM};
 use clap::Args;
 
 // These three always query the server: there is no cached list to fall back on,
@@ -40,7 +41,13 @@ pub fn run_projects(g: &GlobalArgs, _args: &ProjectsArgs, out: Out) -> Result<Ex
     }
     let width = column(projects.iter().map(|p| p.key.len()), 12);
     for p in &projects {
-        out.say(format!("{:<width$} {}", p.key, p.name));
+        // Padded before painting: escape codes count towards a format width
+        // and would knock every following column out of line.
+        out.say(format!(
+            "{} {}",
+            style::out(CYAN, format!("{:<width$}", p.key)),
+            p.name
+        ));
     }
     out.emit("projects", &serde_json::json!({ "projects": projects }));
     Ok(ExitCode::Success)
@@ -68,7 +75,12 @@ pub fn run_boards(g: &GlobalArgs, args: &BoardsArgs, out: Out) -> Result<ExitCod
         });
     }
     for b in &boards {
-        out.say(format!("{:<8} {:<10} {}", b.id, b.board_type, b.name));
+        out.say(format!(
+            "{} {} {}",
+            style::out(CYAN, format!("{:<8}", b.id)),
+            style::out(DIM, format!("{:<10}", b.board_type)),
+            b.name
+        ));
     }
     out.emit("boards", &serde_json::json!({ "boards": boards }));
     Ok(ExitCode::Success)
@@ -110,7 +122,20 @@ pub fn run_sprints(g: &GlobalArgs, args: &SprintsArgs, out: Out) -> Result<ExitC
         }
     }
     for s in &shown {
-        out.say(format!("{:<8} {:<10} {}", s.id, s.state, s.name));
+        // A sprint's state is the same three-way reading as an issue's status —
+        // not started, running, finished — so it gets the same three colours.
+        let state = match s.state.as_str() {
+            "active" => "indeterminate",
+            "closed" => "done",
+            "future" => "new",
+            _ => "",
+        };
+        out.say(format!(
+            "{} {} {}",
+            style::out(CYAN, format!("{:<8}", s.id)),
+            style::status(&format!("{:<10}", s.state), state),
+            s.name
+        ));
     }
     out.emit("sprints", &serde_json::json!({ "sprints": sprints }));
     Ok(ExitCode::Success)

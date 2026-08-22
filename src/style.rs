@@ -86,6 +86,22 @@ pub fn err(code: &str, text: impl AsRef<str>) -> String {
     paint(stderr_color(), code, text)
 }
 
+/// A Jira status, coloured by the category the server files it under.
+///
+/// By category and not by name, because the name is whatever the instance
+/// renamed its workflow to — `Ready for QA`, `Pending Review`, `Пишем` — while
+/// the category behind it is always one of three. A category jired does not
+/// recognise is left uncoloured rather than guessed at: a status nobody can
+/// place should not be dressed up as one of the three that were placed.
+pub fn status(name: &str, category: &str) -> String {
+    match category {
+        "done" => out(GREEN, name),
+        "indeterminate" => out(YELLOW, name),
+        "new" => out(DIM, name),
+        _ => name.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +120,20 @@ mod tests {
 
         // An escape pair around nothing is invisible noise in a diff.
         assert_eq!(paint(true, RED, ""), "");
+
+        // Statuses read by category, and an unplaceable one is left alone
+        // rather than dressed up as one of the three that were placed.
+        init(ColorChoice::Always);
+        assert_eq!(status("Done", "done"), format!("{GREEN}Done{RESET}"));
+        assert_eq!(
+            status("Ready for QA", "indeterminate"),
+            format!("{YELLOW}Ready for QA{RESET}")
+        );
+        assert_eq!(status("Backlog", "new"), format!("{DIM}Backlog{RESET}"));
+        assert_eq!(status("Whatever", ""), "Whatever");
+        assert_eq!(status("Whatever", "invented"), "Whatever");
+
+        init(ColorChoice::Never);
+        assert_eq!(status("Done", "done"), "Done");
     }
 }

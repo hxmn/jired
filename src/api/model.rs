@@ -209,6 +209,22 @@ impl RemoteIssue {
             .as_ref()
             .map(|u| u.display_name.as_str())
     }
+
+    /// Which of Jira's three buckets the status falls in: `new`,
+    /// `indeterminate`, `done`, or empty when the server did not say.
+    ///
+    /// Read off the raw payload rather than modelled, because nothing but
+    /// display has ever needed it and a field on [`IssueFields`] would join the
+    /// set that change detection compares.
+    pub fn status_category(&self) -> &str {
+        self.raw
+            .get("fields")
+            .and_then(|f| f.get("status"))
+            .and_then(|s| s.get("statusCategory"))
+            .and_then(|c| c.get("key"))
+            .and_then(|k| k.as_str())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone)]

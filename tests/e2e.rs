@@ -2307,6 +2307,88 @@ fn log_shows_the_changelog_newest_first_and_caches_it() {
     assert_eq!(cached["entries"].as_array().unwrap().len(), 2);
 }
 
+/// Colour is on by default, and both ways of turning it off work.
+///
+/// The two spellings are not interchangeable to whoever is typing them:
+/// `--no-color` is what every other tool calls it, and `--color never` is what
+/// this one always called it.
+#[test]
+fn colour_is_on_by_default_and_can_be_turned_off_either_way() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let printed = |args: &[&str], no_color_env: bool| -> String {
+        let mut cmd = ws.cmd(args);
+        if no_color_env {
+            cmd.env("NO_COLOR", "1");
+        }
+        let out = cmd.output().expect("run");
+        assert!(out.status.success(), "`jired {}` failed", args.join(" "));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // `always` because the test's stdout is a pipe, where `auto` correctly
+    // stays plain — that is the default doing its job, not colour being off.
+    assert!(
+        printed(&["log", "--color", "always"], false).contains('\u{1b}'),
+        "colour was asked for and not delivered"
+    );
+
+    // Asking for colour outright beats the environment saying no: `NO_COLOR`
+    // is how someone states a preference once, not a veto over the flag they
+    // just typed.
+    assert!(
+        printed(&["log", "--color", "always"], true).contains('\u{1b}'),
+        "an explicit --color always should outrank NO_COLOR"
+    );
+
+    for args in [
+        vec!["log", "--no-color"],
+        vec!["log", "--color", "never"],
+        vec!["log"], // a pipe, where auto means plain
+    ] {
+        let text = printed(&args, false);
+        assert!(
+            !text.contains('\u{1b}'),
+            "`jired {}` should print no escapes:\n{text}",
+            args.join(" ")
+        );
+    }
+}
+
+/// Naming both is a mistake worth catching, not a precedence rule to remember.
+#[test]
+fn the_two_colour_flags_refuse_to_be_used_together() {
+    let ws = Ws::new();
+    ws.init();
+    let out = ws
+        .cmd(&["log", "--no-color", "--color", "always"])
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2), "usage error");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--no-color"), "{stderr}");
+}
+
+/// A status is coloured by the category the server files it under, so an
+/// instance that renamed its workflow still reads correctly.
+#[test]
+fn a_status_is_coloured_by_its_category() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws
+        .cmd(&["search", "--jql", "project = PROJ", "--color", "always"])
+        .output()
+        .expect("run");
+    let text = String::from_utf8_lossy(&out.stdout);
+    // In Progress is `indeterminate` (yellow); To Do is `new` (dim).
+    assert!(text.contains("\u{1b}[33mIn Progress"), "{text}");
+    assert!(text.contains("\u{1b}[2mTo Do"), "{text}");
+}
+
 /// What jired prints follows the reader's clock; what it records does not.
 ///
 /// PROJ-142's newest changelog entry is 2026-08-16T12:03:00Z. Read from Tokyo

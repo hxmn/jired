@@ -5,6 +5,7 @@ use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, Result};
 use crate::json::Out;
+use crate::style::{self, CYAN, DIM, YELLOW};
 use crate::sync::Engine;
 use clap::Args;
 use serde::Serialize;
@@ -73,11 +74,17 @@ pub fn run(g: &GlobalArgs, args: &CleanArgs, out: Out) -> Result<ExitCode> {
 
     for o in &orphans {
         out.say(format!(
-            "  {:<14} {}  ({}){}",
-            o.key,
+            "  {} {}  {}",
+            style::out(CYAN, format!("{:<14}", o.key)),
             o.file,
-            o.reason,
-            if o.dirty { ", has unpushed edits" } else { "" }
+            style::out(
+                if o.dirty { YELLOW } else { DIM },
+                format!(
+                    "({}{})",
+                    o.reason,
+                    if o.dirty { ", has unpushed edits" } else { "" }
+                )
+            )
         ));
     }
 

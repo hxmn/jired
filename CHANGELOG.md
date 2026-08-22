@@ -40,6 +40,23 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Added
 
+- **Colour across the read commands, and a `--no-color` to turn it off.**
+  `log`, `search`, `projects`, `boards`, `sprints`, `whoami`, `transition --list`,
+  `resolve --list`, `clean` and `doctor` printed plain text; they now follow the
+  vocabulary `status`, `diff` and `push` already used — keys cyan, headings bold,
+  meta dim, what was there red and what replaced it green, warnings yellow.
+  Statuses and sprint states are coloured by Jira's own category rather than
+  their names (`new` dim, `indeterminate` yellow, `done` green), so an instance
+  that renamed its workflow still reads correctly and a category jired does not
+  recognise is left uncoloured rather than guessed at. `jired search --json`
+  gains `status_category` alongside `status`.
+
+  Colour was already on for terminals and off for pipes, decided per stream;
+  `--no-color` is the spelling every other tool uses, equivalent to the
+  `--color never` this one always had. Naming both is a usage error rather than a
+  precedence rule to remember, and an explicit `--color always` still outranks
+  `NO_COLOR`.
+
 - **Times print in your own timezone.** `jired log`, `jired status`,
   `jired report time` and every message jired writes to a terminal now show
   `2026-08-16 14:03:00` — your clock, no zone marker — instead of the UTC the

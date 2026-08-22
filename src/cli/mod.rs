@@ -97,6 +97,13 @@ pub struct GlobalArgs {
     #[arg(long, global = true, value_name = "WHEN", default_value = "auto")]
     pub color: crate::style::ColorChoice,
 
+    /// Plain output, no colour — the same as `--color never`
+    ///
+    /// The spelling everything else uses, so nobody has to discover that this
+    /// tool calls it `--color never`.
+    #[arg(long, global = true, conflicts_with = "color")]
+    pub no_color: bool,
+
     /// Workspace directory (defaults to the current directory)
     #[arg(long, global = true, value_name = "PATH", value_hint = clap::ValueHint::DirPath)]
     pub dir: Option<PathBuf>,
@@ -118,6 +125,20 @@ pub struct GlobalArgs {
     /// [env: JIRED_INSECURE] [config: tls.insecure]
     #[arg(long, global = true)]
     pub insecure: bool,
+}
+
+impl GlobalArgs {
+    /// What the two colour flags add up to.
+    ///
+    /// `--no-color` is the shorthand; `--color` is the one that can also say
+    /// `always`. They conflict at the parser, so only one is ever set.
+    pub fn color_choice(&self) -> crate::style::ColorChoice {
+        if self.no_color {
+            crate::style::ColorChoice::Never
+        } else {
+            self.color
+        }
+    }
 }
 
 /// How to reach and authenticate against Jira.
@@ -230,7 +251,7 @@ pub const INSECURE_TLS_WARNING: &str =
 
 pub fn run(cli: Cli) -> ExitCode {
     let out = Out::new(cli.global.json, cli.global.quiet);
-    crate::style::init(cli.global.color);
+    crate::style::init(cli.global.color_choice());
     crate::json::set_verbose(cli.global.verbose > 0);
     init_tracing(cli.global.verbose);
 

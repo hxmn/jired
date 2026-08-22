@@ -12,6 +12,7 @@ use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
+use crate::style::{self, CYAN, RED};
 use crate::sync::{merge, Engine};
 use clap::Args;
 
@@ -76,7 +77,11 @@ pub fn run(g: &GlobalArgs, args: &ResolveArgs, out: Out) -> Result<ExitCode> {
 
     if args.list || !(args.ours || args.theirs || args.done) {
         for c in &conflicts {
-            out.say(format!("{:<14} {}", c.issue_key, c.field));
+            out.say(format!(
+                "{} {}",
+                style::out(CYAN, format!("{:<14}", c.issue_key)),
+                style::out(RED, &c.field)
+            ));
         }
         out.emit("resolve", &serde_json::json!({ "conflicts": conflicts }));
 
