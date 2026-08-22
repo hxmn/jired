@@ -461,12 +461,14 @@ mod tests {
                     summary: "SSO rollout".into(),
                     issue_type: "Epic".into(),
                     status: "To Do".into(),
+                    ..Default::default()
                 },
                 KnownIssue {
                     key: "PROJ-142".into(),
                     summary: "Fix login flow".into(),
                     issue_type: "Story".into(),
                     status: "In Progress".into(),
+                    ..Default::default()
                 },
             ],
             ..Catalog::default()

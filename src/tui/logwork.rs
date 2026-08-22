@@ -13,6 +13,7 @@
 use crate::tui::field::Field;
 use crate::tui::form::{self, Card};
 use crate::tui::picker::{self, Item, Picker};
+use crate::tui::when::ago;
 use crate::tui::{theme, Flow, Screen};
 use chrono::{DateTime, Duration, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -474,22 +475,6 @@ fn start_presets(now: DateTime<Utc>) -> Vec<Item> {
     out
 }
 
-/// How long ago `when` was, in the words someone would use for it.
-fn ago(now: DateTime<Utc>, when: DateTime<Utc>) -> String {
-    let minutes = (now - when).num_minutes();
-    match minutes {
-        // A start time in the future is a mistake worth naming rather than
-        // describing as "in -3 hours".
-        m if m < -1 => "in the future".to_string(),
-        m if m < 5 => "just now".to_string(),
-        m if m < 60 => format!("{m} minutes ago"),
-        m if m < 120 => "an hour ago".to_string(),
-        m if m < 60 * 24 => format!("{} hours ago", m / 60),
-        m if m < 60 * 48 => "yesterday".to_string(),
-        m => format!("{} days ago", m / (60 * 24)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,12 +498,14 @@ mod tests {
                 summary: "Fix login flow".into(),
                 issue_type: "Story".into(),
                 status: "In Progress".into(),
+                ..Default::default()
             },
             KnownIssue {
                 key: "PROJ-100".into(),
                 summary: "SSO rollout".into(),
                 issue_type: "Epic".into(),
                 status: "To Do".into(),
+                ..Default::default()
             },
         ]
     }
@@ -728,18 +715,6 @@ mod tests {
             screen.fields[STARTED].text(),
             shown(now() - Duration::hours(1))
         );
-    }
-
-    #[test]
-    fn timestamps_are_described_in_words() {
-        let now = now();
-        assert_eq!(ago(now, now), "just now");
-        assert_eq!(ago(now, now - Duration::minutes(20)), "20 minutes ago");
-        assert_eq!(ago(now, now - Duration::hours(1)), "an hour ago");
-        assert_eq!(ago(now, now - Duration::hours(5)), "5 hours ago");
-        assert_eq!(ago(now, now - Duration::days(1)), "yesterday");
-        assert_eq!(ago(now, now - Duration::days(3)), "3 days ago");
-        assert_eq!(ago(now, now + Duration::hours(3)), "in the future");
     }
 
     #[test]

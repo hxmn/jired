@@ -1433,6 +1433,62 @@ fn a_conflict_aborts_the_pull_on_both_deployments() {
 // single mutation point. `--push` runs that same path immediately.
 // ---------------------------------------------------------------------------
 
+/// With no issue named `comment` searches for one, which needs a terminal to
+/// draw the list on. Without one it says what to type, rather than clap's
+/// "required arguments were not provided".
+#[test]
+fn comment_with_nothing_named_and_no_terminal_says_to_name_one() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["comment"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(err["hint"].as_str().unwrap().contains("PROJ-142"), "{err}");
+
+    // And the body is never asked for first: nothing to comment on means
+    // nothing to write, and $EDITOR must not open over a question that failed.
+    let err = ws.json_err(&["comment", "-m", "on it"], 7);
+    assert_eq!(err["kind"], "missing_value");
+}
+
+/// The picker's sort and filter are settings like any other, which is what
+/// lets them be persisted at all — and what makes a typo in one a message.
+#[test]
+fn the_issue_picker_settings_round_trip_and_reject_nonsense() {
+    let ws = Ws::new();
+    ws.init();
+
+    ws.json(&["config", "set", "ui.issues.sort", "priority:asc"]);
+    assert_eq!(
+        ws.json(&["config", "get", "ui.issues.sort"])["value"],
+        "priority:asc"
+    );
+    ws.json(&["config", "set", "ui.issues.filter", "category:done"]);
+    assert_eq!(
+        ws.json(&["config", "get", "ui.issues.filter"])["value"],
+        "category:done"
+    );
+
+    // A bare column takes the direction that column is usually read in.
+    ws.json(&["config", "set", "ui.issues.sort", "updated"]);
+    assert_eq!(
+        ws.json(&["config", "get", "ui.issues.sort"])["value"],
+        "updated:desc"
+    );
+
+    for (key, value) in [
+        ("ui.issues.sort", "sideways"),
+        ("ui.issues.sort", "key:diagonally"),
+        ("ui.issues.filter", "category:nonesuch"),
+        ("ui.issues.filter", "colour:blue"),
+    ] {
+        let err = ws.json_err(&["config", "set", key, value], 2);
+        assert_eq!(err["kind"], "usage", "`{value}` was accepted for {key}");
+        assert_eq!(err["details"]["value"], value);
+    }
+}
+
 #[test]
 fn comment_stages_a_new_comment_that_push_then_creates() {
     let ws = Ws::new();

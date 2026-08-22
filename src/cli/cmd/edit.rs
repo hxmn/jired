@@ -7,6 +7,7 @@
 //! only runs that same path immediately. `edit` is the same thing with a form
 //! in front of it rather than a flag.
 
+use crate::cli::cmd::pick::Listing;
 use crate::cli::cmd::push::PushArgs;
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
@@ -47,9 +48,10 @@ pub fn run(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
         Some(issue) => issue.clone(),
         // Nothing named: let them find it. Typing a key from memory is the
         // thing this command was hardest to use without.
-        None => search(&mut ctx, &engine)?,
+        None => crate::cli::cmd::pick::choose(&mut ctx, "Edit which issue?", Listing::WithFiles)?,
     };
     let (key, file) = locate(&engine, &wanted)?;
+    crate::cli::cmd::pick::mark_viewed(&engine.state, &key);
     let doc = engine.projector.read(&file)?;
     let before = Edits::of(&doc);
 
@@ -122,54 +124,6 @@ pub fn run(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
         },
     );
     Ok(ExitCode::Success)
-}
-
-/// Ask which issue, with a filtered list of what the workspace holds.
-///
-/// Only issues that have a file: `edit` works on the working copy, and offering
-/// one that was fetched but never written would hand back a key with nothing
-/// behind it.
-fn search(ctx: &mut Context, engine: &Engine) -> Result<String> {
-    if !crate::tui::available() {
-        return Err(
-            JiredError::missing_value("no issue given, and no terminal to search on")
-                .with_hint("name the issue: `jired edit PROJ-142`, or a file name"),
-        );
-    }
-
-    let files = engine.projector.scan()?;
-    let catalog = Catalog::from_rows(
-        &engine.state.issues()?,
-        ctx.resolver.get_quiet("workspace.project")?.as_deref(),
-    );
-    // The catalog is ordered most-recently-touched first, which is the order
-    // someone looking for "the issue I was just in" wants. Locally created
-    // issues are not in it — they have no snapshot — so they come after.
-    let mut issues: Vec<crate::tui::catalog::KnownIssue> = catalog
-        .issues
-        .into_iter()
-        .filter(|i| files.contains_key(&i.key))
-        .collect();
-    for (key, file) in &files {
-        if issues.iter().any(|i| &i.key == key) {
-            continue;
-        }
-        let doc = engine.projector.read(&file.relative)?;
-        issues.push(crate::tui::catalog::KnownIssue {
-            key: key.clone(),
-            summary: doc.frontmatter.summary.clone(),
-            issue_type: doc.frontmatter.issue_type.clone(),
-            status: doc.frontmatter.status.clone(),
-        });
-    }
-
-    let mut screen = crate::tui::pick::PickScreen::new("Edit which issue?", &issues);
-    if screen.is_empty() {
-        return Err(JiredError::usage("this workspace has no issue files yet")
-            .with_hint("run `jired pull`, or `jired create` to write one"));
-    }
-    crate::tui::run(&mut screen)?
-        .ok_or_else(|| JiredError::usage("no issue chosen").with_hint("nothing was changed"))
 }
 
 /// Find the issue's file, or say what to do about it not being here.
@@ -263,6 +217,10 @@ pub fn edit_issue(
             .with_detail("issue", key.to_string())
             .with_hint("run `jired pull` first, or check the key")
     })?;
+
+    // Every staging command comes through here, so this is the one place that
+    // has to know that going to an issue counts as having looked at it.
+    crate::cli::cmd::pick::mark_viewed(&engine.state, &found.key);
 
     let mut doc = engine.projector.read(&found.relative)?;
     mutate(&mut doc)?;

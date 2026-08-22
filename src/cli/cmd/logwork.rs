@@ -238,6 +238,9 @@ fn bookable(engine: &Engine, project: &str) -> Result<Vec<KnownIssue>> {
             summary: doc.frontmatter.summary.clone(),
             issue_type: doc.frontmatter.issue_type.clone(),
             status: doc.frontmatter.status.clone(),
+            // The form's issue field shows a key and a summary; the rest of a
+            // `KnownIssue` is the picker's table, which this screen does not draw.
+            ..Default::default()
         });
     }
     Ok(issues)

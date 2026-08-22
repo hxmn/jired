@@ -73,7 +73,8 @@ CREATE TABLE issue (
   -- REMOTE-TRACKING snapshot (last fetch; equals base right after pull)
   remote_raw TEXT, remote_updated TEXT, remote_fetched_at TEXT,
   file_path  TEXT NOT NULL,         -- current working-copy relative path
-  parent_key TEXT, deleted_remote INTEGER NOT NULL DEFAULT 0
+  parent_key TEXT, deleted_remote INTEGER NOT NULL DEFAULT 0,
+  viewed_at  TEXT                   -- when this machine last went to the issue
 );
 CREATE INDEX issue_updated ON issue(remote_updated);
 
@@ -116,7 +117,11 @@ Migrations: numbered embedded SQL scripts applied in one transaction, gated on
 `PRAGMA user_version` (hand-rolled, ~50 lines).
 
 `state.db` is a **cache plus the `pending_op` journal**: deleting it and re-running
-`jired fetch` must always be a safe recovery path (D17).
+`jired fetch` must always be a safe recovery path (D17). `viewed_at` is the one
+exception and a deliberate one — the server does not know when this machine last
+opened an issue and never will, so a fetch cannot rebuild it. It buys the issue
+picker's `viewed` column; losing it with the database costs a sort order and
+nothing else, which is why it does not earn a precious database of its own.
 
 ## Frontmatter schema (exact)
 

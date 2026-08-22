@@ -215,10 +215,15 @@ about exactly once. `--refresh` overrides both. In workspace mode a single
 unreadable issue warns and stops the fetch rather than losing the rest of the
 log.
 
-### `jired comment ISSUE [-m "text"] [--push] [--dry-run]`
+### `jired comment [ISSUE] [-m "text"] [--push] [--dry-run]`
 Appends a `### [new]` section to the file; `--push` sends immediately. Without
 `-m` it opens `$VISUAL`/`$EDITOR` on a scratch file (an empty buffer aborts), or
 reads the body from stdin when one is piped.
+
+With no issue named, the shared picker (see `jired edit`), scoped to the issues
+with a file — the comment is staged into one. Which issue is asked first and the
+body second, because the editor the body may open wants the terminal the picker
+is still holding, and because it is the order the questions come in anyway.
 
 ### `jired logwork [ISSUE] [TIME] [-m "text"] [--started TS] [-i] [--push]`
 Books time against the issue by appending a `### [new] 2h 30m — <when>` section
@@ -308,9 +313,26 @@ naming the missing summary (`--no-input`, or no terminal at all). Backing out of
 the form writes nothing and exits 1.
 
 ### `jired edit [ISSUE] [--push]`
-With no issue named, a filtered list of everything in the working copy: type a
-subsequence of the key or the summary (`pl142`, `sso ro`), ↑↓ to move, ⏎ to open.
-Most recently touched first. The issue can also be named by key in any case, by
+With no issue named, the issue picker: a table of everything in the working copy,
+narrowed by typing a subsequence of the key or the summary (`pl142`, `sso ro`),
+↑↓ to move, ⏎ to open. Columns are key, summary, status, priority, assignee,
+reporter and the ages of updated/created/viewed; `^s` moves the sort to the next
+column, `^r` reverses it, `^f` narrows to a status or a whole status category.
+The filter box reads the key and the summary only — an age or an assignee that
+happens to contain the letters typed must not pull a row in.
+
+Columns that do not fit are dropped from the right, keeping the key, the summary
+and whichever column is in force; sorting by a column that is not on screen would
+leave the order looking arbitrary. Rows with nothing in the sorted column go last
+in either direction. `viewed` is stamped locally — by `open`, and by every command
+that stages a change through `edit_issue` — and lives in `state.db`, the one thing
+in there a fetch cannot rebuild (D17); losing it costs a sort order.
+
+Sort and filter are `ui.issues.sort` and `ui.issues.filter`, written back to the
+workspace config by the screen itself, so the list opens the way it was left. An
+unreadable value is exit 2 naming the key, raised before the screen is drawn.
+
+The issue can also be named by key in any case, by
 file name, or by a path — which is what shell completion produces, and the
 likeliest thing to be typed for an issue whose summary is hard to spell. A
 locally created `NEW-8bf7b6` keeps the case its hex suffix was generated with.
@@ -364,6 +386,8 @@ With no issue, the same picker `edit` uses, over every issue the state store
 holds rather than only the ones with a file — `open` browses the server, so a
 snapshot is enough. Locally created `NEW-*` issues are left out: they have no
 server key to browse. No terminal for the picker → exit 7 naming what to type.
+Going to an issue stamps `viewed_at`, this being the plainest thing viewing an
+issue can mean.
 
 ### `jired search "project = PROJ AND status = Open" [--limit N]`
 JQL is positional; `--jql` is the same value spelled as a flag, and the two

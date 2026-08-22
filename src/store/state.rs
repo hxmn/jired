@@ -122,6 +122,16 @@ CREATE TABLE changelog (
 CREATE INDEX changelog_issue ON changelog(issue_key, created);
 "#,
     },
+    // When this machine last opened the issue, for the "what was I just in"
+    // sort in the issue picker. The one thing in here a `fetch` cannot rebuild
+    // (D17) — deliberately, because the server does not know it and never will.
+    // Losing it costs one sort order and nothing else, which is why it is
+    // allowed to live in the deletable database rather than earning a precious
+    // one of its own.
+    Migration {
+        version: 3,
+        sql: "ALTER TABLE issue ADD COLUMN viewed_at TEXT;",
+    },
 ];
 
 /// The last state jired successfully synced to a file.
@@ -150,6 +160,8 @@ pub struct IssueRow {
     pub file_path: Option<String>,
     pub parent_key: Option<String>,
     pub deleted_remote: bool,
+    /// When this machine last opened the issue; `None` until it has.
+    pub viewed_at: Option<DateTime<Utc>>,
 }
 
 impl IssueRow {
@@ -380,7 +392,9 @@ impl StateStore {
     }
 
     pub fn issue(&self, key: &str) -> Result<Option<IssueRow>> {
-        let mut stmt = self.conn.prepare(ISSUE_SELECT)?;
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {ISSUE_COLUMNS} FROM issue WHERE key = ?1"))?;
         let row = stmt
             .query_row([key], |r| Ok(issue_row_from(r)))
             .optional()?;
@@ -390,9 +404,22 @@ impl StateStore {
     pub fn issues(&self) -> Result<Vec<IssueRow>> {
         let mut stmt = self
             .conn
-            .prepare(&format!("{ISSUE_SELECT_ALL} ORDER BY key"))?;
+            .prepare(&format!("SELECT {ISSUE_COLUMNS} FROM issue ORDER BY key"))?;
         let rows = stmt.query_map([], |r| Ok(issue_row_from(r)))?;
         rows.map(|r| r?).collect()
+    }
+
+    /// Note that this machine just opened the issue.
+    ///
+    /// Silently does nothing for a key the store has never heard of, which is
+    /// the case for an issue named on the command line before the first fetch:
+    /// a stamp is a convenience, and refusing one is no help to anybody.
+    pub fn mark_viewed(&self, key: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE issue SET viewed_at = ?2 WHERE key = ?1",
+            params![key, now_rfc3339()],
+        )?;
+        Ok(())
     }
 
     /// Record a new hash for a file whose text was rewritten without its
@@ -1029,13 +1056,9 @@ impl StateStore {
     }
 }
 
-const ISSUE_SELECT: &str = "SELECT key, id, base_raw, base_updated, base_desc, base_md_hash,
-     remote_raw, remote_updated, remote_fetched_at, file_path, parent_key, deleted_remote
-     FROM issue WHERE key = ?1";
-
-const ISSUE_SELECT_ALL: &str = "SELECT key, id, base_raw, base_updated, base_desc, base_md_hash,
-     remote_raw, remote_updated, remote_fetched_at, file_path, parent_key, deleted_remote
-     FROM issue";
+const ISSUE_COLUMNS: &str = "key, id, base_raw, base_updated, base_desc, base_md_hash,
+     remote_raw, remote_updated, remote_fetched_at, file_path, parent_key, deleted_remote,
+     viewed_at";
 
 fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
     // Read first: a message about a corrupt row is close to useless without the
@@ -1087,6 +1110,10 @@ fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
         file_path: r.get(9)?,
         parent_key: r.get(10)?,
         deleted_remote: r.get::<_, i64>(11)? != 0,
+        viewed_at: r
+            .get::<_, Option<String>>(12)?
+            .as_deref()
+            .and_then(parse_timestamp),
     })
 }
 

@@ -22,6 +22,7 @@ pub mod pick;
 mod picker;
 pub mod report;
 mod theme;
+pub mod when;
 
 use crate::error::{JiredError, Result};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};

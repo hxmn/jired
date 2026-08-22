@@ -71,7 +71,7 @@ command works non-interactively today, so nothing is blocked on them.
 - [x] Assignee autocompletes to the mention as a name is typed, and refuses to save one that matches nobody; the sprint field is a ticked list of every sprint the workspace knows — running, queued, then closed newest first, each row saying which — and the backlog
 - [x] Edit-issue form (`jired edit KEY`): the fields a push can send, loaded from the file, marked as they move, written back as a normal local edit; `$EDITOR` on the file where a full-screen terminal is unavailable
 - [x] Init wizard: url → deployment and credential inferred → verify → project picker (line-based rather than full-screen; see M1.13)
-- [x] Issue picker: `jired edit` with no key searches the working copy by subsequence over key and summary
+- [x] Issue picker: `edit`, `comment` and `open` with no key search by subsequence over key and summary, on a table of key/summary/status/priority/assignee/reporter/updated/created/viewed. `^s` sorts by the next column, `^r` reverses, `^f` narrows to a status or a status category; the sort and the filter persist as `ui.issues.sort`/`ui.issues.filter`. `edit` and `comment` see the working copy, `open` every snapshot
 - [ ] Project/board/sprint pickers (shared with `list --pick` flows and `assign` user picker)
 - [ ] Pull preview: issue tree with changed fields; accept/abort
 - [ ] Push preview: op list with per-op diff; confirm (requires `--yes` when non-interactive)

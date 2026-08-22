@@ -18,6 +18,9 @@ pub struct Item {
     pub label: String,
     /// Dim right-hand context, e.g. an issue's summary.
     pub detail: String,
+    /// Cells for a caller that draws its rows as a table instead of a
+    /// label-and-detail pair. Empty for every list that does not.
+    pub cells: Vec<String>,
 }
 
 impl Item {
@@ -27,11 +30,22 @@ impl Item {
             label: value.clone(),
             value,
             detail: String::new(),
+            cells: Vec::new(),
         }
     }
 
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = detail.into();
+        self
+    }
+
+    /// Add the table cells for a row whose renderer draws columns.
+    ///
+    /// Kept apart from `label` and `detail` because those two are what the
+    /// filter reads: typing `aug` should find an issue whose summary says
+    /// "August", not every issue updated last month.
+    pub fn with_cells(mut self, cells: Vec<String>) -> Self {
+        self.cells = cells;
         self
     }
 }
@@ -126,6 +140,16 @@ impl Picker {
 
     pub fn filter(&self) -> &TextInput {
         &self.filter
+    }
+
+    /// Replace the rows, keeping whatever is typed in the filter box.
+    ///
+    /// For a caller that re-orders or re-scopes its own list — a change of sort
+    /// column, a change of what the list is allowed to show. The selection goes
+    /// back to the top, which is where the answer to "what is first now?" is.
+    pub fn set_items(&mut self, items: Vec<Item>) {
+        self.items = items;
+        self.refilter();
     }
 
     pub fn is_empty(&self) -> bool {

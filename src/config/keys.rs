@@ -38,13 +38,23 @@ pub enum Sensitivity {
 
 /// What a setting accepts, so `config set` can reject a bad value where the
 /// typo is still on screen rather than at the next command that reads it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Deliberately not comparable: `Shaped` holds a function, and two function
+/// pointers being equal says nothing useful about the two kinds being the same.
+#[derive(Debug, Clone, Copy)]
 pub enum Kind {
     Text,
     Bool,
     Bytes,
     /// One of a fixed vocabulary; the canonical spellings, for help and errors.
     Enum(&'static [&'static str]),
+    /// A value with a shape rather than a vocabulary — `priority:asc`,
+    /// `status:In Progress` — which no list of allowed strings can describe.
+    /// `check` returns the canonical spelling, or `None` for "not one of these".
+    Shaped {
+        check: fn(&str) -> Option<String>,
+        expected: &'static str,
+    },
 }
 
 pub struct KeyDef {
@@ -234,6 +244,40 @@ pub const KEYS: &[KeyDef] = &[
         kind: Kind::Bool,
         doc: "Project closed sprints into sprints/ (default false)",
     },
+    // Written by the issue picker itself as well as by hand: a sort order
+    // re-chosen on every run is not a preference, it is a chore.
+    KeyDef {
+        key: "ui.issues.sort",
+        env: "JIRED_ISSUES_SORT",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Shaped {
+            check: issue_sort,
+            expected: "expected <column>:asc or <column>:desc, where the column is one of \
+                       key, summary, status, priority, assignee, reporter, updated, \
+                       created, viewed",
+        },
+        doc: "How the issue picker orders its rows: <column>:asc or <column>:desc, \
+              where the column is one of key, summary, status, priority, assignee, \
+              reporter, updated, created, viewed (default updated:desc). ^s and ^r \
+              in the picker change it and write it back here",
+    },
+    KeyDef {
+        key: "ui.issues.filter",
+        env: "JIRED_ISSUES_FILTER",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Shaped {
+            check: issue_filter,
+            expected: "expected all, category:new, category:indeterminate, \
+                       category:done, or status:<name>",
+        },
+        doc: "Which issues the picker lists: all, category:<new|indeterminate|done>, \
+              or status:<name> (default all). ^f in the picker changes it and writes \
+              it back here",
+    },
 ];
 
 /// Settings that hold several values rather than one.
@@ -343,7 +387,18 @@ pub fn canonicalize(key: &str, value: &str) -> crate::error::Result<String> {
                 .map(|a| (*a).to_string())
                 .ok_or_else(|| fail(format!("expected one of: {}", allowed.join(", "))))
         }
+        Kind::Shaped { check, expected } => check(value).ok_or_else(|| fail(expected.to_string())),
     }
+}
+
+/// `<column>:asc|desc` for the issue picker, canonicalized.
+fn issue_sort(value: &str) -> Option<String> {
+    crate::tui::pick::Sort::parse(value).map(|s| s.to_string())
+}
+
+/// `all`, `category:<key>` or `status:<name>` for the issue picker.
+fn issue_filter(value: &str) -> Option<String> {
+    crate::tui::pick::Scope::parse(value).map(|s| s.to_string())
 }
 
 #[cfg(test)]

@@ -80,6 +80,34 @@ before something destructive, what an error says, and what the docs claim.
   one the server has moved on from is refetched exactly once. `jired/log/1` gains
   `scope` and a per-entry `key`, and its top-level `key` is null in workspace mode.
 
+- **The issue picker is a sortable table, and `jired comment` opens it too.**
+  `edit`, `comment` and `open` all ask "which issue?" the same way now, on a
+  screen showing key, summary, status, priority, assignee, reporter and the ages
+  of `updated`, `created` and `viewed`. `^s` moves the sort to the next column
+  (pointing the way that column is usually read — newest first for a clock,
+  most urgent first for priority), `^r` reverses it, and `^f` narrows the list to
+  one status or to a whole status category. Typing still filters on the key and
+  the summary alone: an age or an assignee that happens to contain the letters
+  typed must not pull a row in. Columns that do not fit are dropped from the
+  right, keeping the key, the summary and whichever column is sorted, and rows
+  with nothing in the sorted column go last in either direction. `edit` and
+  `comment` list only the issues with a file, because that is where they stage
+  the change; `open` lists every issue the workspace has a snapshot of, since a
+  browser URL needs no file, and leaves out locally created `NEW-*` issues, which
+  have no server key to browse. `comment`'s and `open`'s issue arguments are
+  optional as a result, so a scripted `jired comment` with nothing after it now
+  exits 7 naming what is missing rather than 2 from clap.
+- **`ui.issues.sort` and `ui.issues.filter`**, which the picker writes back to
+  the workspace config itself, so the list opens the way it was left — set them
+  by hand (`jired config set ui.issues.sort priority:asc`) or with `^s`/`^r`/`^f`,
+  which are the same thing spelled differently. `config set` rejects a value
+  neither can read, naming the columns and the filters that exist.
+- A `viewed` column, from a `viewed_at` stamp `state.db` now keeps: when *this
+  machine* last went to an issue, written by `open` and by every command that
+  stages a change. It is the one thing in that database a `fetch` cannot rebuild,
+  which is deliberate — the server does not know it and never will, and losing it
+  with the database costs one sort order and nothing else.
+
 - **`jired reset [ISSUES…]`** drops local changes: every dirty file is re-rendered
   from its base snapshot, byte-identical to what the last pull wrote, so the issue
   has nothing left for `push` to send. The mirror of `pull --force` pointing the
@@ -130,12 +158,6 @@ before something destructive, what an error says, and what the docs claim.
 - `$VISUAL`/`$EDITOR` support: `comment` without `-m` at a terminal opens an
   editor (empty buffer aborts), and `config edit` opens the config file.
 - `create` prompts for what it needs interactively and takes `--push`.
-- `jired open` with no issue asks which one, on the filtered list `edit` searches.
-  It offers every issue the workspace has a snapshot of rather than only the ones
-  with a file, because a browser URL needs no file — and leaves out locally
-  created `NEW-*` issues, which have no server key to browse. Without a terminal
-  to draw the list on it is exit 7 naming what to type, in place of clap's
-  "required arguments were not provided".
 - `--color auto|always|never` (honouring `NO_COLOR`), progress reporting during
   fetch/pull/push, git-style "what to run next" trailers in `status`, and a
   counted summary from `push`.

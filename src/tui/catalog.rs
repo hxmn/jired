@@ -12,6 +12,7 @@
 //! full parse to populate a list.
 
 use crate::store::state::IssueRow;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 /// Every list is ordered by how often the workspace uses the value, so the
@@ -50,12 +51,30 @@ impl KnownSprint {
     }
 }
 
-#[derive(Debug, Clone)]
+/// An issue the workspace has seen, and everything the picker sorts on.
+///
+/// Every field past the first four is there to be a column: the picker is the
+/// only screen that shows a whole issue at a glance, and "which of these was I
+/// in yesterday" is not answerable from a key and a summary. They are cheap —
+/// all of it is already in the snapshot the catalog is walking — and empty
+/// where the workspace does not know, which the table renders as a dash rather
+/// than pretending.
+#[derive(Debug, Clone, Default)]
 pub struct KnownIssue {
     pub key: String,
     pub summary: String,
     pub issue_type: String,
     pub status: String,
+    /// `new`, `indeterminate` or `done` — Jira's own three buckets, which is
+    /// what "is this finished" means across differently-named workflows.
+    pub status_category: String,
+    pub priority: String,
+    pub assignee: String,
+    pub reporter: String,
+    pub created: Option<DateTime<Utc>>,
+    pub updated: Option<DateTime<Utc>>,
+    /// When this machine last opened it; `None` until it has.
+    pub viewed: Option<DateTime<Utc>>,
 }
 
 /// Someone this workspace has seen, in the form the file spells them.
@@ -103,9 +122,10 @@ impl Catalog {
 
             let issue_type = text(fields.pointer("/issuetype/name"));
             let status = text(fields.pointer("/status/name"));
+            let priority = text(fields.pointer("/priority/name"));
             types.add(&issue_type);
             statuses.add(&status);
-            priorities.add(&text(fields.pointer("/priority/name")));
+            priorities.add(&priority);
             for label in array(fields.get("labels")) {
                 labels.add(&text(Some(label)));
             }
@@ -119,16 +139,30 @@ impl Catalog {
                     people.add(&mention);
                 }
             }
+            // `updated` off the snapshot rather than out of `fields`: it is the
+            // same instant, already parsed, and it is what `is_behind` compares.
+            let updated = row
+                .remote
+                .as_ref()
+                .map(|r| r.updated)
+                .or(row.base.as_ref().map(|b| b.updated));
             issues.push((
-                row.remote
-                    .as_ref()
-                    .map(|r| r.updated)
-                    .or(row.base.as_ref().map(|b| b.updated)),
+                updated,
                 KnownIssue {
                     key: row.key.clone(),
                     summary: text(fields.get("summary")),
                     issue_type,
                     status,
+                    status_category: text(fields.pointer("/status/statusCategory/key")),
+                    priority,
+                    assignee: person(fields.get("assignee")),
+                    reporter: person(fields.get("reporter")),
+                    created: fields
+                        .get("created")
+                        .and_then(|v| v.as_str())
+                        .and_then(crate::api::model::parse_timestamp),
+                    updated,
+                    viewed: row.viewed_at,
                 },
             ));
         }
@@ -239,6 +273,17 @@ fn text(value: Option<&serde_json::Value>) -> String {
         .to_string()
 }
 
+/// Someone's name, for a column that has to be read rather than pushed.
+///
+/// The `@[Name](id)` mention spelling is what the file carries and what a form
+/// writes back; a table cell wants the name on its own, since the id is neither
+/// readable nor something the reader is comparing rows by.
+fn person(value: Option<&serde_json::Value>) -> String {
+    crate::api::normalize::user_ref(value)
+        .map(|u| u.display_name)
+        .unwrap_or_default()
+}
+
 fn array(value: Option<&serde_json::Value>) -> &[serde_json::Value] {
     value
         .and_then(|v| v.as_array())
@@ -268,6 +313,7 @@ mod tests {
             file_path: None,
             parent_key: None,
             deleted_remote: false,
+            viewed_at: None,
         }
     }
 

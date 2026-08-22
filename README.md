@@ -280,7 +280,9 @@ the filename you were just editing instead of retyping the key.
 | `push [ISSUES…]` | send staged changes; shows the plan and asks first when interactive (`-y` skips), `-n/--dry-run` (alias `preview`) prints the exact API calls |
 | `diff [ISSUES…]` | `--against base` (default: what `push` would send) or `--against remote` (what `pull` would bring in); `--stat`, `--exit-code` |
 | `status` | dirty, behind, staged, conflicted; `--all` also lists unchanged issues |
-| `comment ISSUE [-m TEXT]` | stage a comment; without `-m` it opens `$VISUAL`/`$EDITOR`, or reads stdin when piped |
+| `edit [ISSUE]` | change an issue on a form; without an issue, pick one from the list — see [The issue picker](#the-issue-picker) |
+| `logwork [ISSUE] [TIME]` | book time against an issue; fills in a form when either is missing |
+| `comment [ISSUE] [-m TEXT]` | stage a comment; without an issue, pick one from the list; without `-m` it opens `$VISUAL`/`$EDITOR`, or reads stdin when piped |
 | `create --summary S` | write a `NEW-<hex>. Summary.md`; push creates the issue and renames the file to the real key. `--template NAME` starts from `.jired/templates/NAME.md` |
 | `transition ISSUE --to STATUS` | stage a workflow change; `--list` shows what is available, `--field k=v` fills a transition screen |
 | `assign ISSUE --me\|--user Q\|--none` | stage an assignee change |
@@ -293,7 +295,7 @@ the filename you were just editing instead of retyping the key.
 | `resolve` | list and clear recorded conflicts — see above |
 | `reset [ISSUES…]` | drop local changes and put the files back to the last sync; lists what would go and asks first, `-n/--dry-run` just lists, `--include-new` also deletes locally created issues |
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
-| `open [ISSUE]` | open it in a browser, or `--print` the URL; without an issue, pick one from a filtered list |
+| `open [ISSUE]` | open it in a browser, or `--print` the URL; without an issue, pick one from the list |
 | `whoami` | which account, which server, and where the credential is kept |
 | `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address |
 | `doctor` | check the workspace over and repair it — see below |
@@ -301,6 +303,55 @@ the filename you were just editing instead of retyping the key.
 | `completion <shell>` | print a completion script |
 | `agent-docs` | regenerate `CLAUDE.md` and `AGENTS.md` |
 | `schema [NAME]` | the JSON Schema for a command's `--json` output |
+
+### The issue picker
+
+`jired edit`, `jired comment` and `jired open` with no issue named ask which one,
+on a table you narrow by typing:
+
+```
+ Comment on which issue?                                                       12 of 37
+ / sso
+ Key        Summary                     Status        Pri     Assignee       Updated↓
+ PROJ-100   SSO rollout                 To Do         Highest —              2d
+ PROJ-142   Fix login flow              In Progress   High    Ilya A         5d
+```
+
+Typing filters on the key and the summary as a subsequence, so `pl142` finds
+`PLAT-142` and `sso ro` finds the SSO rollout epic. The other columns are data
+rather than filter fodder — typing `aug` finds an issue that says "August", not
+every issue touched last month.
+
+| Key | What it does |
+|---|---|
+| `^s` | sort by the next column, pointing the way that column is usually read |
+| `^r` | reverse the direction |
+| `^f` | narrow to one status, or to a whole status category |
+| `⏎` / `esc` | take the selected issue, or none |
+
+The columns are key, summary, status, priority, assignee, reporter, and the ages
+of `updated`, `created` and `viewed`; the ones that do not fit are dropped from
+the right, keeping the key, the summary and whichever column is sorted. `viewed`
+is when *this machine* last went to the issue — the server does not know it, so
+it starts empty and is lost with `state.db`. Rows with nothing in the column
+being sorted go last in either direction.
+
+`edit` and `comment` list only issues with a file, because that is where they
+stage the change; `open` lists everything the workspace has a snapshot of, since
+a browser URL needs no file.
+
+Sort and filter are settings, so they survive the screen closing:
+
+```sh
+jired config set ui.issues.sort priority:asc          # ^s and ^r write this
+jired config set ui.issues.filter category:done       # ^f writes this
+jired config set ui.issues.filter status:"In Review"
+```
+
+The picker writes them into the workspace config, not the global one — the list
+was rearranged here. `category:` takes Jira's own three buckets (`new`,
+`indeterminate`, `done`), which is what survives a workflow whose statuses are
+named something local.
 
 ### Grouping folders
 

@@ -17,6 +17,7 @@ pub mod list;
 pub mod log;
 pub mod logwork;
 pub mod open;
+pub mod pick;
 pub mod prompt;
 pub mod pull;
 pub mod push;

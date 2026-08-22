@@ -647,6 +647,7 @@ mod tests {
                 summary: "SSO rollout".into(),
                 issue_type: "Epic".into(),
                 status: "To Do".into(),
+                ..Default::default()
             }],
             ..Catalog::default()
         }
