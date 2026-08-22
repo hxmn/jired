@@ -135,11 +135,22 @@ fn seed(args: &LogworkArgs) -> Result<Seed> {
         .started
         .as_ref()
         .map(|text| {
-            crate::api::model::parse_timestamp(text)
-                .map(|t| crate::api::model::format_timestamp(&t))
+            // Read in the timezone the rest of the screen is printed in: a
+            // start time with no offset is one the person meant in their own.
+            // One that names its zone is kept in the words it was written in.
+            crate::api::model::parse_local_timestamp(text)
+                .map(|t| {
+                    if crate::api::model::names_a_zone(text) {
+                        text.trim().to_string()
+                    } else {
+                        crate::api::model::format_local_iso(&t)
+                    }
+                })
                 .ok_or_else(|| {
-                    JiredError::usage(format!("`{text}` is not a timestamp"))
-                        .with_hint("use an ISO-8601 time such as 2026-08-21T09:00:00Z")
+                    JiredError::usage(format!("`{text}` is not a timestamp")).with_hint(
+                        "write it as `2026-08-21 09:00`, which is read in your own \
+                             timezone, or name one — `2026-08-21T09:00:00Z`",
+                    )
                 })
         })
         .transpose()?;
@@ -196,7 +207,7 @@ fn book(ctx: &mut Context, args: &LogworkArgs, seed: Seed) -> Result<Option<Book
         time,
         started: seed
             .started
-            .unwrap_or_else(|| crate::api::model::format_timestamp(&chrono::Utc::now())),
+            .unwrap_or_else(|| crate::api::model::format_local_iso(&chrono::Utc::now())),
         note: seed.note.unwrap_or_default(),
     }))
 }
@@ -265,7 +276,7 @@ fn ask(ui: &Ui, seed: Seed) -> Result<Booking> {
         time,
         started: seed
             .started
-            .unwrap_or_else(|| crate::api::model::format_timestamp(&chrono::Utc::now())),
+            .unwrap_or_else(|| crate::api::model::format_local_iso(&chrono::Utc::now())),
         note: seed.note.unwrap_or_default(),
     })
 }

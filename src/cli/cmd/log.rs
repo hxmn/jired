@@ -202,7 +202,7 @@ fn render(entries: &[LogEntry], total: usize, one: Option<&str>, args: &LogArgs,
             .entry
             .created
             .as_ref()
-            .map(crate::api::model::format_timestamp)
+            .map(crate::api::model::format_local)
             .unwrap_or_default();
         let who = e.entry.author.as_deref().unwrap_or("unknown");
         if width > 0 {

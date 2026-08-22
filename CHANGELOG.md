@@ -40,6 +40,18 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Added
 
+- **Times print in your own timezone.** `jired log`, `jired status` and every
+  message jired writes to a terminal now show `2026-08-16 14:03:00` — your clock,
+  no zone marker — instead of the UTC the server happened to record. What jired
+  *keeps* is unchanged and still UTC: `--json` documents, issue files and their
+  frontmatter, `.jired/state.db`, and everything sent to Jira, because a record
+  has to mean the same thing on every machine that reads it. Where the two meet —
+  a worklog's start time, which the `logwork` form shows you and then writes into
+  the file — the offset is spelled out, so it reads as the clock you were looking
+  at and still names one instant. `--started` and a hand-written `### [new]`
+  worklog heading now accept a time with no zone (`2026-08-21 09:00`), reading it
+  as yours; one that names its zone is kept exactly as written.
+
 - **`jired log` with no issue reads like `git log`.** It merges every issue's
   history into one newest-first list, each entry tagged with the issue it belongs
   to; naming an issue still narrows to it. The first run fetches the changelogs it

@@ -718,7 +718,7 @@ fn worklog_input(
         time_spent: time_spent.to_string(),
         // An entry with no start time is one written just now; leaving it out
         // lets the server date it rather than guessing a time here.
-        started: crate::api::model::parse_timestamp(&w.started),
+        started: crate::api::model::parse_local_timestamp(&w.started),
         comment: if w.body.trim().is_empty() {
             RichText::Empty
         } else {
@@ -1277,8 +1277,8 @@ fn execute(
                 new_key: None,
                 error: Some(format!(
                     "the server changed at {} but this workspace last synced {}",
-                    crate::api::model::format_timestamp(&live),
-                    crate::api::model::format_timestamp(base_updated)
+                    crate::api::model::format_local(&live),
+                    crate::api::model::format_local(base_updated)
                 )),
                 error_kind: Some("conflict".into()),
                 hint: Some(

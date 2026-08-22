@@ -167,6 +167,12 @@ pub fn render() -> String {
          terminal to ask on and exits 7 without one.\n",
     );
     s.push_str(
+        "- A start time that names its zone (`2026-08-15T09:00:00Z`) means \
+         exactly that; one that does not (`2026-08-15 09:00`) is read in the \
+         machine's local timezone. Prefer the first when scripting — it is the \
+         only one that means the same thing on every machine.\n",
+    );
+    s.push_str(
         "- The duration is Jira's own notation — weeks, days, hours, minutes — \
          and is sent as written, because how long a day is is an instance \
          setting. A bare number is refused rather than guessed at.\n",

@@ -8,6 +8,7 @@ use crate::cli::context::Context;
 use crate::error::Result;
 use crate::json::Out;
 use crate::sync::Engine;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +51,10 @@ pub struct WorkspaceStatus {
     pub issues: usize,
     pub last_fetch_at: Option<String>,
     pub last_fetch_age_seconds: Option<i64>,
+    /// The same instant as `last_fetch_at`, kept so the rendered line can be
+    /// shown in the reader's timezone while the JSON field stays UTC.
+    #[serde(skip)]
+    pub last_fetch: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,12 +95,16 @@ impl StatusReport {
                 .unwrap_or_default()
         ));
         match (
-            &self.workspace.last_fetch_at,
+            &self.workspace.last_fetch,
             self.workspace.last_fetch_age_seconds,
         ) {
             (Some(at), Some(age)) => out.say(style::out(
                 DIM,
-                format!("last fetch {at} ({})", humanize_age(age)),
+                format!(
+                    "last fetch {} ({})",
+                    crate::api::model::format_local(at),
+                    humanize_age(age)
+                ),
             )),
             _ => {
                 out.say("never fetched");
@@ -441,6 +450,7 @@ pub fn run(ctx: &mut Context, args: &StatusArgs) -> Result<StatusReport> {
         issues: rows.len(),
         last_fetch_at: last_fetch.as_ref().map(crate::api::model::format_timestamp),
         last_fetch_age_seconds: last_fetch.map(|t| (chrono::Utc::now() - t).num_seconds().max(0)),
+        last_fetch,
     };
 
     Ok(StatusReport {
@@ -502,6 +512,7 @@ mod tests {
                 deployment: None,
                 issues: 0,
                 last_fetch_at: None,
+                last_fetch: None,
                 last_fetch_age_seconds: None,
             },
             dirty: vec![],

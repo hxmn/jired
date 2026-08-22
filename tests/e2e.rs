@@ -2307,6 +2307,84 @@ fn log_shows_the_changelog_newest_first_and_caches_it() {
     assert_eq!(cached["entries"].as_array().unwrap().len(), 2);
 }
 
+/// What jired prints follows the reader's clock; what it records does not.
+///
+/// PROJ-142's newest changelog entry is 2026-08-16T12:03:00Z. Read from Tokyo
+/// that is the 16th at 21:03, and from New York the 16th at 08:03 — but the
+/// JSON says the same thing from either chair, because agents and issue files
+/// need one instant rather than one per machine.
+#[test]
+fn printed_times_follow_the_readers_timezone_and_json_does_not() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let printed = |zone: &str| -> String {
+        let out = ws
+            .cmd(&["log", "PROJ-142"])
+            .env("TZ", zone)
+            .output()
+            .expect("run");
+        assert!(out.status.success(), "`jired log` failed in {zone}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    assert!(printed("Asia/Tokyo").contains("2026-08-16 21:03:00"));
+    assert!(printed("America/New_York").contains("2026-08-16 08:03:00"));
+    assert!(printed("UTC").contains("2026-08-16 12:03:00"));
+    // The zone marker goes with the zone: what is left is the reader's clock.
+    assert!(!printed("Asia/Tokyo").contains('Z'));
+
+    for zone in ["Asia/Tokyo", "America/New_York", "UTC"] {
+        let out = ws
+            .cmd(&["log", "PROJ-142", "--json"])
+            .env("TZ", zone)
+            .output()
+            .expect("run");
+        let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(
+            doc["entries"][0]["created"], "2026-08-16T12:03:00Z",
+            "the record must not move with whoever reads it ({zone})"
+        );
+    }
+}
+
+/// A start time with no zone means the one the reader was just shown; one that
+/// names its zone is kept in the words it was written in. Either way what
+/// reaches Jira is the same instant.
+#[test]
+fn a_worklog_start_time_is_read_in_the_readers_timezone() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let booked = ws
+        .cmd(&[
+            "logwork",
+            "PROJ-142",
+            "2h",
+            "--started",
+            "2026-08-21 09:00",
+            "--json",
+        ])
+        .env("TZ", "Asia/Tokyo")
+        .output()
+        .expect("run");
+    let doc: Value = serde_json::from_slice(&booked.stdout).unwrap();
+    assert_eq!(
+        doc["started"], "2026-08-21T09:00:00+09:00",
+        "read in the reader's zone, and written down with it spelled out"
+    );
+
+    // 09:00 in Tokyo is midnight UTC, which is what the server is told.
+    let push = ws.json(&["push", "--dry-run"]);
+    let sent = push.to_string();
+    assert!(
+        sent.contains("2026-08-21T00:00:00.000+0000"),
+        "the worklog should reach Jira as one instant: {sent}"
+    );
+}
+
 /// With no issue named, `log` reads like `git log`: one merged list over every
 /// issue in the workspace, each entry saying which issue it belongs to.
 #[test]

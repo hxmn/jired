@@ -23,6 +23,19 @@ variables that are not settings; both feed the help text and the agent docs.
 (the session store hardcodes the `default` profile). They come back with
 multi-profile support, not before.
 
+**Timestamps:** what jired *keeps* is UTC — `state.db`, issue files, API payloads
+and every `--json` document — because a record has to mean the same thing on
+every machine that reads it. What jired *prints* is the reader's own timezone:
+`2026-08-16 14:03:00`, no zone marker, because on a screen UTC is a subtraction
+the reader has to do and the offset is one they already know. The pair is
+`model::format_timestamp` and `model::format_local`; anything going to a terminal
+or a TUI uses the second. Where a printed value is also a record — a worklog's
+start time, which the form writes into the issue file — `format_local_iso` keeps
+the offset, so it reads as the author's clock and still names one instant.
+`parse_local_timestamp` is the other direction: it fills in the reader's zone
+when they leave it out, which they will, having just been shown a time without
+one, and never second-guesses an explicit zone.
+
 **Addressing an issue:** any command that names an issue accepts its key (any
 case) or the path to its file — `jired comment "PROJ-0142. Fix login flow.md"`.
 `fetch`, `pull`, `push`, `diff`, `resolve` and `attachments pull|list` take a
@@ -197,6 +210,13 @@ reads the body from stdin when one is piped.
 Books time against the issue by appending a `### [new] 2h 30m — <when>` section
 under `## Worklogs`; `--push` sends immediately. `--started` defaults to now, so
 the entry is dated when the work happened rather than when the push does.
+
+`--started` reads a timestamp that names its zone as exactly that and keeps it in
+the words it was written in; one that does not — `2026-08-21 09:00`, which is
+what someone shown a local time types back — is read in the machine's timezone
+and written down with the offset spelled out, so the file still names one
+instant. The form's presets and its prefilled "now" are local for the same
+reason. Scripts should name the zone.
 
 The duration is Jira's own notation — `2h 30m`, `1d`, `45m` — validated here for
 syntax only and sent as the text it was written as: how long a day is is an

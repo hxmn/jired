@@ -1,10 +1,12 @@
 //! Deployment-neutral shapes the sync engine works with.
 //!
 //! Every timestamp is normalized to UTC on ingest (decision D22) so diffs are
-//! stable regardless of the server's timezone.
+//! stable regardless of the server's timezone. UTC is what jired *keeps*;
+//! [`format_local`] is what it *shows*, and the two must not be confused —
+//! a record that moves with whoever reads it is not a record.
 
 use crate::api::Markup;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -336,9 +338,96 @@ pub fn parse_timestamp(s: &str) -> Option<DateTime<Utc>> {
     None
 }
 
+/// Parse a timestamp a person typed, reading a missing offset as their own.
+///
+/// The server always says which zone it means; a person does not, and having
+/// just been shown a local time they will type one back. Anything with an
+/// offset keeps it — an explicit zone is never second-guessed — so this only
+/// ever fills in a blank.
+pub fn parse_local_timestamp(s: &str) -> Option<DateTime<Utc>> {
+    let s = s.trim();
+    // Naive shapes first: none of them match a string that carries an offset,
+    // and going the other way would let `parse_timestamp` read a bare date as
+    // midnight UTC before this ever saw it.
+    for fmt in [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M",
+    ] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return local_to_utc(naive);
+        }
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        if let Some(naive) = date.and_hms_opt(0, 0, 0) {
+            return local_to_utc(naive);
+        }
+    }
+    parse_timestamp(s)
+}
+
+/// Whether a written timestamp says which zone it is in.
+///
+/// What separates a value to leave in the words it was typed in from one that
+/// has to have a zone put on it before it is written down. A bare date says no
+/// zone, whatever [`parse_timestamp`] is willing to make of it.
+pub fn names_a_zone(s: &str) -> bool {
+    let s = s.trim();
+    DateTime::parse_from_rfc3339(s).is_ok()
+        || ["%Y-%m-%dT%H:%M:%S%.3f%z", "%Y-%m-%dT%H:%M:%S%z"]
+            .iter()
+            .any(|fmt| DateTime::parse_from_str(s, fmt).is_ok())
+}
+
+/// Pin a wall-clock reading to an instant.
+///
+/// The hour a clock skips forward over never happened and the hour it repeats
+/// happened twice; taking the earliest candidate answers both with the reading
+/// closest to what was meant, rather than refusing an otherwise good time.
+fn local_to_utc(naive: chrono::NaiveDateTime) -> Option<DateTime<Utc>> {
+    use chrono::offset::LocalResult;
+    match Local.from_local_datetime(&naive) {
+        LocalResult::Single(dt) => Some(dt.with_timezone(&Utc)),
+        LocalResult::Ambiguous(earlier, _) => Some(earlier.with_timezone(&Utc)),
+        LocalResult::None => Local
+            .from_local_datetime(&(naive + chrono::Duration::hours(1)))
+            .earliest()
+            .map(|dt| dt.with_timezone(&Utc)),
+    }
+}
+
 /// Serialize a timestamp the way jired writes it everywhere.
+///
+/// UTC, because this is what goes into `state.db`, into issue files, into API
+/// payloads and into `--json` documents — records, which have to mean the same
+/// thing on every machine that reads them. Text on a screen is the opposite
+/// case; see [`format_local`].
 pub fn format_timestamp(dt: &DateTime<Utc>) -> String {
     dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// The same instant as the person reading it lives it.
+///
+/// Everything jired prints to a terminal goes through here. On a screen UTC is
+/// not a fact, it is a subtraction the reader has to do, and the offset is one
+/// they already know — so the zone marker goes too and what is left is the time
+/// their own clock shows.
+pub fn format_local(dt: &DateTime<Utc>) -> String {
+    dt.with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+/// A local time that also has to survive being read back.
+///
+/// For the values shown on screen that are *also* records — a worklog's start
+/// time, which the form writes into the issue file. It keeps the offset, so it
+/// is every bit as unambiguous as a `Z` timestamp while still reading as the
+/// clock the person authoring it was looking at.
+pub fn format_local_iso(dt: &DateTime<Utc>) -> String {
+    dt.with_timezone(&Local)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// Format a JQL timestamp literal in the shape Jira's parser accepts.
@@ -362,6 +451,46 @@ mod tests {
         assert_eq!(cloud, zulu);
 
         assert!(parse_timestamp("not a date").is_none());
+    }
+
+    /// The instant is unchanged; only the clock it is read off is.
+    #[test]
+    fn a_local_rendering_names_the_same_instant() {
+        let t = parse_timestamp("2026-08-16T12:03:00Z").unwrap();
+        assert_eq!(parse_timestamp(&format_local_iso(&t)), Some(t));
+        // Display drops the zone marker, so it is the reader's own clock or
+        // nothing — never UTC wearing a local face.
+        assert!(!format_local(&t).ends_with('Z'));
+        assert_eq!(format_local(&t).len(), "2026-08-16 12:03:00".len());
+    }
+
+    /// Whatever the form prints, someone can type back.
+    #[test]
+    fn a_time_typed_without_a_zone_is_read_as_the_readers_own() {
+        let t = parse_timestamp("2026-08-16T12:03:00Z").unwrap();
+        let shown = format_local(&t);
+        assert_eq!(parse_local_timestamp(&shown), Some(t));
+
+        // The same reading without seconds, which is how people write times.
+        let to_the_minute = shown.rsplit_once(':').map(|(head, _)| head).unwrap();
+        assert_eq!(parse_local_timestamp(to_the_minute), Some(t));
+    }
+
+    /// An explicit zone is never second-guessed.
+    #[test]
+    fn a_time_that_names_its_zone_keeps_it() {
+        for text in [
+            "2026-08-16T12:03:00Z",
+            "2026-08-16T14:03:00+02:00",
+            "2026-08-16T14:03:00.000+0200",
+        ] {
+            assert_eq!(
+                parse_local_timestamp(text),
+                parse_timestamp(text),
+                "{text} should parse the same either way"
+            );
+        }
+        assert!(parse_local_timestamp("not a date").is_none());
     }
 
     #[test]

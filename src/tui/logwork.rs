@@ -129,7 +129,7 @@ impl LogworkScreen {
         fields[STARTED].set(Some(
             seed.started
                 .clone()
-                .unwrap_or_else(|| crate::api::model::format_timestamp(&now))
+                .unwrap_or_else(|| crate::api::model::format_local_iso(&now))
                 .as_str(),
         ));
 
@@ -154,7 +154,7 @@ impl LogworkScreen {
             started: self.fields[STARTED]
                 .filled()
                 .map(str::to_string)
-                .unwrap_or_else(|| crate::api::model::format_timestamp(&self.now)),
+                .unwrap_or_else(|| crate::api::model::format_local_iso(&self.now)),
             note: self.fields[NOTE].text().trim().to_string(),
         }
     }
@@ -181,9 +181,20 @@ impl LogworkScreen {
             return self.refuse(TIME, format!("`{time}` is not a length of time"));
         }
 
+        // A start time with no zone means the reader's own — the one the field
+        // was showing them — and only that case is rewritten, with the offset
+        // spelled out so the issue file names one instant rather than one per
+        // machine. A time that already says which zone it is in is left in the
+        // words it was typed in.
         if let Some(started) = self.fields[STARTED].filled() {
-            if crate::api::model::parse_timestamp(started).is_none() {
-                return self.refuse(STARTED, format!("`{started}` is not a timestamp"));
+            let named_a_zone = crate::api::model::names_a_zone(started);
+            match crate::api::model::parse_local_timestamp(started) {
+                None => return self.refuse(STARTED, format!("`{started}` is not a timestamp")),
+                Some(t) if !named_a_zone => {
+                    let spelled_out = crate::api::model::format_local_iso(&t);
+                    self.fields[STARTED].set(Some(&spelled_out));
+                }
+                Some(_) => {}
             }
         }
 
@@ -453,13 +464,13 @@ impl LogworkScreen {
 /// opened. The value is what the file carries; the detail is what it means.
 fn start_presets(now: DateTime<Utc>) -> Vec<Item> {
     let mut out =
-        vec![Item::new(crate::api::model::format_timestamp(&now)).with_detail("just now")];
+        vec![Item::new(crate::api::model::format_local_iso(&now)).with_detail("just now")];
     for hours in [1, 2, 4, 8] {
         let when = now - Duration::hours(hours);
-        out.push(Item::new(crate::api::model::format_timestamp(&when)).with_detail(ago(now, when)));
+        out.push(Item::new(crate::api::model::format_local_iso(&when)).with_detail(ago(now, when)));
     }
     let yesterday = now - Duration::days(1);
-    out.push(Item::new(crate::api::model::format_timestamp(&yesterday)).with_detail("yesterday"));
+    out.push(Item::new(crate::api::model::format_local_iso(&yesterday)).with_detail("yesterday"));
     out
 }
 
@@ -486,6 +497,13 @@ mod tests {
 
     fn now() -> DateTime<Utc> {
         crate::api::model::parse_timestamp("2026-08-21T13:00:00Z").expect("a fixed clock")
+    }
+
+    /// What the form writes for an instant, in whatever zone the test machine
+    /// keeps. Spelling the expected value as a literal would only assert that
+    /// the machine running the suite is on UTC.
+    fn shown(dt: DateTime<Utc>) -> String {
+        crate::api::model::format_local_iso(&dt)
     }
 
     fn issues() -> Vec<KnownIssue> {
@@ -534,7 +552,7 @@ mod tests {
     fn the_form_starts_on_the_issue_with_the_clock_already_filled_in() {
         let screen = screen();
         assert_eq!(screen.focus, ISSUE);
-        assert_eq!(screen.fields[STARTED].text(), "2026-08-21T13:00:00Z");
+        assert_eq!(screen.fields[STARTED].text(), shown(now()));
     }
 
     /// With the issue already named, the duration is what is being asked for.
@@ -551,7 +569,7 @@ mod tests {
         let booking = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(booking.issue, "PROJ-142");
         assert_eq!(booking.time, "2h 30m");
-        assert_eq!(booking.started, "2026-08-21T13:00:00Z");
+        assert_eq!(booking.started, shown(now()));
         assert!(booking.note.is_empty());
     }
 
@@ -706,7 +724,10 @@ mod tests {
         screen.handle(ctrl('l'));
         screen.handle(key(KeyCode::Down));
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.fields[STARTED].text(), "2026-08-21T12:00:00Z");
+        assert_eq!(
+            screen.fields[STARTED].text(),
+            shown(now() - Duration::hours(1))
+        );
     }
 
     #[test]

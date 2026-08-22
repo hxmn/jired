@@ -731,7 +731,9 @@ fn parse_worklog_heading(text: &str) -> Result<WorklogEntry> {
 
     let (mut author, mut started) = (String::new(), String::new());
     for part in parts {
-        if started.is_empty() && crate::api::model::parse_timestamp(&part).is_some() {
+        // A start time written by hand may name no zone; it means the one the
+        // person writing it is in, which is also the one jired showed them.
+        if started.is_empty() && crate::api::model::parse_local_timestamp(&part).is_some() {
             started = part;
         } else if author.is_empty() {
             author = part;

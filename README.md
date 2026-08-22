@@ -63,6 +63,10 @@ jired pull --json --no-input || test $? -eq 5   # 5 means conflicts; the default
 jired schema pull                               # JSON Schema for that output
 ```
 
+Timestamps in JSON documents, in issue files and on the wire are UTC, so they
+mean the same thing on every machine. Only the text jired prints to a terminal
+follows the reader's timezone — see [Times](#times).
+
 ## What a file looks like
 
 ````markdown
@@ -204,6 +208,38 @@ $EDITOR "PROJ-0142. Fix login flow.md" && jired resolve --done
 
 `--done` refuses any file that still contains markers, so `<<<<<<<` cannot reach
 Jira.
+
+### Times
+
+What jired prints is your own clock:
+
+```
+$ jired log
+PROJ-142  2026-08-16 14:03:00  Ilya A
+    priority         Medium → High
+```
+
+That is the reader's timezone, taken from the machine (`TZ` and the system zone),
+with no zone marker — the offset is one you already know, and UTC on a screen is
+only a subtraction to do. `log`, `status` and every message jired writes to the
+terminal follow it, and so do the times the `logwork` form shows and prefills.
+
+What jired *keeps* stays UTC, because a record has to mean the same thing on
+every machine that reads it: `--json` documents, the timestamps in issue files
+and frontmatter, `.jired/state.db`, and everything sent to Jira.
+
+Where the two meet — a worklog's start time, which the form shows you and then
+writes into the file — the offset is spelled out, so it reads as the clock you
+were looking at and still names one instant:
+
+```sh
+jired logwork PROJ-142 "2h" --started "2026-08-21 09:00"    # your timezone
+jired logwork PROJ-142 "2h" --started "2026-08-21T09:00:00Z" # exactly that
+```
+
+A time that names its zone is kept in the words you wrote it in. One that does
+not is read in yours — which is what you will type, having just been shown a time
+without one. Scripts should name the zone.
 
 ## Commands
 
