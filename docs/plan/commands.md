@@ -273,28 +273,53 @@ already on disk. A read, so it works offline and costs one pass over the working
 copy; what it cannot see is time booked since the last `pull`, which is why
 every rendering carries the age of the snapshot.
 
-The window is `--days N` whole UTC days ending with today (default 7), not a
-rolling `N × 24h`: the question is asked in days, and an entry booked at 09:00
-seven days ago should not drop out of a seven-day report because it is now
-10:00. It has no upper edge — time booked for later today is still time booked,
-and hiding it would print a total that does not add up.
+The shape is a grid: a row per person, a column per day, a total down the right
+and along the bottom. `--days N` (default 7) is how many columns, whole UTC days
+ending with today — not a rolling `N × 24h`, because the question is asked in
+days and an entry booked at 09:00 seven days ago should not drop out of a
+seven-day report because it is now 10:00. Every entry therefore falls in exactly
+one column, and `dates`/`by_day` in the JSON are that grid in the order it is
+drawn. The columns are the one printed thing that does not move with the reader:
+a date range is what the window counts, not a clock reading, while the `last
+fetch` line beside it is a clock reading and is shown as their own.
 
 Totals are shown in hours and minutes and never in days, for the same reason
 `logwork` sends the duration as written: how long a working day is is an
-instance setting. Entries staged locally count towards whoever will push them —
-a `### [new]` heading names no author because the author is decided by the push
-— and are reported separately (`staged_seconds`, drawn hollow in the bar) so
-"on the server" and "on my disk" never look like the same claim. A worklog whose
-start or duration cannot be read is counted under `skipped` rather than dropped
-silently.
+instance setting. A cell says the same thing in the two or three characters a
+column has — `2h30`, `45m`, `·` for a day nothing was booked on. Entries staged
+locally count towards whoever will push them — a `### [new]` heading names no
+author because the author is decided by the push — and are reported separately
+(`staged_seconds`) so "on the server" and "on my disk" never look like the same
+claim. A worklog whose start or duration cannot be read is counted under
+`skipped` rather than dropped silently.
 
-In a terminal it opens as a screen: one row per person, most time first, with a
-bar for their share. With `--show-issues` a person opens (→, ⏎ or space; ← to
-close, `a` for all of them) into the issues their time went to, biggest first —
-the level exists on a screen because on a printed report it either buries the
-totals or never gets asked for. Everywhere else — a pipe, `--json`, `--quiet`,
-`--no-input`, a dumb terminal — the same figures print as a table, and the JSON
-document (`jired schema report-time`) carries the issue breakdown either way.
+In a terminal it opens as a screen, and the keys are the reason it is one rather
+than a printed table: the window can be re-asked without re-running the command.
+
+| Key | What it does |
+|---|---|
+| `↑` `↓` | move between rows |
+| `→` `⏎` | open a person into the issues their time went to, biggest first |
+| `←` | close them again, from the person or from inside them |
+| `i` | open or shut that level for everybody — the same state `--show-issues` starts in |
+| `+` `-` | one day more or less in the window |
+| `<` `>` | the window before this one, or after it — a whole width at a time, so a week steps to the week before |
+| `t` | back to a window ending today |
+| `?` | the key card |
+| `q` `esc` | leave |
+
+Each of those re-aggregates from the files already in memory, which is cheap
+enough that no pre-computed grid has to be kept in step with a moving window.
+A window too wide for a figure per column falls back to a heat map — the shape
+of a month is readable when the figures in it are not — and one too wide even
+for that keeps its most recent columns and says in the frame how many earlier
+days are not drawn, because the totals still cover all of them.
+
+Everywhere a screen cannot run — a pipe, `--json`, `--quiet`, `--no-input`, a
+dumb terminal — the same grid prints as a table, with the day columns dropped
+(not wrapped) once the line would pass 100 characters; `--show-issues` is then
+the only way to the second level. The JSON document (`jired schema report-time`)
+carries the whole grid either way.
 
 ### `jired create [--type Story] [--template T] [--summary S] [-i]`
 Writes `NEW-<6hex>. Summary.md` (D14) from template; real key assigned on push

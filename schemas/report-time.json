@@ -9,8 +9,10 @@
     "days",
     "since",
     "until",
+    "dates",
     "seconds",
     "staged_seconds",
+    "by_day",
     "entries",
     "skipped",
     "people"
@@ -22,7 +24,7 @@
     "days": {
       "type": "integer",
       "minimum": 1,
-      "description": "Whole days counted, today included"
+      "description": "Whole days counted, one column each"
     },
     "since": {
       "type": "string",
@@ -30,7 +32,15 @@
     },
     "until": {
       "type": "string",
-      "description": "When the report was taken, ISO-8601 in UTC"
+      "description": "Midnight UTC of the day after the last one counted, ISO-8601"
+    },
+    "dates": {
+      "type": "array",
+      "description": "The day each column stands for, oldest first. Every by_day array in this document is in this order and of this length.",
+      "items": {
+        "type": "string",
+        "description": "YYYY-MM-DD, UTC"
+      }
     },
     "project": {
       "type": ["string", "null"],
@@ -53,6 +63,10 @@
       "minimum": 0,
       "description": "The part of `seconds` not yet pushed to Jira"
     },
+    "by_day": {
+      "$ref": "#/$defs/by_day",
+      "description": "Column totals: what everyone booked on each day"
+    },
     "entries": {
       "type": "integer",
       "minimum": 0
@@ -71,6 +85,7 @@
           "name",
           "seconds",
           "staged_seconds",
+          "by_day",
           "entries",
           "issues"
         ],
@@ -86,6 +101,9 @@
             "type": "integer",
             "minimum": 0
           },
+          "by_day": {
+            "$ref": "#/$defs/by_day"
+          },
           "entries": {
             "type": "integer",
             "minimum": 0
@@ -100,6 +118,7 @@
                 "summary",
                 "seconds",
                 "staged_seconds",
+                "by_day",
                 "entries"
               ],
               "properties": {
@@ -117,6 +136,9 @@
                   "type": "integer",
                   "minimum": 0
                 },
+                "by_day": {
+                  "$ref": "#/$defs/by_day"
+                },
                 "entries": {
                   "type": "integer",
                   "minimum": 0
@@ -125,6 +147,16 @@
             }
           }
         }
+      }
+    }
+  },
+  "$defs": {
+    "by_day": {
+      "type": "array",
+      "description": "Seconds booked on each day of `dates`, in that order",
+      "items": {
+        "type": "integer",
+        "minimum": 0
       }
     }
   }

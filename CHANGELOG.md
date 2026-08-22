@@ -121,12 +121,15 @@ before something destructive, what an error says, and what the docs claim.
   what would go, field by field; the listing precedes the confirmation, and a
   non-interactive run needs `-y` or exits 7.
 
-- **`jired report time`** — who booked how much time, totalled off the
-  `## Worklogs` sections already in the working copy, so it answers offline.
-  `--days N` sets the window (whole days, today included, default 7) and
-  `--show-issues` opens each person into the issues their time went to. In a
-  terminal it is a screen; a pipe, `--json` or `--no-input` gets the same figures
-  as a table and as a `jired/report-time/1` document.
+- **`jired report time`** — who booked how much time, as a grid of a row per
+  person and a column per day, totalled off the `## Worklogs` sections already in
+  the working copy, so it answers offline. `--days N` sets the window (whole
+  days, today included, default 7) and `--show-issues` opens each person into the
+  issues their time went to. In a terminal it is a screen whose keys re-ask the
+  question without re-running the command: `i` for the issue level, `+`/`-` for
+  the width of the window, `<`/`>` to walk it back over earlier weeks, `t` to
+  return to today, `?` for the rest. A pipe, `--json` or `--no-input` gets the
+  same grid as a table and as a `jired/report-time/1` document.
 
 - **Install and licence.** `LICENSE-MIT` and `LICENSE-APACHE`, and a README
   install section: `cargo install --git … --locked --bin jired`, Rust ≥ 1.89, and

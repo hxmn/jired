@@ -182,10 +182,11 @@ pub fn render() -> String {
          only deletes it with `--allow-worklog-delete`.\n",
     );
     s.push_str(
-        "- `jired report time --days 7 --json` totals the booked time per person \
-         and per issue. It reads these files rather than the server, so `pull` \
-         first; the document says when the snapshot was last refreshed and how \
-         much of the total is still staged.\n\n",
+        "- `jired report time --days 7 --json` totals the booked time per person, \
+         per day and per issue: `dates` is a day per column and every `by_day` \
+         array is in that order and of that length. It reads these files rather \
+         than the server, so `pull` first; the document says when the snapshot \
+         was last refreshed and how much of the total is still staged.\n\n",
     );
 
     s.push_str("## Children and checklists\n\n");

@@ -8,25 +8,25 @@ use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, Result};
 use crate::json::Out;
-use crate::report::{TimeReport, Window};
+use crate::report::{Source, MAX_DAYS};
 use crate::sync::Engine;
 use crate::tui::report::ReportScreen;
 use clap::{Args, Subcommand};
 
 #[derive(Subcommand, Debug)]
 pub enum ReportCmd {
-    /// How much time everyone booked, by person
+    /// How much time everyone booked, by person and by day
     Time(TimeArgs),
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct TimeArgs {
-    /// How many days to count, today included
+    /// How many days to count, today included — one column each
     #[arg(
         long,
         value_name = "N",
         default_value_t = 7,
-        value_parser = clap::value_parser!(u32).range(1..=3650),
+        value_parser = clap::value_parser!(u32).range(1..=MAX_DAYS as i64),
     )]
     pub days: u32,
 
@@ -52,23 +52,27 @@ fn time(g: &GlobalArgs, args: &TimeArgs, out: Out) -> Result<ExitCode> {
         issues.push(engine.projector.read(&file.relative)?);
     }
 
-    let window = Window::last(args.days, chrono::Utc::now());
-    let me = engine.account.display_name.clone().unwrap_or_default();
-    let mut report = TimeReport::build(&window, &me, &issues);
-    report.project = ctx
-        .resolver
-        .get_quiet("workspace.project")?
-        .filter(|p| !p.is_empty());
-    if let Some(at) = engine.state.last_fetch_at()? {
-        report.last_fetch_at = Some(crate::api::model::format_timestamp(&at));
-        report.last_fetch = Some(at);
-        report.last_fetch_age_seconds = Some((chrono::Utc::now() - at).num_seconds().max(0));
-    }
+    let last_fetch = engine.state.last_fetch_at()?;
+    let now = chrono::Utc::now();
+    let source = Source {
+        issues: &issues,
+        me: engine.account.display_name.clone().unwrap_or_default(),
+        now,
+        project: ctx
+            .resolver
+            .get_quiet("workspace.project")?
+            .filter(|p| !p.is_empty()),
+        last_fetch,
+        last_fetch_age_seconds: last_fetch.map(|at| (now - at).num_seconds().max(0)),
+    };
+    let report = source.report(args.days, 0);
 
     // The screen is a way of reading the report, not of producing it: the
     // document is emitted either way, and a pipe or `--no-input` gets the table.
+    // Only the screen can move the window, so what is emitted is always the
+    // window the command line asked for.
     if !out.json && !out.quiet && ctx.resolver.interactive() && crate::tui::available() {
-        let mut screen = ReportScreen::new(&report, args.show_issues);
+        let mut screen = ReportScreen::new(&source, args.days, args.show_issues);
         crate::tui::run(&mut screen)?;
     } else {
         report.render(out, args.show_issues);

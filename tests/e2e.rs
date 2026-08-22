@@ -1960,6 +1960,31 @@ fn report_time_totals_what_everyone_booked() {
     assert_eq!(people[0]["issues"][0]["key"], "PROJ-142");
     assert_eq!(people[0]["issues"][0]["summary"], "Fix login flow");
     assert_eq!(people[0]["issues"][0]["seconds"], 9000);
+
+    // A column per day of the window, and every entry in the column of the day
+    // it was booked on: Jane's two and a half hours on the 15th, the account's
+    // hour on the 16th.
+    let dates = report["dates"].as_array().unwrap();
+    assert_eq!(dates.len(), 3650);
+    let column = |day: &str| {
+        dates
+            .iter()
+            .position(|d| d == day)
+            .unwrap_or_else(|| panic!("{day} is not a column"))
+    };
+    let by_day = |who: &Value| {
+        who["by_day"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(by_day(&people[0])[column("2026-08-15")], 9000);
+    assert_eq!(by_day(&people[1])[column("2026-08-16")], 3600);
+    assert_eq!(by_day(&people[0]), by_day(&people[0]["issues"][0]));
+    // The column totals are the same figures, added up the other way.
+    assert_eq!(by_day(&report).iter().sum::<u64>(), 9000 + 3600);
 }
 
 /// Time staged locally has no author yet — the author is whoever pushes it — so
