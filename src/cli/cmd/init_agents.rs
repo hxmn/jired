@@ -1,13 +1,18 @@
-//! `jired agent-docs` [M5.2] — generate CLAUDE.md and AGENTS.md.
+//! `jired init-agents` [M5.2] — set an agent up to work in this workspace:
+//! the instructions it reads, and the permission to run the commands that only
+//! read.
 //!
-//! The env-var table, exit codes and command list are rendered from the same
-//! definitions the CLI itself uses, so the docs cannot drift from the binary.
+//! Two halves, one source of truth each. The env-var table, exit codes and
+//! command list in `CLAUDE.md`/`AGENTS.md` are rendered from the same
+//! definitions the CLI itself uses, so the docs cannot drift from the binary;
+//! the permission files are rendered from [`READ_ONLY`], so Claude's allow-list
+//! and Codex's execpolicy rules cannot drift from each other.
 
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::config::keys;
 use crate::doc::frontmatter;
-use crate::error::{ExitCode, Result};
+use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use clap::{Args, CommandFactory};
 use std::path::Path;
@@ -15,38 +20,222 @@ use std::path::Path;
 pub const BEGIN: &str = "<!-- BEGIN jired -->";
 pub const END: &str = "<!-- END jired -->";
 
-#[derive(Args, Debug, Clone, Default)]
-pub struct AgentDocsArgs {
-    /// Print the generated documentation instead of writing files
-    #[arg(long)]
-    pub print: bool,
+/// Sentinels for the Starlark rules file, whose comments start with `#`.
+pub const RULES_BEGIN: &str = "# BEGIN jired";
+pub const RULES_END: &str = "# END jired";
+
+/// Claude Code reads its allow-list from here; the file is the project's, so
+/// entries that are not ours are left alone.
+pub const CLAUDE_SETTINGS: &str = ".claude/settings.json";
+/// Codex loads every `.rules` file under a trusted project's `.codex/rules/`.
+pub const CODEX_RULES: &str = ".codex/rules/default.rules";
+
+/// A command an agent may run without stopping to ask, and why it is on the
+/// list.
+///
+/// The line drawn here: the command sends nothing to Jira and writes nothing
+/// into the working copy. Refreshing the read-only snapshot under `.jired/` is
+/// allowed — that is machine state describing what the server holds, and no
+/// file a person edits changes because of it.
+pub struct ReadOnly {
+    /// The argv prefix, `jired` included. Anything after it is still matched:
+    /// both permission systems match on a prefix of the command line.
+    pub argv: &'static [&'static str],
+    /// Why running it changes nothing. Read by a person deciding whether to
+    /// keep the entry, and by an agent's approval prompt.
+    pub why: &'static str,
 }
 
-pub fn run(g: &GlobalArgs, args: &AgentDocsArgs, out: Out) -> Result<ExitCode> {
+const fn ro(argv: &'static [&'static str], why: &'static str) -> ReadOnly {
+    ReadOnly { argv, why }
+}
+
+pub const READ_ONLY: &[ReadOnly] = &[
+    ro(
+        &["jired", "status"],
+        "reads the working copy and the snapshot: what is dirty, behind, or conflicted",
+    ),
+    // `st` is the same command under its visible alias, and a permission
+    // system matching literal text does not know that.
+    ro(&["jired", "st"], "the alias for `jired status`"),
+    ro(
+        &["jired", "diff"],
+        "compares the working copy against the snapshot; sends nothing",
+    ),
+    ro(
+        &["jired", "log"],
+        "prints what changed, newest first; `--refresh` only updates the snapshot",
+    ),
+    ro(
+        &["jired", "report"],
+        "totals what the files on disk already say",
+    ),
+    ro(
+        &["jired", "search"],
+        "runs a JQL query and prints the matches",
+    ),
+    ro(
+        &["jired", "fetch"],
+        "downloads server state into the snapshot without touching a file",
+    ),
+    ro(
+        &["jired", "pull", "--dry-run"],
+        "reports what a pull would write, and writes none of it",
+    ),
+    ro(
+        &["jired", "push", "--dry-run"],
+        "prints the exact API calls, and sends none of them",
+    ),
+    ro(
+        &["jired", "reset", "--dry-run"],
+        "lists what a reset would drop, field by field",
+    ),
+    ro(
+        &["jired", "clean", "--dry-run"],
+        "lists the files a clean would remove",
+    ),
+    ro(
+        &["jired", "doctor", "--dry-run"],
+        "reports every repair it would make, and makes none",
+    ),
+    ro(
+        &["jired", "resolve", "--list"],
+        "names the issue and field behind each recorded conflict",
+    ),
+    ro(
+        &["jired", "attachments", "list"],
+        "says which attachments exist and whether their content is here",
+    ),
+    ro(&["jired", "whoami"], "reports the authenticated account"),
+    ro(
+        &["jired", "projects"],
+        "lists the projects the account sees",
+    ),
+    ro(&["jired", "boards"], "lists boards"),
+    ro(&["jired", "sprints"], "lists sprints"),
+    ro(
+        &["jired", "config", "get"],
+        "prints one effective setting; the writes are `set`, `add`, `remove`, `unset`",
+    ),
+    ro(
+        &["jired", "config", "list"],
+        "prints every setting and where it came from",
+    ),
+    ro(
+        &["jired", "config", "path"],
+        "prints the path a config write would go to",
+    ),
+    ro(
+        &["jired", "schema"],
+        "prints JSON Schemas for the machine-readable output",
+    ),
+    ro(
+        &["jired", "completion"],
+        "prints a shell completion script on stdout",
+    ),
+    ro(
+        &["jired", "init-agents", "--print"],
+        "prints the files this command would write instead of writing them",
+    ),
+];
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct InitAgentsArgs {
+    /// Print what would be written instead of writing it
+    #[arg(long)]
+    pub print: bool,
+
+    /// Only refresh CLAUDE.md and AGENTS.md, not the permission files
+    #[arg(long, conflicts_with = "no_docs")]
+    pub no_permissions: bool,
+
+    /// Only refresh the permission files, not CLAUDE.md and AGENTS.md
+    #[arg(long)]
+    pub no_docs: bool,
+}
+
+pub fn run(g: &GlobalArgs, args: &InitAgentsArgs, out: Out) -> Result<ExitCode> {
     let ctx = Context::open(g, out)?;
     let body = render();
+    // `out.say` rather than `println!`: a reader that closed the pipe
+    // (`jired init-agents --print | head`) should end the run, not panic in the
+    // middle of it.
     if args.print {
-        println!("{body}");
+        if !args.no_docs {
+            out.say("==> CLAUDE.md, AGENTS.md\n");
+            out.say(&body);
+        }
+        if !args.no_permissions {
+            out.say(format!("\n==> {CLAUDE_SETTINGS}\n"));
+            out.say(claude_settings(&serde_json::json!({}))?);
+            out.say(format!("\n==> {CODEX_RULES}\n"));
+            out.say(codex_rules());
+        }
         return Ok(ExitCode::Success);
     }
+
+    let root = ctx.workspace.root();
     let mut written = Vec::new();
-    for name in ["CLAUDE.md", "AGENTS.md"] {
-        let path = ctx.workspace.root().join(name);
-        write_managed_block(&path, &body)?;
-        written.push(name.to_string());
+    if !args.no_docs {
+        for name in ["CLAUDE.md", "AGENTS.md"] {
+            write_managed_block(&root.join(name), &body)?;
+            written.push(name.to_string());
+        }
+    }
+    if !args.no_permissions {
+        write_permissions(root)?;
+        written.push(CLAUDE_SETTINGS.to_string());
+        written.push(CODEX_RULES.to_string());
+    }
+    for name in &written {
         out.say(format!("wrote {name}"));
     }
-    out.emit("agent-docs", &serde_json::json!({ "files": written }));
+    if !args.no_permissions {
+        out.say(format!(
+            "{} read-only command(s) may now run without asking",
+            READ_ONLY.len()
+        ));
+        // Codex ignores a project's `.codex/` until the project is trusted, so
+        // a rules file that silently does nothing is the likely first
+        // experience unless this is said out loud.
+        out.say("codex applies these rules once you trust this project's .codex/ layer");
+    }
+    out.emit(
+        "init-agents",
+        &serde_json::json!({
+            "files": written,
+            "permissions": permission_entries(),
+        }),
+    );
     Ok(ExitCode::Success)
+}
+
+/// Write both permission files, returning whether either of them changed.
+pub fn write_permissions(root: &Path) -> Result<bool> {
+    let claude = write_claude_settings(&root.join(CLAUDE_SETTINGS))?;
+    let codex = write_block(
+        &root.join(CODEX_RULES),
+        &codex_rules(),
+        RULES_BEGIN,
+        RULES_END,
+    )?;
+    Ok(claude || codex)
 }
 
 /// Replace only our sentinel block so user-authored notes survive regeneration.
 pub fn write_managed_block(path: &Path, body: &str) -> Result<()> {
+    write_block(path, body, BEGIN, END)?;
+    Ok(())
+}
+
+/// Rewrite the region between `begin` and `end`, leaving the rest of the file
+/// as it was. Returns whether anything on disk changed.
+pub fn write_block(path: &Path, body: &str, begin: &str, end: &str) -> Result<bool> {
     let existing = std::fs::read_to_string(path).unwrap_or_default();
-    let block = format!("{BEGIN}\n{body}\n{END}\n");
-    let updated = match (existing.find(BEGIN), existing.find(END)) {
+    let block = format!("{begin}\n{body}\n{end}\n");
+    let updated = match (existing.find(begin), existing.find(end)) {
         (Some(s), Some(e)) if e > s => {
-            let e_end = e + END.len();
+            let e_end = e + end.len();
             let e_end = existing[e_end..]
                 .find('\n')
                 .map(|n| e_end + n + 1)
@@ -56,8 +245,121 @@ pub fn write_managed_block(path: &Path, body: &str) -> Result<()> {
         _ if existing.trim().is_empty() => block,
         _ => format!("{}\n{}", existing.trim_end(), block),
     };
+    if updated == existing {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(path, updated)?;
-    Ok(())
+    Ok(true)
+}
+
+/// The allow-list entries Claude Code understands, one per read-only command.
+pub fn permission_entries() -> Vec<String> {
+    READ_ONLY
+        .iter()
+        .map(|r| format!("Bash({}:*)", r.argv.join(" ")))
+        .collect()
+}
+
+/// Whether `settings` already grants every read-only command.
+pub fn claude_settings_current(settings: &serde_json::Value) -> bool {
+    let allow = settings
+        .get("permissions")
+        .and_then(|p| p.get("allow"))
+        .and_then(|a| a.as_array());
+    let Some(allow) = allow else {
+        return false;
+    };
+    permission_entries()
+        .iter()
+        .all(|entry| allow.iter().any(|v| v.as_str() == Some(entry.as_str())))
+}
+
+/// Add the missing entries to a settings document, pretty-printed.
+///
+/// Additive on purpose. The file belongs to the project, not to jired: an entry
+/// someone added by hand — including one for a command jired stopped
+/// generating — is a decision, and regenerating docs is no reason to overrule
+/// it.
+pub fn claude_settings(existing: &serde_json::Value) -> Result<String> {
+    let mut doc = match existing {
+        serde_json::Value::Object(_) => existing.clone(),
+        serde_json::Value::Null => serde_json::json!({}),
+        other => {
+            return Err(JiredError::generic(format!(
+                "{CLAUDE_SETTINGS} holds {other}, not an object"
+            )))
+        }
+    };
+    let allow = doc
+        .as_object_mut()
+        .expect("just built as an object")
+        .entry("permissions")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| {
+            JiredError::generic(format!("{CLAUDE_SETTINGS}: `permissions` is not an object"))
+        })?
+        .entry("allow")
+        .or_insert_with(|| serde_json::json!([]));
+    let allow = allow.as_array_mut().ok_or_else(|| {
+        JiredError::generic(format!(
+            "{CLAUDE_SETTINGS}: `permissions.allow` is not an array"
+        ))
+    })?;
+    for entry in permission_entries() {
+        if !allow.iter().any(|v| v.as_str() == Some(entry.as_str())) {
+            allow.push(serde_json::Value::String(entry));
+        }
+    }
+    Ok(serde_json::to_string_pretty(&doc)?)
+}
+
+fn write_claude_settings(path: &Path) -> Result<bool> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let parsed: serde_json::Value = if existing.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&existing).map_err(|e| {
+            JiredError::generic(format!("{CLAUDE_SETTINGS} is not valid JSON: {e}"))
+                .with_hint("fix or delete the file, then run `jired init-agents` again")
+        })?
+    };
+    let updated = format!("{}\n", claude_settings(&parsed)?);
+    if updated == existing {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, updated)?;
+    Ok(true)
+}
+
+/// The Starlark body of the Codex execpolicy file, sentinels excluded.
+pub fn codex_rules() -> String {
+    let mut s = String::new();
+    s.push_str("# jired commands that only read. Every one of them sends nothing to\n");
+    s.push_str("# Jira and writes nothing into the working copy; some refresh the\n");
+    s.push_str("# read-only snapshot under .jired/, which no edited file depends on.\n");
+    s.push_str("# Matching is on the start of the command line, so `jired status --json`\n");
+    s.push_str("# is covered and `jired --json status` is not.\n");
+    s.push_str("# Regenerate with `jired init-agents`; edits inside this block are lost.\n");
+    for r in READ_ONLY {
+        let pattern = r
+            .argv
+            .iter()
+            .map(|t| format!("\"{t}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        s.push_str(&format!(
+            "\nprefix_rule(\n    pattern = [{pattern}],\n    decision = \"allow\",\n    justification = \"{}\",\n)\n",
+            r.why.replace('\\', "\\\\").replace('"', "\\\"")
+        ));
+    }
+    s
 }
 
 /// A field-name list as prose: `` `a`, `b`, `c` ``.
@@ -373,6 +675,25 @@ pub fn render() -> String {
          Run `jired schema` to list the JSON Schemas and `jired schema pull` to print one.\n\n",
     );
 
+    // The same list the permission files are built from, so an agent reading
+    // these docs knows what it can run before it tries and gets stopped.
+    s.push_str("## Commands you may run without asking\n\n");
+    s.push_str(&format!(
+        "`jired init-agents` grants these in `{CLAUDE_SETTINGS}` and `{CODEX_RULES}`. \
+         Each one sends nothing to Jira and writes nothing into the working copy; \
+         some refresh the read-only snapshot under `.jired/`, which no file you edit \
+         depends on. Everything else asks first, which is the point.\n\n"
+    ));
+    s.push_str("| Command | Why it is safe |\n|---|---|\n");
+    for r in READ_ONLY {
+        s.push_str(&format!("| `{}` | {} |\n", r.argv.join(" "), r.why));
+    }
+    s.push_str(
+        "\nBoth permission systems match the start of the command line, so put the \
+         global flags after the subcommand — `jired status --json`, not \
+         `jired --json status` — or the grant does not apply.\n\n",
+    );
+
     s.push_str("## Environment variables\n\n| Variable | Setting | Meaning |\n|---|---|---|\n");
     for def in keys::KEYS {
         s.push_str(&format!(
@@ -536,6 +857,149 @@ mod tests {
         let doc = render().to_lowercase();
         assert!(!doc.contains("--token abc"));
         assert!(!doc.contains("token=") || doc.contains("$jired_token"));
+    }
+
+    /// The list grants commands by name, so a command that was renamed or
+    /// removed would leave a rule granting nothing — or, worse, a rule granting
+    /// whatever later takes that name.
+    #[test]
+    fn every_granted_command_still_exists() {
+        let cmd = crate::cli::Cli::command();
+        for r in READ_ONLY {
+            assert_eq!(r.argv[0], "jired", "{:?} must start with `jired`", r.argv);
+            let name = r.argv[1];
+            let sub = cmd
+                .get_subcommands()
+                .find(|s| s.get_name() == name || s.get_all_aliases().any(|a| a == name))
+                .unwrap_or_else(|| panic!("`jired {name}` is not a command"));
+            // A second word is either a subcommand of the first or a flag it
+            // takes; either way it has to be spelled the way clap spells it.
+            if let Some(word) = r.argv.get(2) {
+                let known = if let Some(flag) = word.strip_prefix("--") {
+                    sub.get_arguments().any(|a| a.get_long() == Some(flag))
+                } else {
+                    sub.get_subcommands().any(|s| s.get_name() == *word)
+                };
+                assert!(known, "`jired {name} {word}` is not a thing");
+            }
+            assert!(!r.why.is_empty(), "{:?} has no justification", r.argv);
+        }
+    }
+
+    /// The two permission systems have to grant the same set, or an agent's
+    /// behaviour would depend on which one it happens to be.
+    #[test]
+    fn both_permission_files_grant_the_same_commands() {
+        let claude = permission_entries();
+        let codex = codex_rules();
+        let docs = render();
+        assert_eq!(claude.len(), READ_ONLY.len());
+        for r in READ_ONLY {
+            // The docs are the third copy of the list, and the one an agent
+            // reads before it decides what to try.
+            assert!(
+                docs.contains(&format!("| `{}` |", r.argv.join(" "))),
+                "the generated docs do not list {:?}",
+                r.argv
+            );
+            let pattern = r
+                .argv
+                .iter()
+                .map(|t| format!("\"{t}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            assert!(
+                codex.contains(&format!("pattern = [{pattern}]")),
+                "codex rules do not grant {:?}",
+                r.argv
+            );
+            assert!(claude.contains(&format!("Bash({}:*)", r.argv.join(" "))));
+        }
+    }
+
+    /// Anything that writes must stay off the list: a granted `push` or `pull`
+    /// would let an agent change Jira without anyone being asked.
+    #[test]
+    fn nothing_that_writes_is_granted() {
+        for r in READ_ONLY {
+            let line = r.argv.join(" ");
+            let bare = r.argv.len() == 2;
+            for writer in [
+                "init",
+                "pull",
+                "push",
+                "create",
+                "edit",
+                "comment",
+                "logwork",
+                "transition",
+                "assign",
+                "attach",
+                "reset",
+                "resolve",
+                "clean",
+                "doctor",
+                "open",
+            ] {
+                assert!(
+                    !(bare && r.argv[1] == writer),
+                    "`{line}` writes and must not be granted unqualified"
+                );
+            }
+            // The qualified ones earn their place with the flag that makes them
+            // read-only, and only that flag.
+            if !bare {
+                assert!(
+                    !line.contains("--dry-run") || r.argv.last() == Some(&"--dry-run"),
+                    "`{line}` puts something after --dry-run"
+                );
+            }
+        }
+    }
+
+    /// Someone else's entry in the settings file is someone else's decision.
+    #[test]
+    fn claude_settings_merge_keeps_what_was_already_there() {
+        let existing = serde_json::json!({
+            "model": "opus",
+            "permissions": { "allow": ["Bash(git status:*)"], "deny": ["Bash(rm:*)"] }
+        });
+        let merged: serde_json::Value =
+            serde_json::from_str(&claude_settings(&existing).unwrap()).unwrap();
+        assert_eq!(merged["model"], "opus");
+        assert_eq!(merged["permissions"]["deny"][0], "Bash(rm:*)");
+        let allow = merged["permissions"]["allow"].as_array().unwrap();
+        assert_eq!(allow[0], "Bash(git status:*)");
+        assert!(claude_settings_current(&merged));
+        // And merging twice adds nothing a second time.
+        let again: serde_json::Value =
+            serde_json::from_str(&claude_settings(&merged).unwrap()).unwrap();
+        assert_eq!(again, merged);
+    }
+
+    #[test]
+    fn an_empty_settings_file_gets_the_whole_list() {
+        let fresh: serde_json::Value =
+            serde_json::from_str(&claude_settings(&serde_json::json!({})).unwrap()).unwrap();
+        assert!(claude_settings_current(&fresh));
+        assert!(!claude_settings_current(&serde_json::json!({})));
+    }
+
+    /// A rules file jired regenerates must not swallow rules jired did not
+    /// write.
+    #[test]
+    fn regenerating_the_rules_keeps_hand_written_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".codex/rules/default.rules");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "prefix_rule(pattern = [\"make\", \"test\"])\n").unwrap();
+        assert!(write_permissions(dir.path()).unwrap());
+        // Idempotent: a second run finds both files already current.
+        assert!(!write_permissions(dir.path()).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[\"make\", \"test\"]"));
+        assert!(text.contains("[\"jired\", \"status\"]"));
+        assert_eq!(text.matches(RULES_BEGIN).count(), 1);
     }
 
     #[test]

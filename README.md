@@ -53,15 +53,39 @@ jired push              # apply
 
 `jired init` writes `CLAUDE.md` and `AGENTS.md` into the workspace documenting
 the file format, the frontmatter schema, editability rules, and the exit-code
-table. Every command takes `--json` and `--no-input`. In JSON mode both streams are
-machine-readable: stdout carries one versioned result document, stderr carries
-the structured error and nothing else. `--no-input` never prompts and exits 7
-naming any missing value.
+table. Every command takes `--json` and `--no-input`. In JSON mode both streams
+are machine-readable: stdout carries one versioned result document, stderr
+carries the structured error and nothing else. `--no-input` never prompts and
+exits 7 naming any missing value.
 
 ```sh
 jired pull --json --no-input || test $? -eq 5   # 5 means conflicts; the default strategy wrote nothing
 jired schema pull                               # JSON Schema for that output
 ```
+
+### Permissions
+
+`jired init` also writes an allow-list for the commands that only read: they send
+nothing to Jira and write nothing into the working copy, so an agent running one
+has nothing to ask about. Some of them refresh the read-only snapshot under
+`.jired/`, which no file you edit depends on.
+
+| Agent | File |
+|---|---|
+| Claude Code | `.claude/settings.json` — `permissions.allow` entries, merged in; anything else in the file is left alone |
+| Codex | `.codex/rules/default.rules` — execpolicy `prefix_rule`s between `# BEGIN jired` and `# END jired`; Codex applies them once the project's `.codex/` layer is trusted |
+
+Granted: `status` (and `st`), `diff`, `log`, `report`, `search`, `fetch`,
+`whoami`, `projects`, `boards`, `sprints`, `schema`, `completion`, `attachments
+list`, `config get|list|path`, `resolve --list`, `init-agents --print`, and
+`pull`, `push`, `reset`, `clean` and `doctor` under `--dry-run`. Everything that
+writes is left out on purpose.
+
+Both systems match the start of the command line, so the flags go after the
+subcommand — `jired status --json` is covered, `jired --json status` is not.
+`jired init-agents` rewrites both files (`--no-docs` or `--no-permissions` for
+one half only), and `jired doctor` refreshes them when they fall behind the
+binary.
 
 Timestamps in JSON documents, in issue files and on the wire are UTC, so they
 mean the same thing on every machine. Only the text jired prints to a terminal
@@ -302,7 +326,7 @@ the filename you were just editing instead of retyping the key.
 | `doctor` | check the workspace over and repair it — see below |
 | `config get\|set\|unset\|list\|path\|edit` | read and write settings |
 | `completion <shell>` | print a completion script |
-| `agent-docs` | regenerate `CLAUDE.md` and `AGENTS.md` |
+| `init-agents` | rewrite `CLAUDE.md`, `AGENTS.md` and the read-only command permissions |
 | `schema [NAME]` | the JSON Schema for a command's `--json` output |
 
 ### The issue picker
@@ -611,8 +635,8 @@ It checks the `.jired/` layout and permissions, the config file, the stored
 credentials, filenames that predate a naming convention, issue files whose sections
 predate one (subtasks still under `## Checklist` move to `## Children`), custom
 fields that disagree with `ignored_custom_fields`, database rows pointing at the
-wrong file, the `.gitignore` block and the generated agent docs — and repairs what
-it can. `--regroup` also rebuilds the grouping folders when nothing else needs
+wrong file, the `.gitignore` block, the generated agent docs and the agent
+permission files — and repairs what it can. `--regroup` also rebuilds the grouping folders when nothing else needs
 fixing. Run it after upgrading jired, and after changing what is ignored.
 
 ## Documentation

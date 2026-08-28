@@ -11,6 +11,13 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Breaking
 
+- **`jired agent-docs` is now `jired init-agents`.** It no longer only writes
+  docs: it also writes the permission files that let an agent run the commands
+  that cannot change anything, and a name saying "docs" hid half of what it
+  does. `jired init --no-agent-docs` is likewise `--no-agents`, the JSON field
+  `workspace.agent_docs` is `workspace.agent_files`, the schema is
+  `jired/init-agents/1`, and `doctor`'s `agent-docs` check is `agents`.
+
 - **Connection flags moved to the commands that read them.** `--url`, `--token`,
   `--email`, `--auth`, `--deployment` and `--insecure-store` are now options of
   `jired init` and `jired doctor` instead of global flags. Elsewhere they were
@@ -73,6 +80,31 @@ before something destructive, what an error says, and what the docs claim.
 
   `jired sprint create --issues K1,K2 [--push]` does both in one command, since
   creating a sprint is almost always followed by filling it.
+
+- **`jired init` grants agents the commands that only read.** Setting a
+  workspace up now writes `.claude/settings.json` and
+  `.codex/rules/default.rules` alongside `CLAUDE.md` and `AGENTS.md`, so Claude
+  Code and Codex can run `jired status`, `jired diff`, `jired log`,
+  `jired report`, `jired search`, `jired fetch`, the `--dry-run` form of `pull`,
+  `push`, `reset`, `clean` and `doctor`, and the rest of the read-only surface
+  without stopping to ask. An agent that has to be approved before every
+  `jired status` is an agent nobody lets near the workspace, and approving each
+  one by hand is how a blanket approval ends up granted instead.
+
+  The line is drawn at "sends nothing to Jira and writes nothing into the
+  working copy" — a refresh of the read-only snapshot under `.jired/` is
+  allowed, since no file you edit depends on it — and every writing command is
+  left out. One table in the source produces the allow-list, the Codex rules and
+  the table in the generated docs, so the three cannot disagree; a test proves
+  every granted command still exists and that no writer is on the list.
+
+  Claude's file is merged rather than rewritten: entries jired did not put there
+  survive, including ones for commands it no longer generates. Codex's rules
+  live between `# BEGIN jired` and `# END jired`, so hand-written rules in the
+  same file survive too, and Codex applies them once the project's `.codex/`
+  layer is trusted. `jired doctor` refreshes both when they fall behind the
+  binary, and `jired init-agents --no-docs` / `--no-permissions` rewrite one
+  half on its own.
 
 - **`jired sprint create` makes a sprint.** A form when a terminal can draw one,
   and `jired sprint create "Sprint 44" --board 12 --start 2026-09-01 --end

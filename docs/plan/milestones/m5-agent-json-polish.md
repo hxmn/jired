@@ -40,7 +40,8 @@ fetches, and release packaging (M5.7).
 - [x] `CLAUDE.md`/`AGENTS.md` generated from the CLI definition, the env-var table and the exit-code table
 - [x] Drift guard: every command, setting and exit code must appear in the generated docs
 - [x] Content: file/folder conventions, frontmatter schema + editability, comments/checklist how-to, full command reference with `--json`/`--no-input`, exit codes, safe-workflow recipe (`status → pull → edit → diff → push --dry-run → push`)
-- [x] `jired agent-docs` regenerates only between sentinel markers; `init` writes initial docs
+- [x] `jired init-agents` regenerates only between sentinel markers; `init` writes the initial
+      docs and the read-only command permissions for Claude Code and Codex
 - [x] Doc examples use `$JIRED_TOKEN` only (never literals) — enforced by test
 - **Done when:** docs regenerate reproducibly and a drift test compares them against the CLI's introspected surface.
 

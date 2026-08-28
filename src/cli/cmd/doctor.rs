@@ -179,7 +179,7 @@ fn collect(ctx: &mut Context, args: &DoctorArgs) -> Result<Vec<Check>> {
         filenames,
         check_state_paths(ctx, args, &final_paths)?,
         check_gitignore(ctx, args)?,
-        check_agent_docs(ctx, args)?,
+        check_agents(ctx, args)?,
     ];
     if args.regroup || renamed {
         checks.push(check_groups(ctx, args)?);
@@ -888,9 +888,13 @@ fn check_gitignore(ctx: &Context, args: &DoctorArgs) -> Result<Check> {
     })
 }
 
-/// `CLAUDE.md` and `AGENTS.md` describe the format this build actually writes.
-fn check_agent_docs(ctx: &Context, args: &DoctorArgs) -> Result<Check> {
-    let docs = crate::cli::cmd::agent_docs::render();
+/// `CLAUDE.md` and `AGENTS.md` describe the format this build actually writes,
+/// and the permission files list the commands this build says only read. Both
+/// go stale the same way — by upgrading jired — so both are checked here.
+fn check_agents(ctx: &Context, args: &DoctorArgs) -> Result<Check> {
+    use crate::cli::cmd::init_agents as agents;
+
+    let docs = agents::render();
     let mut stale = Vec::new();
     for name in ["CLAUDE.md", "AGENTS.md"] {
         let path = ctx.workspace.root().join(name);
@@ -898,15 +902,37 @@ fn check_agent_docs(ctx: &Context, args: &DoctorArgs) -> Result<Check> {
         if !current.contains(docs.trim()) {
             stale.push(name);
             if !args.dry_run {
-                crate::cli::cmd::agent_docs::write_managed_block(&path, &docs)?;
+                agents::write_managed_block(&path, &docs)?;
             }
         }
     }
+
+    let root = ctx.workspace.root();
+    let settings = std::fs::read_to_string(root.join(agents::CLAUDE_SETTINGS)).unwrap_or_default();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&settings).unwrap_or(serde_json::Value::Null);
+    if !agents::claude_settings_current(&parsed) {
+        stale.push(agents::CLAUDE_SETTINGS);
+    }
+    let rules = std::fs::read_to_string(root.join(agents::CODEX_RULES)).unwrap_or_default();
+    if !rules.contains(agents::codex_rules().trim()) {
+        stale.push(agents::CODEX_RULES);
+    }
+    // One write for both permission files: `write_permissions` is a no-op for
+    // whichever of them was already current.
+    if !args.dry_run
+        && stale
+            .iter()
+            .any(|s| *s == agents::CLAUDE_SETTINGS || *s == agents::CODEX_RULES)
+    {
+        agents::write_permissions(root)?;
+    }
+
     if stale.is_empty() {
-        return Ok(ok("agent-docs", "CLAUDE.md and AGENTS.md are current"));
+        return Ok(ok("agents", "instructions and permissions are current"));
     }
     Ok(repaired(
-        "agent-docs",
+        "agents",
         args.dry_run,
         format!("refreshing {}", stale.join(", ")),
     ))

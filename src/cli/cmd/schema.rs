@@ -18,10 +18,6 @@ fn name_parser() -> clap::builder::PossibleValuesParser {
 
 /// Embedded schema documents, keyed by their `jired/<name>/1` tag.
 pub const SCHEMAS: &[(&str, &str)] = &[
-    (
-        "agent-docs",
-        include_str!("../../../schemas/agent-docs.json"),
-    ),
     ("assign", include_str!("../../../schemas/assign.json")),
     ("attach", include_str!("../../../schemas/attach.json")),
     (
@@ -51,6 +47,10 @@ pub const SCHEMAS: &[(&str, &str)] = &[
         include_str!("../../../schemas/frontmatter.json"),
     ),
     ("init", include_str!("../../../schemas/init.json")),
+    (
+        "init-agents",
+        include_str!("../../../schemas/init-agents.json"),
+    ),
     ("log", include_str!("../../../schemas/log.json")),
     ("logwork", include_str!("../../../schemas/logwork.json")),
     ("open", include_str!("../../../schemas/open.json")),

@@ -45,7 +45,7 @@ custom-field schema) has been observed yet.
 ### M1.3 Config resolver
 - [x] Precedence chain: flag → `JIRED_*` env → `.jired/config.toml` → XDG global → prompt hook
 - [x] `--no-input` + non-TTY autodetection disables prompt rung; missing value → exit 7 naming the value
-- [x] Documented env-var list generated from one source of truth (used later by agent-docs)
+- [x] Documented env-var list generated from one source of truth (used later by init-agents)
 - [x] Unit test matrix covering all 5×levels precedence combinations
 - **Done when:** the precedence matrix test passes and exit-7 errors name the missing key.
 

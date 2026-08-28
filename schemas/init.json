@@ -117,7 +117,7 @@
         "gitignore_updated": {
           "type": "boolean"
         },
-        "agent_docs": {
+        "agent_files": {
           "type": "array",
           "items": {
             "type": "string"

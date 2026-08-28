@@ -36,7 +36,7 @@ init → pull → edit → status/diff → push --dry-run → push
 plus `comment`, `transition`, `assign`, `create`, `attach`,
 `attachments pull`, `log`, `search`, `resolve`, `clean`, `doctor`, `edit`, `config`,
 `whoami`, `projects`/`boards`/`sprints`, `open`, `completion`, `schema` and
-`agent-docs`.
+`init-agents`.
 
 `init` is a line-based wizard rather than the planned TUI screen: it guesses the
 deployment from the URL, the credential from the deployment, offers to pin an

@@ -346,7 +346,7 @@ fn assert_timestamp(value: &str) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_creates_the_workspace_and_agent_docs() {
+fn init_creates_the_workspace_and_agent_files() {
     let ws = Ws::new();
     let report = ws.init();
 
@@ -392,6 +392,80 @@ fn init_creates_the_workspace_and_agent_docs() {
             "{doc} lacks the exit-code table"
         );
     }
+
+    // An agent that has to ask before every `jired status` is an agent nobody
+    // uses, so setup grants the commands that cannot change anything — and
+    // only those.
+    let files = report["workspace"]["agent_files"].as_array().unwrap();
+    let files: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(
+        files,
+        [
+            "CLAUDE.md",
+            "AGENTS.md",
+            ".claude/settings.json",
+            ".codex/rules/default.rules"
+        ]
+    );
+
+    let settings: Value = serde_json::from_str(&ws.read(".claude/settings.json")).unwrap();
+    let allow = settings["permissions"]["allow"].as_array().unwrap();
+    let allow: Vec<&str> = allow.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(allow.contains(&"Bash(jired status:*)"), "{allow:?}");
+    assert!(allow.contains(&"Bash(jired push --dry-run:*)"), "{allow:?}");
+    assert!(!allow.contains(&"Bash(jired push:*)"), "{allow:?}");
+    assert!(!allow.contains(&"Bash(jired pull:*)"), "{allow:?}");
+
+    let rules = ws.read(".codex/rules/default.rules");
+    assert!(
+        rules.contains(r#"pattern = ["jired", "status"]"#),
+        "{rules}"
+    );
+    assert!(
+        rules.contains(r#"pattern = ["jired", "push", "--dry-run"]"#),
+        "{rules}"
+    );
+    assert!(!rules.contains(r#"pattern = ["jired", "push"]"#), "{rules}");
+    // Every rule grants; a `prompt` or `forbidden` here would be jired
+    // overruling a decision that is the user's to make.
+    assert_eq!(
+        rules.matches("decision = \"allow\"").count(),
+        rules.matches("prefix_rule(").count()
+    );
+}
+
+#[test]
+fn init_agents_is_idempotent_and_leaves_other_permissions_alone() {
+    let ws = Ws::new();
+    ws.init();
+    // Something the user put there themselves, in both files.
+    ws.write(
+        ".claude/settings.json",
+        r#"{"permissions": {"allow": ["Bash(make test:*)"]}}"#,
+    );
+    ws.write(
+        ".codex/rules/default.rules",
+        "prefix_rule(pattern = [\"make\", \"test\"])\n",
+    );
+
+    ws.json(&["init-agents"]);
+    let first = (
+        ws.read(".claude/settings.json"),
+        ws.read(".codex/rules/default.rules"),
+    );
+    ws.json(&["init-agents"]);
+    assert_eq!(
+        first,
+        (
+            ws.read(".claude/settings.json"),
+            ws.read(".codex/rules/default.rules")
+        ),
+        "regenerating twice must not keep changing the files"
+    );
+    assert!(first.0.contains("Bash(make test:*)"), "{}", first.0);
+    assert!(first.0.contains("Bash(jired status:*)"), "{}", first.0);
+    assert!(first.1.contains(r#"["make", "test"]"#), "{}", first.1);
+    assert!(first.1.contains(r#"["jired", "status"]"#), "{}", first.1);
 }
 
 #[test]

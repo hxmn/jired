@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/init-agents/1",
+  "title": "jired init-agents result",
+  "description": "Regenerated agent instructions and read-only command permissions",
+  "type": "object",
+  "required": [
+    "schema",
+    "files"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/init-agents/1"
+    },
+    "files": {
+      "description": "Paths written, relative to the workspace root",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "permissions": {
+      "description": "Allow-list entries for the commands that only read",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

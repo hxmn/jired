@@ -30,9 +30,9 @@ pub struct InitArgs {
     #[arg(long)]
     pub force: bool,
 
-    /// Do not write CLAUDE.md and AGENTS.md into the workspace
+    /// Do not write the agent instructions and permission files
     #[arg(long)]
-    pub no_agent_docs: bool,
+    pub no_agents: bool,
 
     #[command(flatten)]
     pub conn: crate::cli::ConnectionArgs,
@@ -74,7 +74,8 @@ pub struct WorkspaceReport {
     pub config: String,
     pub project: Option<String>,
     pub gitignore_updated: bool,
-    pub agent_docs: Vec<String>,
+    /// What `jired init-agents` wrote: instructions, then permission files.
+    pub agent_files: Vec<String>,
 }
 
 pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
@@ -196,16 +197,20 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
     }
 
     let gitignore_updated = ctx.workspace.ensure_gitignore()?;
-    let mut agent_docs = Vec::new();
-    if !args.no_agent_docs {
-        let docs = crate::cli::cmd::agent_docs::render();
+    let mut agent_files = Vec::new();
+    if !args.no_agents {
+        use crate::cli::cmd::init_agents as agents;
+        let docs = agents::render();
         for name in ["CLAUDE.md", "AGENTS.md"] {
-            crate::cli::cmd::agent_docs::write_managed_block(
-                &ctx.workspace.root().join(name),
-                &docs,
-            )?;
-            agent_docs.push(name.to_string());
+            agents::write_managed_block(&ctx.workspace.root().join(name), &docs)?;
+            agent_files.push(name.to_string());
         }
+        // An agent that has to ask before every `jired status` is an agent
+        // nobody lets near the workspace; granting the commands that cannot
+        // change anything is part of setting one up.
+        agents::write_permissions(ctx.workspace.root())?;
+        agent_files.push(agents::CLAUDE_SETTINGS.to_string());
+        agent_files.push(agents::CODEX_RULES.to_string());
     }
 
     // Creating the state database now means every later command can assume it.
@@ -243,8 +248,8 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
         "  config     {}",
         ctx.workspace.config_path().display()
     ));
-    if !agent_docs.is_empty() {
-        out.say(format!("  agent docs {}", agent_docs.join(", ")));
+    if !agent_files.is_empty() {
+        out.say(format!("  agents     {}", agent_files.join(", ")));
     }
 
     // Pulling needs a scope; without a project there is nothing to ask the
@@ -307,7 +312,7 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
             config: ctx.workspace.config_path().display().to_string(),
             project,
             gitignore_updated,
-            agent_docs,
+            agent_files,
         },
         pulled,
     };

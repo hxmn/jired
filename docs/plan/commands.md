@@ -79,7 +79,7 @@ their result document instead. Ordering is deterministic in all outputs.
 ## Commands
 
 ### `jired init`
-`jired init [--url U] [--token T] [--email E] [--auth api-token|pat|basic] [--deployment cloud|datacenter] [--insecure-store] [--project KEY] [--no-pull] [--force] [--no-agent-docs]`
+`jired init [--url U] [--token T] [--email E] [--auth api-token|pat|basic] [--deployment cloud|datacenter] [--insecure-store] [--project KEY] [--no-pull] [--force] [--no-agents]`
 Interactively a three-question wizard — URL, identity, project — and nothing else:
 
 * the URL decides the deployment (`*.atlassian.net`/`*.jira.com` → Cloud, anything
@@ -104,7 +104,8 @@ Interactively a three-question wizard — URL, identity, project — and nothing
 
 Then: `GET /myself` verify → `.jired/`, a fully documented `config.toml` (every
 setting, including the ones at their default), `.gitignore` entry,
-`CLAUDE.md`/`AGENTS.md` (unless `--no-agent-docs`) → optional initial pull. A
+`CLAUDE.md`/`AGENTS.md` and the agent permission files (unless `--no-agents`) →
+optional initial pull. A
 failed initial pull is a warning, not a failed init: the account is stored and the
 "next:" block still prints.
 Errors: 3 bad creds; 7 missing url/token with `--no-input`.
@@ -485,7 +486,8 @@ snapshot — custom fields
 that disagree with `ignored_custom_fields` (dropped from every file; restored from
 the last snapshot for a file that is still in sync, since after un-ignoring one it
 is the file that would read as having cleared the field), database rows pointing at
-the wrong file, the `.gitignore` block, and the generated agent docs.
+the wrong file, the `.gitignore` block, the generated agent docs and the agent
+permission files.
 Renaming files re-links the grouping folders automatically; `--regroup` rebuilds them
 even when nothing was renamed and reports what it did under the `groups` check
 (`checks[].regrouped`). Idempotent. Exit 1 when something needs a human.
@@ -585,8 +587,21 @@ Via `clap_complete`, for bash/zsh/fish/powershell/elvish; `--help` says where ea
 shell wants the script. Config keys, schema names and enum values complete; issue
 keys do not, because completion must not open the database.
 
-### `jired agent-docs`
-Regenerates `CLAUDE.md`/`AGENTS.md` (overwrites only between jired sentinel markers).
+### `jired init-agents`
+`jired init-agents [--print] [--no-docs] [--no-permissions]`
+Rewrites `CLAUDE.md`/`AGENTS.md` and the two permission files that let an agent run
+the read-only commands without asking: `.claude/settings.json` (`permissions.allow`
+entries, merged into whatever else the file holds) and `.codex/rules/default.rules`
+(execpolicy `prefix_rule`s). The Markdown and the rules file are overwritten only
+between jired sentinel markers; the JSON is merged, never pruned, because an entry
+someone added by hand is a decision.
+
+The granted set is one table in `cli/cmd/init_agents.rs`, so the docs, the allow-list
+and the rules cannot disagree; the line it draws is "sends nothing to Jira and writes
+nothing into the working copy", which lets `fetch` and `--dry-run` in and keeps every
+writing command out. Both systems match a command-line prefix, so global flags have to
+follow the subcommand.
+JSON: `{"schema":"jired/init-agents/1","files":[…],"permissions":[…]}`.
 
 ### `jired schema [name]`
 Prints JSON Schemas: frontmatter, every `jired/*/1` output, the error shape.

@@ -144,7 +144,7 @@ fn no_command_output_or_config_contains_the_token() {
 }
 
 #[test]
-fn generated_agent_docs_only_reference_the_token_by_variable() {
+fn generated_agent_files_only_reference_the_token_by_variable() {
     let docs = std::fs::read_to_string(repo().join("README.md")).unwrap();
     // A doc example that pastes a literal token teaches the habit of doing it.
     for line in docs.lines().filter(|l| l.contains("--token")) {

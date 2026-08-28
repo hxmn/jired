@@ -240,8 +240,8 @@ pub enum Command {
     Sprint(cmd::sprint::SprintCmd),
     /// Generate a shell completion script
     Completion(cmd::completion::CompletionArgs),
-    /// Regenerate CLAUDE.md and AGENTS.md
-    AgentDocs(cmd::agent_docs::AgentDocsArgs),
+    /// Write the agent instructions and the read-only command permissions
+    InitAgents(cmd::init_agents::InitAgentsArgs),
     /// Print JSON Schemas for outputs and the frontmatter format
     Schema(cmd::schema::SchemaArgs),
 }
@@ -317,7 +317,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Boards(a) => cmd::list::run_boards(g, a, out),
         Command::Sprints(a) => cmd::list::run_sprints(g, a, out),
         Command::Sprint(a) => cmd::sprint::run(g, a, out),
-        Command::AgentDocs(a) => cmd::agent_docs::run(g, a, out),
+        Command::InitAgents(a) => cmd::init_agents::run(g, a, out),
     }
 }
 

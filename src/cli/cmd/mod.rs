@@ -1,6 +1,5 @@
 //! Command handlers. One module per top-level command.
 
-pub mod agent_docs;
 pub mod assign;
 pub mod attach;
 pub mod clean;
@@ -13,6 +12,7 @@ pub mod doctor;
 pub mod edit;
 pub mod fetch;
 pub mod init;
+pub mod init_agents;
 pub mod list;
 pub mod log;
 pub mod logwork;
