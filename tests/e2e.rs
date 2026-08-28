@@ -322,6 +322,52 @@ fn version_names_the_commit_and_when_it_was_built() {
     );
 }
 
+/// The changelog is compiled in, so an installed binary can say what changed in
+/// it without a checkout to read `CHANGELOG.md` out of — and says the same thing
+/// whatever the checkout next to it has moved on to.
+#[test]
+fn the_binary_carries_the_changelog_it_was_built_from() {
+    let run = |args: &[&str]| {
+        let out = Command::cargo_bin("jired")
+            .unwrap()
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "`jired {}`", args.join(" "));
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    // Plain `version` is what `--version` says, and points at the changelog.
+    let plain = run(&["version"]);
+    for expected in ["commit:", "built:", "rustc:", "target:"] {
+        assert!(plain.contains(expected), "{expected} missing from\n{plain}");
+    }
+    assert!(plain.contains("--changelog"), "{plain}");
+    assert!(!plain.contains("# Changelog"), "not unless asked:\n{plain}");
+
+    // And it is the file, not a summary of it.
+    let printed = run(&["version", "--changelog"]);
+    let repo = std::fs::read_to_string(repo_root().join("CHANGELOG.md")).unwrap();
+    assert_eq!(printed.trim_end(), repo.trim_end());
+
+    let doc: Value = serde_json::from_str(&run(&["version", "--json"])).unwrap();
+    assert_eq!(doc["schema"], "jired/version/1");
+    assert_eq!(doc["version"], env!("CARGO_PKG_VERSION"));
+    // 19 KB of prose in every document would be paid for by agents that never
+    // read it, so it arrives only when asked for.
+    assert_eq!(doc["changelog"], Value::Null);
+
+    let asked: Value = serde_json::from_str(&run(&["version", "--changelog", "--json"])).unwrap();
+    assert_eq!(
+        asked["changelog"].as_str().unwrap().trim_end(),
+        repo.trim_end()
+    );
+}
+
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
 /// `2026-08-21T10:49:39Z`, checked by shape rather than by parsing: the point is
 /// that it is a machine-readable instant, not that today is a particular day.
 fn assert_timestamp(value: &str) {

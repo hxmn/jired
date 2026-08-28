@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/version/1",
+  "title": "jired version result",
+  "description": "Which binary this is, and what changed in it",
+  "type": "object",
+  "required": [
+    "schema",
+    "version",
+    "commit",
+    "built",
+    "rustc",
+    "target"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/version/1"
+    },
+    "version": {
+      "type": "string",
+      "description": "The release, e.g. `0.1.0`"
+    },
+    "commit": {
+      "type": "string",
+      "description": "Short commit the binary was built from, `-dirty` when the tree had uncommitted changes, `unknown` when built without git"
+    },
+    "built": {
+      "type": "string",
+      "description": "Build time, ISO-8601 in UTC"
+    },
+    "rustc": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string",
+      "description": "Target triple, e.g. `x86_64-unknown-linux-gnu`"
+    },
+    "changelog": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The Markdown changelog this binary was built from; null unless --changelog was given"
+    }
+  }
+}

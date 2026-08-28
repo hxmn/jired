@@ -134,6 +134,10 @@ pub const READ_ONLY: &[ReadOnly] = &[
         "prints a shell completion script on stdout",
     ),
     ro(
+        &["jired", "version"],
+        "prints which binary this is, and the changelog compiled into it",
+    ),
+    ro(
         &["jired", "init-agents", "--print"],
         "prints the files this command would write instead of writing them",
     ),

@@ -29,4 +29,5 @@ pub mod search;
 pub mod sprint;
 pub mod status;
 pub mod transition;
+pub mod version;
 pub mod whoami;

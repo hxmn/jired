@@ -244,6 +244,8 @@ pub enum Command {
     InitAgents(cmd::init_agents::InitAgentsArgs),
     /// Print JSON Schemas for outputs and the frontmatter format
     Schema(cmd::schema::SchemaArgs),
+    /// Which binary this is, and what changed in it
+    Version(cmd::version::VersionArgs),
 }
 
 /// Shown on every run whose traffic is unverified, whether the setting came
@@ -288,6 +290,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         // Commands that must run before a workspace exists.
         Command::Completion(a) => cmd::completion::run(a, out),
         Command::Schema(a) => cmd::schema::run(a, out),
+        Command::Version(a) => cmd::version::run(g, a, out),
         Command::Init(a) => cmd::init::run(g, a, out),
 
         Command::Fetch(a) => cmd::fetch::run(g, a, out),

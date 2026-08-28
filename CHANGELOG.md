@@ -62,6 +62,13 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Added
 
+- **`jired version --changelog` prints the changelog the binary was built
+  from.** It is compiled in, so the question that follows "which version is
+  this" no longer needs a checkout to answer — and answers it for *that* binary,
+  rather than for wherever a `CHANGELOG.md` beside it has got to. `jired version`
+  on its own is what `--version` prints; `--json` reports both as
+  `jired/version/1`, with `changelog` null unless it was asked for.
+
 - **`jired sprint add` and `jired sprint remove` move issues between sprints.**
   The scriptable single-field commands for an issue's sprint, alongside
   `transition`, `assign` and `comment`, and staging the same way — the

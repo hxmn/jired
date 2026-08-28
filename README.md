@@ -76,8 +76,8 @@ has nothing to ask about. Some of them refresh the read-only snapshot under
 | Codex | `.codex/rules/default.rules` — execpolicy `prefix_rule`s between `# BEGIN jired` and `# END jired`; Codex applies them once the project's `.codex/` layer is trusted |
 
 Granted: `status` (and `st`), `diff`, `log`, `report`, `search`, `fetch`,
-`whoami`, `projects`, `boards`, `sprints`, `schema`, `completion`, `attachments
-list`, `config get|list|path`, `resolve --list`, `init-agents --print`, and
+`whoami`, `projects`, `boards`, `sprints`, `schema`, `completion`, `version`,
+`attachments list`, `config get|list|path`, `resolve --list`, `init-agents --print`, and
 `pull`, `push`, `reset`, `clean` and `doctor` under `--dry-run`. Everything that
 writes is left out on purpose.
 
@@ -328,6 +328,7 @@ the filename you were just editing instead of retyping the key.
 | `completion <shell>` | print a completion script |
 | `init-agents` | rewrite `CLAUDE.md`, `AGENTS.md` and the read-only command permissions |
 | `schema [NAME]` | the JSON Schema for a command's `--json` output |
+| `version [--changelog]` | which binary this is, and what changed in it |
 
 ### The issue picker
 
@@ -620,8 +621,21 @@ rustc:   rustc 1.97.1 (8bab26f4f 2026-07-14)
 target:  x86_64-unknown-linux-gnu
 ```
 
-`-V` is the same thing on one line. A `-dirty` suffix on the commit means the
-binary was built from a tree with uncommitted changes.
+`-V` is the same thing on one line, and `jired version` is the same thing as a
+command. A `-dirty` suffix on the commit means the binary was built from a tree
+with uncommitted changes.
+
+The changelog is compiled into the binary, so the question that follows "which
+version is this" has an answer that does not need a checkout:
+
+```sh
+jired version --changelog          # what changed, up to the commit above
+jired version --changelog --json   # the same, as `jired/version/1`
+```
+
+It is the changelog *that binary* was built from, which is the point: a
+`CHANGELOG.md` in a checkout beside it describes wherever that checkout has got
+to, and an installed binary has no checkout at all.
 
 ## Repairing a workspace
 
