@@ -39,6 +39,19 @@ pub fn is_editable(field: &str) -> bool {
     EDITABLE.contains(&field)
 }
 
+/// Whether two `sprint:` lists differ only in the sprints the issue has been
+/// through, and not in the one it is in now.
+///
+/// The field is a history, oldest first, and the board API can only move an
+/// issue into a sprint — so the last entry is the whole of what anyone can act
+/// on. The earlier entries are the server's record of what happened, which no
+/// API rewrites. A difference confined to them is not work to do, which is why
+/// `push` refuses to send it and why `status` and `diff` do not count it as a
+/// change waiting to go out.
+pub fn sprint_history_only(before: &[String], after: &[String]) -> bool {
+    before != after && before.last() == after.last()
+}
+
 pub fn is_identity(field: &str) -> bool {
     IDENTITY.contains(&field)
 }

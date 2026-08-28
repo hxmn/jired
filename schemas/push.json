@@ -115,6 +115,10 @@
         }
       }
     },
+    "groups": {
+      "type": "object",
+      "description": "Grouping folders rebuilt by this push. Present only when a push moved an issue somewhere a folder shows it: created, transitioned, re-parented or re-sprinted."
+    },
     "stale": {
       "type": "array",
       "description": "Issues refused because the server changed since base",

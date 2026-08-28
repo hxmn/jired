@@ -387,7 +387,11 @@ for the `sprints/` view of where everything is.
 ### Grouping folders
 
 `by-parent/`, `sprints/` and `boards/<board>/<column>/` are views onto the same
-issue files, rebuilt from the database by `pull` and by `jired doctor --regroup`.
+issue files, rebuilt from the database by `pull`, by `jired doctor --regroup`,
+and by a `push` that moved an issue between sprints, columns or parents — so the
+folder for a sprint you have just made appears with the first issue you move
+into it. `sprints/` covers the sprint running now and the ones queued behind it;
+closed sprints are left out until `sprints.include_closed`.
 `links.mode` chooses how they point at the real file — `auto` (a symlink, or a hard
 link where symlinks are not permitted, or a small Markdown stub if neither works),
 or `symlink`/`hardlink`/`stub` to insist on one.

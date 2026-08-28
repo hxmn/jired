@@ -30,7 +30,11 @@
               "properties": {
                 "field": { "type": "string" },
                 "from": {},
-                "to": {}
+                "to": {},
+                "sendable": {
+                  "type": "boolean",
+                  "description": "Whether a push could carry this change. Only `sprint` is ever false: the field is a history and only its last entry — the sprint the issue is in now — can be changed. A false row is shown for context, is left out of `stat.fields`, and never appears on an issue that has no other change."
+                }
               }
             }
           },

@@ -371,6 +371,17 @@ pub fn run(ctx: &mut Context, args: &StatusArgs) -> Result<StatusReport> {
         let mut fields = Vec::new();
         for name in crate::doc::frontmatter::EDITABLE {
             if base_doc.doc.frontmatter.field(name) != working.frontmatter.field(name) {
+                // Sprint history is the server's record; a file that differs
+                // only there has nothing to push, and calling it dirty would
+                // leave it dirty for good.
+                if *name == "sprint"
+                    && crate::doc::frontmatter::sprint_history_only(
+                        &base_doc.doc.frontmatter.sprint,
+                        &working.frontmatter.sprint,
+                    )
+                {
+                    continue;
+                }
                 fields.push((*name).to_string());
             }
         }

@@ -244,7 +244,18 @@ pub fn render() -> String {
          board move rather than a field update, resolving the name against the \
          sprints the workspace has fetched. The earlier entries are the server's \
          record of what happened and cannot be edited: changing them is reported \
-         and not sent.\n\n",
+         and not sent. `status` and `diff` follow the same rule, so an issue \
+         whose only difference is sprint history is not reported as changed; \
+         where there is a real change too, `diff` keeps the sprint row and marks \
+         it `\"sendable\": false`, out of the `stat` counts.\n\n",
+    );
+    s.push_str(
+        "A push that moves an issue between sprints, columns or parents rebuilds \
+         `sprints/`, `boards/` and `by-parent/` before it returns, so the folder \
+         for a sprint you just created appears with the first issue you move \
+         into it — including a `future` sprint, which is a folder like any \
+         other. Only closed sprints are left out, until \
+         `sprints.include_closed`.\n\n",
     );
     s.push_str(
         "`jired sprint create NAME [--board B] [--start TS] [--end TS] [--goal TEXT]` \

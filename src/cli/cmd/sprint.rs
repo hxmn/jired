@@ -135,6 +135,13 @@ fn create(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
         "put an issue in it with `sprint: {}` in its file, then `jired push`",
         sprint.name
     ));
+    // A sprint with nothing in it has no folder to show, which reads like the
+    // sprint never happened; saying when the folder arrives spares the hunt.
+    out.hint(format!(
+        "`{}/{}` appears with the first issue that push moves in",
+        crate::project::naming::GROUP_SPRINTS,
+        crate::project::naming::group_dir(&sprint.name, None)
+    ));
 
     out.emit(
         "sprint-create",

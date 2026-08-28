@@ -184,6 +184,13 @@ update, because the Sprint field is read-only on most instances. The name is
 resolved against the cached sprints, preferring an open one; a name no board
 knows is reported and not guessed at, and an edit to the earlier entries is
 reported as history that cannot be rewritten.
+A push that moved an issue — created, transitioned, re-parented or re-sprinted
+it — rebuilds the grouping folders on the way out and reports them as `groups`,
+because `sprints/`, `boards/` and `by-parent/` are views over base and the push
+has just moved base. The sprint someone just created gets its folder from the
+push that fills it, rather than waiting for a pull that writes a file. A push
+that only adds a comment, a worklog or an attachment leaves the tree alone, so a
+card dragged between board columns and not yet pushed survives it.
 JSON: `{"schema":"jired/push/1","results":[{"key":"PROJ-1","ok":true,"ops":[…]},{"key":"NEW-x7f3a2","ok":true,"new_key":"PROJ-201"}]}`.
 
 ### `jired diff`
@@ -195,6 +202,13 @@ deprecated — on every other command `--all` widens the scope, and here it sele
 a comparison.
 Unified diff for bodies (`similar`), field-level table for metadata; `--stat` summary.
 Exit 0 even with differences unless `--exit-code` (git-style). Fully offline.
+Against the working copy, `diff` shows what a push could send and nothing else:
+a `sprint:` difference confined to the earlier entries is history the board API
+cannot rewrite (see `push` above), so an issue that differs only there is not
+listed, and on an issue with real changes the row rides along marked
+`"sendable": false` — shown, not counted in `--stat`, never on its own. Between
+two server snapshots (`--remote`) every difference is sendable: nothing is being
+pushed, and the history is exactly what a pull would bring in.
 
 ### `jired status [--all]`
 One-screen overview: dirty files, new local issues, staged transitions (incl. board

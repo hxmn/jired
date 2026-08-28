@@ -4712,3 +4712,117 @@ fn a_lossy_block_does_not_discard_the_rest_of_the_push() {
         "{report}"
     );
 }
+
+/// The safety check `jired diff` exists to be is only useful if it shows the
+/// same set of changes the push will act on. Sprint history — the entries
+/// before the last — is the server's record, so a file that differs only there
+/// is not a difference: `status`, `push` and `diff` all have to agree.
+#[test]
+fn diff_leaves_out_sprint_history_it_could_never_push() {
+    let ws = Ws::new();
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["customfield_10020"] = serde_json::json!([
+            {"id": 41, "name": "Sprint 41", "state": "closed"},
+            {"id": 42, "name": "Sprint 42", "state": "active"},
+        ]);
+    });
+    ws.init();
+    ws.json(&["pull"]);
+
+    // A file that names only the sprint the issue is in now — what every file
+    // written before jired kept the whole list looks like.
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("sprint:\n- Sprint 41\n- Sprint 42", "sprint: Sprint 42");
+    ws.write(ISSUE_FILE, &text);
+
+    let status = ws.json(&["status"]);
+    assert_eq!(status["dirty"].as_array().map(|d| d.len()), Some(0));
+    let diff = ws.json(&["diff"]);
+    assert_eq!(
+        diff["issues"].as_array().map(|i| i.len()),
+        Some(0),
+        "diff must not report what push cannot send: {diff}"
+    );
+
+    // With a real change on the same issue the row is kept, marked, and left
+    // out of the counts.
+    ws.write(
+        ISSUE_FILE,
+        &text.replace("summary: Fix login flow", "summary: Fix the login flow"),
+    );
+    let diff = ws.json(&["diff"]);
+    let fields = diff["issues"][0]["fields"].as_array().unwrap();
+    let sprint = fields
+        .iter()
+        .find(|f| f["field"] == "sprint")
+        .expect("shown for context");
+    assert_eq!(sprint["sendable"], false);
+    let summary = fields.iter().find(|f| f["field"] == "summary").unwrap();
+    assert_eq!(summary["sendable"], true);
+    assert_eq!(diff["stat"]["fields"], 1, "only the sendable field counts");
+
+    // And what push plans matches, field for field.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let ops = dry["results"][0]["ops"].as_array().unwrap();
+    assert_eq!(ops.len(), 1);
+    assert_eq!(ops[0]["kind"], "update_fields");
+}
+
+/// Grouping folders are views over base, and a push moves base. The sprint
+/// somebody just made is the one they want to look at, and it has to be there
+/// as soon as the push that filled it returns — a pull that writes no file
+/// used to leave the folder tree describing where the issue used to be.
+#[test]
+fn a_push_that_moves_an_issue_rebuilds_the_folder_it_moved_into() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // A sprint nobody has started yet: Jira calls it future, and that is where
+    // the next sprint's planning happens.
+    let created = ws.json(&["sprint", "create", "--board", "12", "Sprint 44"]);
+    assert_eq!(created["sprint"]["state"], "future");
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("sprint: Sprint 42", "sprint: Sprint 44");
+    ws.write(ISSUE_FILE, &text);
+    let push = ws.json(&["push"]);
+    assert_eq!(push["results"][0]["ops"][0]["kind"], "move_sprint");
+    assert!(
+        push["groups"].is_object(),
+        "the push rebuilt the folders: {push}"
+    );
+
+    assert!(
+        ws.path()
+            .join("sprints/Sprint 44")
+            .join(ISSUE_FILE)
+            .exists(),
+        "a future sprint is a folder like any other, and the push filled it"
+    );
+    assert!(
+        !ws.path().join("sprints/Sprint 42").exists(),
+        "and the sprint it left no longer claims it"
+    );
+}
+
+/// A push that only says something about an issue leaves the folder tree alone,
+/// so a card dragged between board columns and not yet pushed survives it.
+#[test]
+fn a_push_that_moves_nothing_leaves_the_folders_alone() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("## Comments", "## Comments\n\n### [new]\n\nOn it.\n");
+    ws.write(ISSUE_FILE, &text);
+    let push = ws.json(&["push"]);
+    assert_eq!(push["results"][0]["ops"][0]["kind"], "create_comment");
+    assert!(
+        push["groups"].is_null(),
+        "nothing moved, nothing rebuilt: {push}"
+    );
+}

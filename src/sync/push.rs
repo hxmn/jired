@@ -24,6 +24,9 @@ pub struct PushReport {
     pub dry_run: bool,
     pub results: Vec<IssueResult>,
     pub stale: Vec<String>,
+    /// Rebuilt when a push moved an issue somewhere a grouping folder shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<crate::sync::group::GroupReport>,
     /// Things push deliberately did not do, and why.
     pub warnings: Vec<String>,
 }
@@ -304,6 +307,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 dry_run: args.dry_run,
                 results: Vec::new(),
                 stale: Vec::new(),
+                groups: None,
                 warnings: Vec::new(),
             });
         }
@@ -321,6 +325,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         dry_run: args.dry_run,
         results: Vec::new(),
         stale: Vec::new(),
+        groups: None,
         warnings: Vec::new(),
     };
 
@@ -526,7 +531,42 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     }
 
     report.results.sort_by(|a, b| a.key.cmp(&b.key));
+
+    // Grouping folders are views over base, and a push has just moved base: the
+    // sprint an issue is in, the column it sits in, the parent it hangs from.
+    // Rebuilding them here is what makes `sprints/<the sprint just created>`
+    // appear from the push that filled it, rather than only from the next pull
+    // that happens to write a file — which, after a push, is usually none.
+    if !args.dry_run
+        && report
+            .results
+            .iter()
+            .any(|r| r.ops.iter().any(|o| o.status == "done" && regroups(o.kind)))
+    {
+        let options = crate::sync::group::GroupOptions::from_context(ctx)?;
+        match crate::sync::group::regroup(&engine, engine.projector.root(), &options) {
+            Ok(groups) => {
+                report.warnings.extend(groups.warnings.iter().cloned());
+                report.groups = Some(groups);
+            }
+            Err(e) => report.warnings.push(format!(
+                "cannot rebuild grouping folders: {} — `jired doctor --regroup` retries it",
+                e.message
+            )),
+        }
+    }
     Ok(report)
+}
+
+/// Whether an applied op leaves the grouping folders describing where the issue
+/// used to be. Everything else a push sends — a comment, a worklog, an upload —
+/// changes the issue without changing where it is filed, and rebuilding the
+/// tree for those would only risk discarding a card someone has dragged since.
+fn regroups(kind: &str) -> bool {
+    matches!(
+        kind,
+        "create_issue" | "move_sprint" | "transition" | "update_fields" | "rename_file"
+    )
 }
 
 /// Create a locally authored `NEW-*` issue on the server.
@@ -960,7 +1000,7 @@ fn plan(
     // which is the only part of the list a person can act on anyway.
     if bf.sprint != wf.sprint {
         let (before, after) = (bf.sprint.last(), wf.sprint.last());
-        if before != after {
+        if !crate::doc::frontmatter::sprint_history_only(&bf.sprint, &wf.sprint) {
             match sprint_target(after.map(String::as_str), sprints) {
                 Ok(target) => {
                     let (path, label) = match &target {
@@ -1523,6 +1563,7 @@ mod tests {
             dry_run: false,
             results: vec![],
             stale: vec![],
+            groups: None,
             warnings: vec![],
         };
         assert_eq!(ok.exit_code(), ExitCode::Success);
@@ -1531,6 +1572,7 @@ mod tests {
             dry_run: false,
             results: vec![],
             stale: vec!["PROJ-1".into()],
+            groups: None,
             warnings: vec![],
         };
         assert_eq!(stale.exit_code(), ExitCode::Conflict);
@@ -1539,6 +1581,7 @@ mod tests {
             dry_run: false,
             results: vec![IssueResult::failed("PROJ-1", &JiredError::generic("boom"))],
             stale: vec![],
+            groups: None,
             warnings: vec![],
         };
         assert_eq!(failed.exit_code(), ExitCode::Generic);
@@ -1549,6 +1592,7 @@ mod tests {
             dry_run: false,
             results: vec![IssueResult::failed("PROJ-1", &JiredError::auth("no"))],
             stale: vec![],
+            groups: None,
             warnings: vec![],
         };
         assert_eq!(auth.exit_code(), ExitCode::Auth);
@@ -1561,6 +1605,7 @@ mod tests {
                 IssueResult::failed("PROJ-2", &JiredError::lossy("no")),
             ],
             stale: vec![],
+            groups: None,
             warnings: vec![],
         };
         assert_eq!(mixed.exit_code(), ExitCode::Generic);

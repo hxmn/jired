@@ -218,6 +218,28 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Fixed
 
+- **`jired diff` no longer reports sprint history as a change.** `sprint:` is a
+  list of the sprints an issue has been through, and only the last of them —
+  where the issue is now — is something a push can act on. `status` and `push`
+  already knew that; `diff` did not, so a workspace whose files were written
+  before jired kept the whole list saw every one of them reported as modified,
+  burying the changes that were real under changes nobody could send. The rule
+  now lives in one place and all three follow it: an issue that differs only in
+  sprint history is not listed, and on an issue that has real changes too the
+  row is kept for context, marked `"sendable": false` in `--json` and
+  `(history, not sendable)` on screen, and left out of the `--stat` counts.
+- **A push that moves an issue rebuilds the grouping folders.** `sprints/`,
+  `boards/` and `by-parent/` are views over base, and a push moves base — but
+  only `pull` rebuilt them, and only when it wrote a file. Moving an issue into
+  a sprint and pushing therefore left `sprints/` describing where the issue used
+  to be, and the sprint just created had no folder at all until the next pull
+  that happened to write something. The rebuild now runs at the end of a push
+  that created, transitioned, re-parented or re-sprinted an issue, and reports
+  as `groups` in `--json`. A push that only adds a comment, a worklog or an
+  attachment leaves the tree alone, so a card dragged between board columns and
+  not yet pushed still survives it.
+- `sprint create` says where the sprint's folder will appear and when — a sprint
+  with nothing in it has no folder, which reads like the sprint never happened.
 - `push --dry-run` no longer panics on a summary containing non-ASCII text (it
   sliced a `String` on a byte boundary).
 - `jired status | head` exits 0 instead of panicking on a closed pipe.

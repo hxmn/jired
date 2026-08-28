@@ -41,6 +41,11 @@ pub struct FieldDiff {
     pub field: String,
     pub from: serde_json::Value,
     pub to: serde_json::Value,
+    /// Whether a push could carry this change. `sprint:` is the one field that
+    /// can differ in a way no API accepts — see
+    /// [`crate::doc::frontmatter::sprint_history_only`] — and a row marked
+    /// `false` is shown for context, not counted, and never on its own.
+    pub sendable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,7 +85,7 @@ impl DiffReport {
                 out.say(format!(
                     "{:<key_width$} {:>2} field(s), {} {}",
                     issue.key,
-                    issue.fields.len(),
+                    issue.fields.iter().filter(|f| f.sendable).count(),
                     style::out(GREEN, format!("+{added}")),
                     style::out(RED, format!("-{removed}"))
                 ));
@@ -111,8 +116,15 @@ impl DiffReport {
                 issue.file.as_deref().unwrap_or("")
             ));
             for f in &issue.fields {
+                // A row a push cannot carry is worth seeing next to the ones it
+                // can, as long as it says so rather than looking like work.
+                let note = if f.sendable {
+                    String::new()
+                } else {
+                    style::out(DIM, "  (history, not sendable)")
+                };
                 out.say(format!(
-                    "   {:<field_width$} {} → {}",
+                    "   {:<field_width$} {} → {}{note}",
                     f.field,
                     style::out(RED, render_value(&f.from)),
                     style::out(GREEN, render_value(&f.to))
@@ -200,13 +212,14 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
             (Some(_), None) => "deleted",
             _ => "modified",
         };
-        let Some(diff) = compare(&row.key, left.as_ref(), right.as_ref(), status) else {
+        let working = args.mode() != DiffMode::BaseRemote;
+        let Some(diff) = compare(&row.key, left.as_ref(), right.as_ref(), status, working) else {
             continue;
         };
         let file = files.get(&row.key).map(|f| f.relative.clone());
 
         stat.issues += 1;
-        stat.fields += diff.fields.len();
+        stat.fields += diff.fields.iter().filter(|f| f.sendable).count();
         stat.added += diff.sections.iter().map(|s| s.added).sum::<usize>();
         stat.removed += diff.sections.iter().map(|s| s.removed).sum::<usize>();
         issues.push(IssueDiff { file, ..diff });
@@ -242,11 +255,15 @@ fn working_doc(
 }
 
 /// Compare two versions of an issue, returning None when they match.
+///
+/// `working` says whether the right-hand side is the working copy, which is
+/// what makes "could this be pushed?" a meaningful question about a field.
 fn compare(
     key: &str,
     left: Option<&IssueDoc>,
     right: Option<&IssueDoc>,
     status: &'static str,
+    working: bool,
 ) -> Option<IssueDiff> {
     let mut fields = Vec::new();
     let mut sections = Vec::new();
@@ -272,10 +289,20 @@ fn compare(
             for name in crate::doc::frontmatter::EDITABLE {
                 let (from, to) = (a.frontmatter.field(name), b.frontmatter.field(name));
                 if from != to {
+                    // Only against the working copy is sendability a question:
+                    // between two server snapshots every difference is real
+                    // history that a pull would bring in.
+                    let sendable = !working
+                        || *name != "sprint"
+                        || !crate::doc::frontmatter::sprint_history_only(
+                            &a.frontmatter.sprint,
+                            &b.frontmatter.sprint,
+                        );
                     fields.push(FieldDiff {
                         field: (*name).to_string(),
                         from: from.unwrap_or(serde_json::Value::Null),
                         to: to.unwrap_or(serde_json::Value::Null),
+                        sendable,
                     });
                 }
             }
@@ -314,7 +341,12 @@ fn compare(
         }
     }
 
-    (!fields.is_empty() || !sections.is_empty()).then(|| IssueDiff {
+    // An issue whose every difference is unsendable sprint history is not a
+    // difference anyone can do anything about, and listing it would bury the
+    // ones that are: `jired diff` before `jired push --dry-run` has to show the
+    // same set of issues the push will act on.
+    let actionable = fields.iter().any(|f| f.sendable) || !sections.is_empty();
+    actionable.then(|| IssueDiff {
         key: key.to_string(),
         file: None,
         status,
@@ -441,14 +473,14 @@ mod tests {
     #[test]
     fn identical_documents_produce_no_diff() {
         let a = doc("s", "body");
-        assert!(compare("PROJ-1", Some(&a), Some(&a), "modified").is_none());
+        assert!(compare("PROJ-1", Some(&a), Some(&a), "modified", true).is_none());
     }
 
     #[test]
     fn a_field_change_is_reported_with_both_values() {
         let a = doc("Old", "body");
         let b = doc("New", "body");
-        let d = compare("PROJ-1", Some(&a), Some(&b), "modified").unwrap();
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).unwrap();
         assert_eq!(d.fields.len(), 1);
         assert_eq!(d.fields[0].field, "summary");
         assert_eq!(d.fields[0].from, "Old");
@@ -460,7 +492,7 @@ mod tests {
     fn a_body_change_produces_a_unified_diff() {
         let a = doc("s", "one\ntwo\n");
         let b = doc("s", "one\nTWO\n");
-        let d = compare("PROJ-1", Some(&a), Some(&b), "modified").unwrap();
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).unwrap();
         assert_eq!(d.sections.len(), 1);
         assert_eq!(d.sections[0].section, "Description");
         assert_eq!(d.sections[0].added, 1);
@@ -480,7 +512,7 @@ mod tests {
             note: String::new(),
             body: "hello".into(),
         });
-        let d = compare("PROJ-1", Some(&a), Some(&b), "modified").unwrap();
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).unwrap();
         assert_eq!(d.sections[0].section, "Comments/[new]");
         assert_eq!(d.sections[0].added, 1);
     }
@@ -488,9 +520,56 @@ mod tests {
     #[test]
     fn a_missing_side_still_diffs_against_empty() {
         let b = doc("s", "body");
-        let d = compare("PROJ-1", None, Some(&b), "added").unwrap();
+        let d = compare("PROJ-1", None, Some(&b), "added", true).unwrap();
         assert_eq!(d.status, "added");
         assert!(d.fields.iter().any(|f| f.field == "summary"));
+    }
+
+    /// A file that names one sprint where the base names the whole history is
+    /// not a change: the sprint the issue is in is the same, and that is all a
+    /// push can act on. `diff` has to agree with `status` and `push` about it,
+    /// or the safety check it exists to be buries the changes that are real.
+    #[test]
+    fn a_difference_confined_to_sprint_history_is_not_a_difference() {
+        let mut a = doc("s", "b");
+        a.frontmatter.sprint = vec!["Sprint 41".into(), "Sprint 42".into()];
+        let mut b = a.clone();
+        b.frontmatter.sprint = vec!["Sprint 42".into()];
+        assert!(compare("PROJ-1", Some(&a), Some(&b), "modified", true).is_none());
+
+        // Between two server snapshots there is nothing to push and nothing to
+        // hide: the history is what a pull would bring in.
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", false).unwrap();
+        assert!(d.fields.iter().all(|f| f.sendable));
+    }
+
+    /// Shown, but marked, on an issue that has real changes too.
+    #[test]
+    fn sprint_history_rides_along_marked_when_something_else_changed() {
+        let mut a = doc("Old", "b");
+        a.frontmatter.sprint = vec!["Sprint 41".into(), "Sprint 42".into()];
+        let mut b = a.clone();
+        b.frontmatter.summary = "New".into();
+        b.frontmatter.sprint = vec!["Sprint 42".into()];
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).unwrap();
+        let sprint = d
+            .fields
+            .iter()
+            .find(|f| f.field == "sprint")
+            .expect("the row is kept for context");
+        assert!(!sprint.sendable);
+        assert!(d.fields.iter().any(|f| f.field == "summary" && f.sendable));
+    }
+
+    /// Moving the issue on is a change, history or not.
+    #[test]
+    fn a_change_to_the_sprint_it_is_in_now_is_sendable() {
+        let mut a = doc("s", "b");
+        a.frontmatter.sprint = vec!["Sprint 41".into(), "Sprint 42".into()];
+        let mut b = a.clone();
+        b.frontmatter.sprint = vec!["Sprint 41".into(), "Sprint 43".into()];
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).unwrap();
+        assert!(d.fields.iter().any(|f| f.field == "sprint" && f.sendable));
     }
 
     #[test]
@@ -502,7 +581,7 @@ mod tests {
             key: Some("PROJ-2".into()),
             title: "Sub".into(),
         });
-        let d = compare("PROJ-1", Some(&a), Some(&b), "modified").unwrap();
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).unwrap();
         assert!(d.sections.iter().any(|s| s.section == "Children"));
     }
 
@@ -518,7 +597,7 @@ mod tests {
                 description: None,
             },
         ));
-        let d = compare("PROJ-1", Some(&a), Some(&b), "modified").unwrap();
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).unwrap();
         let section = d
             .sections
             .iter()
