@@ -26,6 +26,137 @@ pub fn envelope<T: Serialize>(name: &str, payload: &T) -> serde_json::Value {
     serde_json::Value::Object(obj)
 }
 
+/// How much of the result document to print.
+///
+/// A full document is a complete record, which is right for a person reading it
+/// once and wrong for a caller that wanted three values: every `--json` call
+/// otherwise ends in a script that re-prints a subset of what jired just built.
+/// Both settings are opt-in, because the shape a schema promises is worth more
+/// than the bytes to everyone who is not counting them.
+#[derive(Debug, Clone, Default)]
+pub struct Shape {
+    /// Dotted paths to keep; everything else is pruned. Empty keeps it all.
+    pub fields: Vec<String>,
+    /// Drop nulls and empty collections.
+    pub compact: bool,
+}
+
+static SHAPE: Mutex<Option<Shape>> = Mutex::new(None);
+
+/// Set the projection every later `emit` applies. Called once, from `cli::run`.
+pub fn set_shape(shape: Shape) {
+    if let Ok(mut slot) = SHAPE.lock() {
+        *slot = Some(shape);
+    }
+}
+
+/// Apply `--fields` and `--json-compact` to a finished document.
+///
+/// `schema` always survives: a document that cannot say what it is has stopped
+/// being one, and a caller that asked for two fields still has to be able to
+/// tell what it is reading.
+fn shaped(mut doc: serde_json::Value) -> serde_json::Value {
+    let Ok(slot) = SHAPE.lock() else {
+        return doc;
+    };
+    let Some(shape) = slot.as_ref() else {
+        return doc;
+    };
+    if !shape.fields.is_empty() {
+        doc = project(&doc, &shape.fields);
+    }
+    if shape.compact {
+        prune(&mut doc);
+    }
+    doc
+}
+
+/// Keep only the named paths, in the shape the document already has.
+///
+/// A path walks objects by name and *maps over* arrays, so `results.ok` keeps
+/// the `ok` of every result rather than needing an index nobody knows in
+/// advance. That is what makes `--fields results.key,results.ok` answer "how did
+/// each issue do" in one call.
+fn project(doc: &serde_json::Value, paths: &[String]) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    if let Some(schema) = doc.get("schema") {
+        out.insert("schema".into(), schema.clone());
+    }
+    for path in paths {
+        let mut parts = path.split('.').filter(|p| !p.is_empty());
+        let Some(head) = parts.next() else { continue };
+        let Some(value) = doc.get(head) else { continue };
+        let rest: Vec<&str> = parts.collect();
+        let kept = narrow(value, &rest);
+        // Two paths under one head merge rather than replacing each other.
+        match (out.get_mut(head), kept) {
+            (Some(serde_json::Value::Object(a)), serde_json::Value::Object(b)) => a.extend(b),
+            (Some(serde_json::Value::Array(a)), serde_json::Value::Array(b)) => {
+                for (x, y) in a.iter_mut().zip(b) {
+                    if let (serde_json::Value::Object(x), serde_json::Value::Object(y)) = (x, y) {
+                        x.extend(y);
+                    }
+                }
+            }
+            (_, kept) => {
+                out.insert(head.to_string(), kept);
+            }
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+/// The part of `value` that `rest` names, mapping over arrays as it goes.
+fn narrow(value: &serde_json::Value, rest: &[&str]) -> serde_json::Value {
+    let Some((head, tail)) = rest.split_first() else {
+        return value.clone();
+    };
+    match value {
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|i| narrow(i, rest))
+                .filter(|v| !v.is_null())
+                .collect(),
+        ),
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            if let Some(found) = map.get(*head) {
+                out.insert((*head).to_string(), narrow(found, tail));
+            }
+            serde_json::Value::Object(out)
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Drop nulls and empty collections, everywhere.
+fn prune(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                prune(v);
+            }
+            map.retain(|k, v| k == "schema" || !is_empty(v));
+        }
+        serde_json::Value::Array(items) => {
+            for v in items.iter_mut() {
+                prune(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_empty(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Array(a) => a.is_empty(),
+        serde_json::Value::Object(o) => o.is_empty(),
+        _ => false,
+    }
+}
+
 /// Warnings raised before or outside a command's own result document.
 ///
 /// In JSON mode `warn` cannot print — stderr must stay a single parseable error
@@ -94,6 +225,9 @@ impl Out {
                 }
             }
         }
+        // Shaped last, so a warning parked before the projection can still be
+        // asked for by name and is still dropped by `--fields` when it was not.
+        let doc = shaped(doc);
         let mut stdout = std::io::stdout().lock();
         note_write(
             serde_json::to_writer_pretty(&mut stdout, &doc)
@@ -206,6 +340,70 @@ mod tests {
         let v = envelope("fetch", &P { fetched: 3 });
         assert_eq!(v["schema"], "jired/fetch/1");
         assert_eq!(v["fetched"], 3);
+    }
+
+    fn doc() -> serde_json::Value {
+        serde_json::json!({
+            "schema": "jired/push/1",
+            "summary": {"ok": 2, "failed": 0, "stale": []},
+            "dry_run": false,
+            "results": [
+                {"key": "TSK-1", "ok": true, "new_key": null, "error": null, "ops": []},
+                {"key": "TSK-2", "ok": false, "new_key": null, "error": "boom", "ops": []},
+            ],
+            "warnings": [],
+        })
+    }
+
+    /// The reason `--fields` exists: reading two values out of a document
+    /// should not need a script that re-prints what jired just built.
+    #[test]
+    fn a_projection_keeps_the_named_paths_and_the_schema() {
+        let kept = project(&doc(), &["summary.ok".to_string()]);
+        assert_eq!(kept["schema"], "jired/push/1");
+        assert_eq!(kept["summary"]["ok"], 2);
+        assert!(kept["summary"].get("failed").is_none(), "{kept}");
+        assert!(kept.get("results").is_none(), "{kept}");
+    }
+
+    /// A path maps over an array, because an index nobody knows in advance is
+    /// no way to ask "how did each issue do".
+    #[test]
+    fn a_path_through_an_array_answers_for_every_element() {
+        let kept = project(
+            &doc(),
+            &["results.key".to_string(), "results.ok".to_string()],
+        );
+        assert_eq!(kept["results"][0]["key"], "TSK-1");
+        assert_eq!(kept["results"][0]["ok"], true);
+        assert_eq!(kept["results"][1]["key"], "TSK-2");
+        assert_eq!(kept["results"][1]["ok"], false);
+        // Two paths under one head merge rather than the second replacing it.
+        assert!(kept["results"][0].get("error").is_none(), "{kept}");
+    }
+
+    #[test]
+    fn a_path_nobody_has_is_left_out_rather_than_being_an_error() {
+        let kept = project(&doc(), &["nonsense".to_string()]);
+        assert_eq!(kept["schema"], "jired/push/1");
+        assert_eq!(kept.as_object().unwrap().len(), 1);
+    }
+
+    /// Nulls and empties are what a caller pays for and never reads.
+    #[test]
+    fn compacting_drops_nulls_and_empties_but_never_the_schema() {
+        let mut d = doc();
+        prune(&mut d);
+        assert_eq!(d["schema"], "jired/push/1");
+        assert!(d["results"][0].get("new_key").is_none(), "{d}");
+        assert!(d["results"][0].get("ops").is_none(), "an empty list: {d}");
+        assert!(d.get("warnings").is_none(), "{d}");
+        // `false` is a value, not an absence.
+        assert_eq!(d["dry_run"], false);
+        assert_eq!(d["results"][1]["error"], "boom");
+        // And `stale: []` goes, while the summary it sits in stays.
+        assert_eq!(d["summary"]["ok"], 2);
+        assert!(d["summary"].get("stale").is_none(), "{d}");
     }
 
     /// A warning raised in JSON mode must survive into the result document

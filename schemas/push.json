@@ -4,9 +4,10 @@
   "title": "jired push result",
   "type": "object",
   "required": [
-    "schema",
     "dry_run",
-    "results"
+    "results",
+    "schema",
+    "summary"
   ],
   "properties": {
     "schema": {
@@ -131,6 +132,31 @@
       "description": "Things push deliberately did not do, and why",
       "items": {
         "type": "string"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "description": "The outcome in one line, so a caller need not walk the results to find it",
+      "required": [
+        "ok",
+        "failed",
+        "stale"
+      ],
+      "properties": {
+        "ok": {
+          "type": "integer",
+          "description": "Issues every operation of which the server confirmed"
+        },
+        "failed": {
+          "type": "integer"
+        },
+        "stale": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Issues the server had moved on from; nothing was sent for them"
+        }
       }
     }
   }

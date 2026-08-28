@@ -12,6 +12,28 @@ version between the one you have and the one you are moving to.
 
 ### Added
 
+- **`--fields` and `--json-compact` cut a result document down.** A full
+  document is a complete record, which is the wrong size when the caller wanted
+  three values: reading them meant piping jired's own JSON through a script that
+  re-printed a subset of it.
+
+  ```sh
+  jired status --json --fields dirty,new_issues
+  jired push --json --fields summary,results.key,results.ok
+  jired push --json --json-compact     # no nulls, no empty lists
+  ```
+
+  A `--fields` path walks objects and maps over arrays, so `results.ok` keeps
+  the `ok` of every result rather than needing an index nobody knows in advance;
+  `schema` always survives. Both are opt-in, because dropping keys by default
+  would break every schema's `required` list for consumers who are not counting
+  bytes — and a shaped document is deliberately no longer schema-valid.
+
+- **`jired push --json` leads with a summary.** `{"ok": 5, "failed": 0,
+  "stale": ["PROJ-194"]}`, first in the document, so checking whether a push
+  went through is one read rather than a walk over every operation of every
+  issue.
+
 - **`jired label` and `jired set` edit fields across many issues.** Putting one
   label on six issues meant a script that rewrote `labels:` in the YAML — the
   caller parsing jired's own file format, which is the thing the format exists

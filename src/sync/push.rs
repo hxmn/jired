@@ -19,8 +19,21 @@ use crate::sync::Engine;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+/// The outcome in one line, before the array anybody would otherwise read to
+/// work it out. A caller checking whether a push went through should not have
+/// to walk every operation of every issue to find out.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PushSummary {
+    pub ok: usize,
+    pub failed: usize,
+    /// Issues the server had moved on from; they were not sent.
+    pub stale: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PushReport {
+    /// First, so it is the first thing read.
+    pub summary: PushSummary,
     pub dry_run: bool,
     pub results: Vec<IssueResult>,
     pub stale: Vec<String>,
@@ -304,6 +317,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             .collect();
         if unfinished.is_empty() {
             return Ok(PushReport {
+                summary: PushSummary::default(),
                 dry_run: args.dry_run,
                 results: Vec::new(),
                 stale: Vec::new(),
@@ -322,6 +336,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     }
 
     let mut report = PushReport {
+        summary: PushSummary::default(),
         dry_run: args.dry_run,
         results: Vec::new(),
         stale: Vec::new(),
@@ -531,6 +546,11 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     }
 
     report.results.sort_by(|a, b| a.key.cmp(&b.key));
+    report.summary = PushSummary {
+        ok: report.results.iter().filter(|r| r.ok).count(),
+        failed: report.results.iter().filter(|r| !r.ok).count(),
+        stale: report.stale.clone(),
+    };
 
     // Grouping folders are views over base, and a push has just moved base: the
     // sprint an issue is in, the column it sits in, the parent it hangs from.
@@ -1804,6 +1824,7 @@ mod tests {
     #[test]
     fn exit_code_reflects_the_worst_outcome() {
         let ok = PushReport {
+            summary: PushSummary::default(),
             dry_run: false,
             results: vec![],
             stale: vec![],
@@ -1813,6 +1834,7 @@ mod tests {
         assert_eq!(ok.exit_code(), ExitCode::Success);
 
         let stale = PushReport {
+            summary: PushSummary::default(),
             dry_run: false,
             results: vec![],
             stale: vec!["PROJ-1".into()],
@@ -1822,6 +1844,7 @@ mod tests {
         assert_eq!(stale.exit_code(), ExitCode::Conflict);
 
         let failed = PushReport {
+            summary: PushSummary::default(),
             dry_run: false,
             results: vec![IssueResult::failed("PROJ-1", &JiredError::generic("boom"))],
             stale: vec![],
@@ -1833,6 +1856,7 @@ mod tests {
         // A single kind of failure keeps its own exit code, so a script can
         // tell "the token expired" from "the conversion was lossy".
         let auth = PushReport {
+            summary: PushSummary::default(),
             dry_run: false,
             results: vec![IssueResult::failed("PROJ-1", &JiredError::auth("no"))],
             stale: vec![],
@@ -1843,6 +1867,7 @@ mod tests {
 
         // Mixed causes have no single right answer, so they stay generic.
         let mixed = PushReport {
+            summary: PushSummary::default(),
             dry_run: false,
             results: vec![
                 IssueResult::failed("PROJ-1", &JiredError::auth("no")),

@@ -63,6 +63,25 @@ jired pull --json --no-input || test $? -eq 5   # 5 means conflicts; the default
 jired schema pull                               # JSON Schema for that output
 ```
 
+A full document is a complete record, which is the wrong size when you wanted
+three values. Two flags cut it down, both opt-in so the default keeps the shape
+its schema promises:
+
+```sh
+jired status --json --fields dirty,new_issues       # only these paths
+jired push --json --fields summary,results.key,results.ok
+jired push --json --json-compact                    # drop nulls and empty lists
+```
+
+`--fields` takes dotted paths, repeatable or comma-separated. A path walks
+objects and *maps over* arrays, so `results.ok` keeps the `ok` of every result
+rather than needing an index. `schema` always survives; a projected or compacted
+document does not validate against its schema, which is the point of asking.
+
+`jired push --json` leads with `summary` — `{"ok": 5, "failed": 0, "stale":
+["PROJ-194"]}` — so the outcome is one read rather than a walk over every
+operation of every issue.
+
 ### Permissions
 
 `jired init` also writes an allow-list for the commands that only read: they send

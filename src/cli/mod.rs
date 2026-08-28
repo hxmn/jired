@@ -89,6 +89,18 @@ pub struct GlobalArgs {
     #[arg(long, short = 'q', global = true)]
     pub quiet: bool,
 
+    /// Keep only these paths of the --json document: `dirty,results.ok`
+    ///
+    /// Dotted names walk objects and map over arrays, so `results.ok` keeps the
+    /// `ok` of every result. `schema` is always kept. A projected document no
+    /// longer matches its published schema — that is what was asked for.
+    #[arg(long, global = true, value_name = "PATHS", value_delimiter = ',')]
+    pub fields: Vec<String>,
+
+    /// Drop null and empty values from the --json document
+    #[arg(long, global = true)]
+    pub json_compact: bool,
+
     /// Increase log verbosity (-v debug, -vv trace)
     #[arg(long, short = 'v', global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
@@ -262,6 +274,10 @@ pub const INSECURE_TLS_WARNING: &str =
 pub fn run(cli: Cli) -> ExitCode {
     let out = Out::new(cli.global.json, cli.global.quiet);
     crate::style::init(cli.global.color_choice());
+    crate::json::set_shape(crate::json::Shape {
+        fields: cli.global.fields.clone(),
+        compact: cli.global.json_compact,
+    });
     crate::json::set_verbose(cli.global.verbose > 0);
     init_tracing(cli.global.verbose);
 

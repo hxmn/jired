@@ -1043,6 +1043,10 @@ fn push_refuses_a_stale_issue_with_exit_5() {
 
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["stale"][0], "PROJ-142");
+    // And the one-line summary says so without walking the results.
+    assert_eq!(report["summary"]["stale"][0], "PROJ-142");
+    assert_eq!(report["summary"]["ok"], 0);
+    assert_eq!(report["summary"]["failed"], 1);
     assert_eq!(report["results"][0]["ok"], false);
     assert_eq!(report["results"][0]["error_kind"], "conflict");
     assert_eq!(report["results"][0]["ops"][0]["status"], "skipped");
@@ -4111,6 +4115,71 @@ fn set_refuses_a_field_it_cannot_write_before_editing_anything() {
     );
 
     assert_eq!(ws.read(ISSUE_FILE), before, "nothing was written");
+}
+
+/// Six of ten calls in a real session existed only to print a subset of the
+/// JSON jired had just built. `--fields` is that subset, without the script.
+#[test]
+fn fields_projects_the_document_and_keeps_the_schema() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&["status", "--fields", "dirty,new_issues"]);
+    assert_eq!(out["schema"], "jired/status/1");
+    assert_eq!(out.as_object().unwrap().len(), 3, "{out}");
+
+    // A path maps over an array: how did each issue do, in one call.
+    ws.json(&["label", "add", "regular", "PROJ-142", "PROJ-150"]);
+    let out = ws.json(&["push", "--fields", "summary,results.key,results.ok"]);
+    assert_eq!(out["summary"]["ok"], 2);
+    assert_eq!(out["results"][0]["key"], "PROJ-142");
+    assert_eq!(out["results"][0]["ok"], true);
+    assert!(out["results"][0].get("ops").is_none(), "{out}");
+    assert!(out.get("dry_run").is_none(), "{out}");
+}
+
+/// The nulls and empty lists a caller pays for on every call and never reads.
+#[test]
+fn json_compact_drops_nulls_and_empties() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["label", "add", "regular", "PROJ-142"]);
+
+    let full = ws.json(&["push", "--dry-run"]);
+    assert!(full["results"][0]["new_key"].is_null());
+    assert!(full["results"][0]
+        .as_object()
+        .unwrap()
+        .contains_key("error"));
+
+    ws.json(&["label", "add", "another", "PROJ-142"]);
+    let lean = ws.json(&["push", "--dry-run", "--json-compact"]);
+    let result = lean["results"][0].as_object().unwrap();
+    assert!(!result.contains_key("new_key"), "{lean}");
+    assert!(!result.contains_key("error"), "{lean}");
+    // A value that is `false` is a value, not an absence.
+    assert_eq!(lean["dry_run"], true);
+    assert_eq!(lean["schema"], "jired/push/1", "the schema always survives");
+}
+
+/// Checking whether a push went through should not mean walking every
+/// operation of every issue.
+#[test]
+fn push_leads_with_a_one_line_summary() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["label", "add", "regular", "PROJ-142", "PROJ-150"]);
+
+    let push = ws.json(&["push"]);
+    assert_eq!(push["summary"]["ok"], 2);
+    assert_eq!(push["summary"]["failed"], 0);
+    assert!(push["summary"]["stale"].as_array().unwrap().is_empty());
+
+    // The stale case is asserted where a stale push is set up properly:
+    // see `push_refuses_a_stale_issue_with_exit_5`.
 }
 
 // ---------------------------------------------------------------------------

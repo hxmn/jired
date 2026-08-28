@@ -76,6 +76,15 @@ Narration and warnings are suppressed — mixing prose into stderr would make th
 error document unparseable, so commands that model warnings carry them inside
 their result document instead. Ordering is deterministic in all outputs.
 
+`--fields PATHS` keeps only the named paths and `--json-compact` drops nulls and
+empty collections. Both are opt-in: dropping keys by default would break every
+schema's `required` list, and the bytes matter to a caller reading three values,
+not to everyone. A path walks objects and maps over arrays — `results.ok` keeps
+the `ok` of every result — two paths under one head merge, a path nobody has is
+left out rather than being an error, and `schema` survives both, because a
+document that cannot say what it is has stopped being one. A shaped document is
+deliberately no longer schema-valid.
+
 ## Commands
 
 ### `jired init`
