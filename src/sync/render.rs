@@ -191,6 +191,7 @@ fn build_frontmatter(issue: &RemoteIssue, ctx: &RenderContext<'_>, lossy: bool) 
             ctx.base_url.trim_end_matches('/'),
             issue.key
         ),
+        due_date: f.due_date.clone(),
         story_points: f.story_points,
         // The file shows the editable form; `api::custom` puts the Jira
         // wrapper back when a change is pushed.

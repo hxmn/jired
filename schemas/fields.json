@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/fields/1",
+  "title": "jired fields result",
+  "description": "The field definitions this instance published, as the last fetch cached them",
+  "type": "object",
+  "required": [
+    "schema",
+    "fields",
+    "count"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/fields/1"
+    },
+    "count": {
+      "type": "integer"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "custom"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "What `custom:` keys a value by: `customfield_10015`, or a system name like `duedate`"
+          },
+          "name": {
+            "type": "string",
+            "description": "What the instance calls it on screen"
+          },
+          "custom": {
+            "type": "boolean"
+          },
+          "schema_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`string`, `date`, `array`, `option`, \u2026"
+          },
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Element type of an array field"
+          }
+        }
+      }
+    }
+  }
+}

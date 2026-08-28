@@ -608,6 +608,27 @@ named one when both exist. A template is a partial file: the identity fields
 (`key`, `id`, `jired`) are supplied if it does not carry them, so a skeleton with
 frontmatter no longer needs a placeholder key to get past the parser.
 
+### `jired show ISSUE [--raw]`
+Everything the workspace knows about one issue, from the file when there is one
+and from the snapshot when there is not — the preference `create --like` uses
+too, and the reason both live on `cmd::lookup`. The default is the issue as jired
+models it; `--raw` is the server's own payload.
+
+`--raw` is the point of the command. An unset field is not written into a `.md`
+file, so the file cannot answer "is this empty, or does this instance not have
+that field?" — and the answer was `sqlite3 .jired/state.db` with `json_extract`
+over `remote_raw`, an agent reverse-engineering a private schema to ask
+something the tool already knows.
+JSON: `{"schema":"jired/show/1","key":"PROJ-142","source":"file","frontmatter":{…},"description":"…"}`.
+
+### `jired fields [TEXT] [--custom]`
+What this instance's fields are called, out of the definitions the last fetch
+cached. `custom:` keys a value by its Jira id, which is the only name stable
+across instances and the only one nobody can read; finding out what
+`customfield_10015` is meant opening `state.db` in `sqlite3`. `TEXT` filters on
+the name or the id, `--custom` narrows to the instance's own.
+JSON: `{"schema":"jired/fields/1","count":42,"fields":[{"id","name","custom","schema_type","items"}]}`.
+
 ### `jired list [--summary-contains T] [--label L] [--status S] [--sprint S] [--assignee U] [--type T] [--keys]`
 `search` is JQL on the server; this is its offline half, and the other half of
 any bulk edit — choosing what to edit. Without it the choice was a `grep` over
@@ -694,12 +715,12 @@ disk on purpose: the copy that describes the binary in your hand is the one it
 was built with, a checkout beside it has moved on, and an installed binary has no
 checkout at all. It costs ~19 KB of `.rodata`, which is the whole price of being
 able to answer "what changed" without the source.
-JSON: `{"schema":"jired/version/1","version":"0.2.0","commit":"9212430","built":…,"rustc":…,"target":…,"changelog":null}`.
+JSON: `{"schema":"jired/version/1","version":"0.3.0","commit":"9212430","built":…,"rustc":…,"target":…,"changelog":null}`.
 `changelog` is null unless `--changelog` was given: every agent that never reads
 it would otherwise pay for it in every document.
 
 ### `jired --version` / `-V`
-`-V` is one line — `jired 0.2.0 (9212430 2026-08-21T10:49:39Z)`; `--version` adds
+`-V` is one line — `jired 0.3.0 (9212430 2026-08-21T10:49:39Z)`; `--version` adds
 the compiler and target. The commit carries a `-dirty` suffix when the tree had
 uncommitted changes, and reads `unknown` when built from a tarball with no git.
 `SOURCE_DATE_EPOCH` fixes the timestamp for reproducible builds.

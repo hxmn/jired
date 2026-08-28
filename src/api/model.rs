@@ -206,6 +206,8 @@ pub struct IssueFields {
     pub affects_versions: Vec<String>,
     pub links: Vec<IssueLink>,
     pub story_points: Option<f64>,
+    /// Jira's own `duedate`, a date with no time: `2026-09-14`.
+    pub due_date: Option<String>,
     pub subtasks: Vec<SubtaskRef>,
     /// The checklist plugin's list, if the instance has one [M5.4].
     pub checklist: Vec<crate::doc::ChecklistEntry>,

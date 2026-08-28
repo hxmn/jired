@@ -4399,6 +4399,157 @@ fn refresh_stale_leaves_a_real_conflict_alone() {
     assert!(ws.read(ISSUE_FILE).contains("priority: Low"));
 }
 
+/// "Create a task like PROJ-142" had no expression: the model had to be read
+/// and its fields typed back one at a time.
+#[test]
+fn create_like_copies_the_shape_of_another_issue() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["label", "add", "regular", "PROJ-142"]);
+
+    let report = ws.json(&[
+        "create",
+        "-s",
+        "[CARE] A new one",
+        "--like",
+        "PROJ-142",
+        "--priority",
+        "Low",
+    ]);
+    let text = ws.read(report["file"].as_str().unwrap());
+
+    // What describes the kind of issue this is, copied.
+    assert!(text.contains("type: Story"), "{text}");
+    assert!(text.contains("- regular"), "{text}");
+    assert!(text.contains("assignee:"), "{text}");
+    // A flag beats the model.
+    assert!(text.contains("priority: Low"), "{text}");
+    // What belongs to the issue that already exists, not copied.
+    assert!(
+        text.contains("summary: '[CARE] A new one'")
+            || text.contains("summary: \"[CARE] A new one\"")
+            || text.contains("summary: [CARE] A new one"),
+        "{text}"
+    );
+    assert!(!text.contains("key: PROJ-142"), "{text}");
+    assert!(!text.contains("status: In Progress"), "{text}");
+    assert!(!text.contains("Repro confirmed"), "no comments:\n{text}");
+}
+
+/// An unset field is not written into the file, so "is it empty, or does this
+/// instance not have it?" was answerable only from `sqlite3 .jired/state.db`.
+#[test]
+fn show_answers_from_the_snapshot_including_the_raw_payload() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&["show", "PROJ-142"]);
+    assert_eq!(out["schema"], "jired/show/1");
+    assert_eq!(out["key"], "PROJ-142");
+    assert_eq!(out["source"], "file");
+    assert_eq!(out["frontmatter"]["summary"], "Fix login flow");
+
+    // The server's own payload, where a field jired does not model still is.
+    let raw = ws.json(&["show", "PROJ-142", "--raw"]);
+    assert!(
+        raw["raw"]["fields"].as_object().unwrap().len() > 5,
+        "the whole payload: {raw}"
+    );
+}
+
+/// Working out what `customfield_10015` is meant reading `field_meta` out of
+/// the private state database.
+#[test]
+fn fields_names_what_the_instance_calls_its_fields() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&["fields"]);
+    assert_eq!(out["schema"], "jired/fields/1");
+    assert!(out["count"].as_u64().unwrap() > 0, "{out}");
+
+    let story = ws.json(&["fields", "story"]);
+    let ids: Vec<&str> = story["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"customfield_10016"), "{story}");
+    assert_eq!(story["fields"][0]["name"], "Story Points");
+
+    // And only the instance's own, when that is the question.
+    let custom = ws.json(&["fields", "--custom"]);
+    assert!(custom["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|f| f["id"].as_str().unwrap().starts_with("customfield_")));
+}
+
+/// `duedate` is a Jira system field, and `custom:` only ever collected
+/// `customfield_*` — so a due date could be written and never read back, and
+/// the docs gave it no home at all.
+#[test]
+fn a_due_date_is_read_from_the_server_and_sent_back() {
+    let ws = Ws::new();
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["duedate"] = "2026-09-14".into();
+    });
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(ISSUE_FILE);
+    assert!(
+        text.contains("due_date:"),
+        "no due date in the file:\n{text}"
+    );
+    // And it reads back as the string it was written as, rather than YAML
+    // quietly turning an unquoted date into something else.
+    assert_eq!(
+        ws.json(&["show", "PROJ-142"])["frontmatter"]["due_date"],
+        "2026-09-14"
+    );
+    assert!(
+        ws.json(&["diff"])["issues"].as_array().unwrap().is_empty(),
+        "a pulled file is not a local edit"
+    );
+
+    ws.json(&[
+        "set",
+        "--field",
+        "due_date",
+        "--value",
+        "2026-09-30",
+        "PROJ-142",
+    ]);
+    let dry = ws.json(&["push", "--dry-run"]);
+    assert_eq!(
+        dry["results"][0]["ops"][0]["request"]["body"]["fields"]["duedate"],
+        "2026-09-30"
+    );
+
+    // A date Jira would refuse is refused here, before the push.
+    let err = ws.json_err(
+        &[
+            "set",
+            "--field",
+            "due_date",
+            "--value",
+            "next tuesday",
+            "PROJ-142",
+        ],
+        2,
+    );
+    assert!(
+        err["message"].as_str().unwrap().contains("not a date"),
+        "{err}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Custom fields [M2.3]
 // ---------------------------------------------------------------------------

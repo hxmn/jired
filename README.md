@@ -95,7 +95,8 @@ has nothing to ask about. Some of them refresh the read-only snapshot under
 | Codex | `.codex/rules/default.rules` — execpolicy `prefix_rule`s between `# BEGIN jired` and `# END jired`; Codex applies them once the project's `.codex/` layer is trusted |
 
 Granted: `status` (and `st`), `diff`, `log`, `report`, `search`, `fetch`,
-`whoami`, `projects`, `boards`, `sprints`, `schema`, `completion`, `version`,
+`whoami`, `projects`, `boards`, `sprints`, `list`, `show`, `fields`, `schema`,
+`completion`, `version`,
 `attachments list`, `config get|list|path`, `resolve --list`, `init-agents --print`, and
 `pull`, `push`, `reset`, `clean` and `doctor` under `--dry-run`. Everything that
 writes is left out on purpose.
@@ -181,7 +182,7 @@ Three classes of field, and jired treats them differently:
 
 | Class | Fields | On edit |
 |---|---|---|
-| Editable | `type`, `status`, `priority`, `summary`, `labels`, `components`, `assignee`, `sprint`, `parent`, `epic`, `fix_versions`, `affects_versions`, `links`, `story_points`, `custom` | becomes an API call on the next `push` |
+| Editable | `type`, `status`, `priority`, `summary`, `labels`, `components`, `assignee`, `sprint`, `parent`, `epic`, `fix_versions`, `affects_versions`, `due_date`, `links`, `story_points`, `custom` | becomes an API call on the next `push` |
 | Read-only | `reporter`, `created`, `updated`, `url`, `jired` | dropped with a warning on the next write |
 | Identity | `key`, `id` | an error — jired would otherwise write one issue over another |
 
@@ -197,6 +198,9 @@ links:
 - relates to: PROJ-99
 ```
 
+`due_date:` is Jira's own `duedate` — a date with no time, `2026-09-14`. It is a
+system field, so it is named in the header rather than living under `custom:`.
+
 `custom:` holds fields with no well-known name, keyed by their Jira id and written
 in their simple form — a select list as `Platform`, a multi-select as a YAML list,
 a user as `@[Name](id)`. Edit the value; push rebuilds the shape Jira wants
@@ -204,6 +208,12 @@ a user as `@[Name](id)`. Edit the value; push rebuilds the shape Jira wants
 for that field. A value that could not be simplified is shown as raw JSON and sent
 back unchanged — leave it alone unless you know the field. Deleting an entry clears
 that field.
+
+`jired fields` says what those ids are called on this instance, and
+`jired fields --custom` narrows it to the ones this Jira added. A key under
+`custom:` is any field id the server knows, including a system one jired does not
+model by name — but a field jired *does* model has its own header key, and putting
+it under `custom:` as well is two names for one value.
 
 ### Sections
 
@@ -340,6 +350,8 @@ the filename you were just editing instead of retyping the key.
 | `log [ISSUE]` | what changed, newest first — every issue in the workspace, or just one; `--refresh` asks the server |
 | `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag) |
 | `list [--summary-contains T] [--label L] [--status S] [--sprint S] [--assignee U] [--type T]` | the same question asked of the working copy, offline; `--keys` prints keys alone, for piping |
+| `show ISSUE [--raw]` | everything the workspace knows about one issue; `--raw` is the server's own payload, unset fields included |
+| `fields [TEXT] [--custom]` | what this instance calls its fields, so `customfield_10015` has a name |
 | `resolve` | list and clear recorded conflicts — see above |
 | `reset [ISSUES…]` | drop local changes and put the files back to the last sync; lists what would go and asks first, `-n/--dry-run` just lists, `--include-new` also deletes locally created issues |
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
@@ -656,7 +668,7 @@ and target — so a report says which source produced the behaviour:
 
 ```
 $ jired --version
-jired 0.2.0
+jired 0.3.0
 commit:  9212430
 built:   2026-08-21T10:49:39Z
 rustc:   rustc 1.97.1 (8bab26f4f 2026-07-14)

@@ -31,6 +31,13 @@ pub struct CreateArgs {
     /// Template to start from: a name under .jired/templates, or a path
     #[arg(long)]
     pub template: Option<String>,
+    /// Model the new issue on an existing one
+    ///
+    /// Copies type, priority, labels, assignee, components and custom fields.
+    /// Never its identity, status, description, comments or worklogs — those
+    /// belong to the issue that already exists.
+    #[arg(long, value_name = "ISSUE")]
+    pub like: Option<String>,
     /// Issue summary (asked for when omitted at a terminal)
     #[arg(long, short = 's')]
     pub summary: Option<String>,
@@ -85,6 +92,13 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
     // The template is the starting point for both the form and the flags-only
     // path, so it is read before either decides anything.
     let mut doc = template(&ctx, args)?;
+    // After the template and before the flags: "like that one, but…" is what
+    // `--like` means, and the flags are the "but".
+    if let Some(model) = &args.like {
+        let key = crate::project::naming::key_from_input(model);
+        let (from, _) = crate::cli::cmd::lookup::doc(&engine, &key)?;
+        copy_from(&mut doc.frontmatter, &from.frontmatter);
+    }
     let seed = seed(&mut ctx, args, &doc)?;
 
     let Some(draft) = draft(&mut ctx, &engine, &key, args, seed)? else {
@@ -294,6 +308,22 @@ fn new_key(engine: &Engine) -> Result<String> {
         JiredError::generic("cannot allocate a temporary key for the new issue")
             .with_hint("run `jired push` to send the issues already staged, then try again"),
     )
+}
+
+/// Take from `model` the fields that describe *what kind of issue this is*.
+///
+/// Not its identity, which belongs to it; not its status, which is where it has
+/// got to; not its summary, description, comments or worklogs, which are what
+/// it is about. What is left is the shape a team gives issues of this sort, and
+/// copying that by hand — read the model, read off six fields, type them back —
+/// is the whole of what "create a task like TSK-259" used to mean.
+fn copy_from(fm: &mut Frontmatter, model: &Frontmatter) {
+    fm.issue_type = model.issue_type.clone();
+    fm.priority = model.priority.clone();
+    fm.labels = model.labels.clone();
+    fm.assignee = model.assignee.clone();
+    fm.components = model.components.clone();
+    fm.custom = model.custom.clone();
 }
 
 /// Write the flags that name a field, and then whatever `--set` names.

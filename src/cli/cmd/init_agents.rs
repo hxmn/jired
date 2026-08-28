@@ -114,6 +114,18 @@ pub const READ_ONLY: &[ReadOnly] = &[
     ro(&["jired", "boards"], "lists boards"),
     ro(&["jired", "sprints"], "lists sprints"),
     ro(
+        &["jired", "list"],
+        "matches issues in the working copy; reads files and sends nothing",
+    ),
+    ro(
+        &["jired", "show"],
+        "prints one issue out of the working copy or the snapshot",
+    ),
+    ro(
+        &["jired", "fields"],
+        "names this instance's fields out of the cached definitions",
+    ),
+    ro(
         &["jired", "config", "get"],
         "prints one effective setting; the writes are `set`, `add`, `remove`, `unset`",
     ),

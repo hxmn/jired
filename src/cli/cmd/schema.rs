@@ -42,6 +42,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("doctor", include_str!("../../../schemas/doctor.json")),
     ("error", include_str!("../../../schemas/error.json")),
     ("fetch", include_str!("../../../schemas/fetch.json")),
+    ("fields", include_str!("../../../schemas/fields.json")),
     (
         "frontmatter",
         include_str!("../../../schemas/frontmatter.json"),
@@ -75,6 +76,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
         "sprint-move",
         include_str!("../../../schemas/sprint-move.json"),
     ),
+    ("show", include_str!("../../../schemas/show.json")),
     ("sprints", include_str!("../../../schemas/sprints.json")),
     ("status", include_str!("../../../schemas/status.json")),
     (

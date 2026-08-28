@@ -235,6 +235,10 @@ pub enum Command {
     Search(cmd::search::SearchArgs),
     /// Which issues in this workspace match, without asking the server
     List(cmd::list_issues::ListArgs),
+    /// Everything the workspace knows about one issue
+    Show(cmd::show::ShowArgs),
+    /// What this instance's fields are called
+    Fields(cmd::fields::FieldsArgs),
     /// Drop local changes and go back to the last sync
     Reset(cmd::reset::ResetArgs),
     /// Resolve recorded conflicts
@@ -336,6 +340,8 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Open(a) => cmd::open::run(g, a, out),
         Command::Search(a) => cmd::search::run(g, a, out),
         Command::List(a) => cmd::list_issues::run(g, a, out),
+        Command::Show(a) => cmd::show::run(g, a, out),
+        Command::Fields(a) => cmd::fields::run(g, a, out),
         Command::Reset(a) => cmd::reset::run(g, a, out),
         Command::Resolve(a) => cmd::resolve::run(g, a, out),
         Command::Clean(a) => cmd::clean::run(g, a, out),

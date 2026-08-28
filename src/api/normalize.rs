@@ -170,6 +170,15 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
             .as_ref()
             .and_then(|id| f.get(id))
             .and_then(Value::as_f64),
+        // A system field, so it is read by name rather than through the map —
+        // and read at all, which `custom:` never did: `custom_fields` only
+        // collects `customfield_*`, so a due date set on the server reached no
+        // file and could be written but never seen.
+        due_date: f
+            .get("duedate")
+            .and_then(Value::as_str)
+            .filter(|d| !d.is_empty())
+            .map(str::to_string),
         subtasks: subtasks(f.get("subtasks")),
         checklist: checklist(f, map),
         custom: custom_fields(f, map),

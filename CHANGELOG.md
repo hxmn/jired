@@ -8,6 +8,39 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.3.0] — 2026-08-28
+
+### Added
+
+- **`jired create --like PROJ-142`.** "Create a task like that one" had no
+  expression, so it meant reading the model issue and typing six fields back.
+  It copies type, priority, labels, assignee, components and custom fields —
+  what describes the *kind* of issue — and never identity, status, summary,
+  description, comments or worklogs, which belong to the issue that already
+  exists. Flags and `--set` override it.
+
+- **`jired show ISSUE [--raw]`.** An unset field is not written into a `.md`
+  file, so the file cannot answer "is this empty, or does this instance not have
+  that field?" — the answer was `sqlite3 .jired/state.db` and `json_extract`
+  over `remote_raw`. `--raw` is the server's own payload; the default is the
+  issue as jired models it, read from the file when there is one and the
+  snapshot when there is not.
+
+- **`jired fields [TEXT] [--custom]`.** `custom:` keys a value by its Jira id,
+  the only name stable across instances and the only one nobody can read.
+  Finding out what `customfield_10015` is meant reading `field_meta` out of the
+  state database; it is now a command, filterable by name or id.
+
+### Fixed
+
+- **`due_date` is a field of its own, and can finally be read.** Jira's
+  `duedate` is a system field, and `custom:` only ever collected
+  `customfield_*` — so a due date set on the server reached no file, and one
+  written into `custom:` by hand could be sent but never seen again. It is now
+  named in the frontmatter, read from the server, sent back, and checked as a
+  date before a push rather than after. `custom:` still accepts any field id,
+  including a system one jired does not model, which the docs now say.
+
 ## [0.2.0] — 2026-08-28
 
 ### Added

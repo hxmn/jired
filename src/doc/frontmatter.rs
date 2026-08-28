@@ -22,6 +22,7 @@ pub const EDITABLE: &[&str] = &[
     "epic",
     "fix_versions",
     "affects_versions",
+    "due_date",
     "links",
     "story_points",
     "custom",
@@ -101,6 +102,9 @@ pub struct Frontmatter {
     pub links: Vec<BTreeMap<String, String>>,
     #[serde(default)]
     pub url: String,
+    /// Jira's own `duedate`: a date, no time — `2026-09-14`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub story_points: Option<f64>,
     /// Custom fields with no well-known mapping, kept so they round-trip.
@@ -186,6 +190,7 @@ impl Frontmatter {
             "fix_versions" => serde_json::json!(self.fix_versions),
             "affects_versions" => serde_json::json!(self.affects_versions),
             "links" => serde_json::json!(self.link_pairs()),
+            "due_date" => serde_json::json!(self.due_date),
             "story_points" => serde_json::json!(self.story_points),
             "custom" => serde_json::json!(self.custom),
             _ => return None,
@@ -222,6 +227,17 @@ impl Frontmatter {
             "assignee" => self.assignee = some(text),
             "parent" => self.parent = some(text).map(|p| p.to_uppercase()),
             "epic" => self.epic = some(text).map(|p| p.to_uppercase()),
+            "due_date" => {
+                // Jira's date fields are days, not instants, and it refuses
+                // anything else — so a mistyped one is caught here rather than
+                // at the end of a push.
+                if !text.is_empty() && chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").is_err()
+                {
+                    return Err(JiredError::usage(format!("`{text}` is not a date"))
+                        .with_hint("Jira due dates are days: `2026-09-14`"));
+                }
+                self.due_date = some(text);
+            }
             "labels" => self.labels = list(text),
             "components" => self.components = list(text),
             "fix_versions" => self.fix_versions = list(text),

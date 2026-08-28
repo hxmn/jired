@@ -1117,6 +1117,7 @@ pub fn issue_field(
         "fix_versions" => Mapped::Send("fixVersions".into(), named(&fm.fix_versions)),
         "affects_versions" => Mapped::Send("versions".into(), named(&fm.affects_versions)),
         "type" => Mapped::Send("issuetype".into(), json!({ "name": fm.issue_type })),
+        "due_date" => Mapped::Send("duedate".into(), json!(fm.due_date)),
         "priority" => Mapped::Send(
             "priority".into(),
             fm.priority
