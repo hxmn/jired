@@ -83,6 +83,47 @@ mod tests {
         assert_eq!(from_markdown("", Markup::Adf, &[]), RichText::Empty);
     }
 
+    /// The gate has to survive a region that is not at the left margin: a panel
+    /// inside a quote or a list is rendered with its container's prefix on every
+    /// line, markers included, and that prefix is not an edit.
+    #[test]
+    fn a_region_inside_a_container_is_not_an_edit() {
+        use ast::{Block, Document, ListItem, RawStore};
+
+        let mut store = RawStore::new();
+        let quoted = store.insert(
+            "{\"n\":1}".into(),
+            "> **Warning**\n\nmind the gap".into(),
+            "panel (warning)".into(),
+        );
+        let listed = store.insert(
+            "{\"n\":2}".into(),
+            "**[jired: mediaSingle — read-only]**".into(),
+            "mediaSingle".into(),
+        );
+        let doc = Document::new(vec![
+            Block::BlockQuote(vec![Block::Raw(quoted)]),
+            Block::BulletList(vec![ListItem {
+                content: vec![Block::Raw(listed)],
+            }]),
+        ]);
+        let md = markdown::render(&doc, &store);
+
+        assert_eq!(
+            edited_regions(&md, store.blocks()),
+            Vec::<String>::new(),
+            "nothing was edited:\n{md}"
+        );
+
+        // The prefix is stripped, not ignored: an edit inside the quote is
+        // still an edit.
+        let touched = md.replace("mind the gap", "mind the step");
+        assert_eq!(
+            edited_regions(&touched, store.blocks()),
+            vec![store.blocks()[0].id.clone()]
+        );
+    }
+
     #[test]
     fn a_missing_region_counts_as_edited() {
         let raw = vec![RawBlock {

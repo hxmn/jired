@@ -142,23 +142,75 @@ pub fn parse(md: &str, store: &RawStore) -> Document {
 /// opening marker and the one that precedes the closing marker belong to the
 /// markers, not to the body, so block regions compare equal to the stored
 /// approximation.
+///
+/// A region inside a quote or a list is written with its container's prefix on
+/// every line, marker lines included, and that prefix has to come back off
+/// here. Left in, it reads as an edit the user never made, and `push` then
+/// refuses the whole issue — a worklog or a label too, since the gate runs
+/// before anything else is looked at.
 pub fn region_body(md: &str, id: &str) -> Option<String> {
     let open = format!("{MARKER_OPEN}{id}{MARKER_END}");
     let close = format!("{MARKER_CLOSE}{id}{MARKER_END}");
-    let start = md.find(&open)? + open.len();
+    let open_start = md.find(&open)?;
+    let start = open_start + open.len();
     let end = start + md[start..].find(&close)?;
     let mut body = &md[start..end];
+
+    // An inline region has no lines of its own: what sits before it belongs to
+    // the surrounding paragraph, not to a container.
+    let block = body.starts_with('\n') || body.starts_with("\r\n");
     if let Some(rest) = body.strip_prefix("\r\n") {
         body = rest;
     } else if let Some(rest) = body.strip_prefix('\n') {
         body = rest;
     }
-    if let Some(rest) = body.strip_suffix("\r\n") {
-        body = rest;
-    } else if let Some(rest) = body.strip_suffix('\n') {
-        body = rest;
+    if !block {
+        return Some(body.to_string());
     }
-    Some(body.to_string())
+
+    // Whatever is left on the closing marker's own line is that line's indent.
+    if let Some(nl) = body.rfind('\n') {
+        if is_container_prefix(&body[nl + 1..]) {
+            body = body[..nl].strip_suffix('\r').unwrap_or(&body[..nl]);
+        }
+    }
+
+    let line_start = md[..open_start].rfind('\n').map_or(0, |i| i + 1);
+    let prefix = &md[line_start..open_start];
+    if prefix.is_empty() || !is_container_prefix(prefix) {
+        return Some(body.to_string());
+    }
+    Some(
+        body.split('\n')
+            .map(|line| strip_container_prefix(line, prefix))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// Could this text be the indent a quote or a list puts in front of a block?
+fn is_container_prefix(s: &str) -> bool {
+    s.chars()
+        .all(|c| matches!(c, ' ' | '\t' | '>' | '-' | '*' | '+' | '.' | ')') || c.is_ascii_digit())
+}
+
+/// Drop one container indent from a line.
+///
+/// A continuation line carries the same *width* as the marker line but not the
+/// same characters — `- ` opens a list item and two spaces continue it — so a
+/// space stands in for any prefix character.
+fn strip_container_prefix<'a>(line: &'a str, prefix: &str) -> &'a str {
+    let mut rest = line;
+    for want in prefix.chars() {
+        let Some(got) = rest.chars().next() else {
+            break;
+        };
+        if got != want && got != ' ' {
+            break;
+        }
+        rest = &rest[got.len_utf8()..];
+    }
+    rest
 }
 
 // ---------------------------------------------------------------------------

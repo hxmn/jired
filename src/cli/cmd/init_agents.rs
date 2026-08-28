@@ -788,6 +788,52 @@ mod tests {
         }
     }
 
+    /// `READ_ONLY` is written by hand beside a command table that moves, and
+    /// 0.2.0 proved the two drift: `list` shipped read-only and `doctor` would
+    /// not grant it, so an agent stopped to ask about a command that sends
+    /// nothing and writes nothing.
+    ///
+    /// Every command has to be accounted for on one side or the other. A new
+    /// one fails here until somebody decides which.
+    #[test]
+    fn every_command_is_either_granted_or_a_known_writer() {
+        // What each of these writes, so that putting a read-only command here
+        // to quiet the test would have to be written down as a lie first.
+        const WRITES: &[(&str, &str)] = &[
+            ("init", "creates the workspace and stores credentials"),
+            ("comment", "stages a comment in the file"),
+            ("logwork", "stages a worklog in the file"),
+            ("create", "writes a new issue file"),
+            ("edit", "writes the fields the form changed"),
+            ("transition", "stages a status change"),
+            ("assign", "stages an assignee"),
+            ("label", "stages labels"),
+            ("set", "stages any editable field"),
+            ("attach", "stages a file for upload"),
+            ("open", "launches a browser"),
+            ("sprint", "stages a sprint move"),
+        ];
+
+        let cli = crate::cli::Cli::command();
+        let known: Vec<&str> = cli
+            .get_subcommands()
+            .flat_map(|s| {
+                std::iter::once(s.get_name())
+                    .chain(s.get_visible_aliases())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        for name in known {
+            assert!(
+                READ_ONLY.iter().any(|r| r.argv.get(1) == Some(&name))
+                    || WRITES.iter().any(|(w, _)| *w == name),
+                "`jired {name}` is in neither list: grant it in READ_ONLY, or \
+                 record what it writes in this test"
+            );
+        }
+    }
+
     /// The editability rules are the part an agent acts on directly, and they
     /// used to be a hand-copied sentence. Rendering them from the constants the
     /// parser enforces makes drift impossible; this test proves the rendering

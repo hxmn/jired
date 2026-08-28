@@ -371,6 +371,23 @@
                         "text": "Swap the cert"
                       }
                     ]
+                  },
+                  {
+                    "type": "mediaSingle",
+                    "attrs": {
+                      "layout": "center"
+                    },
+                    "content": [
+                      {
+                        "type": "media",
+                        "attrs": {
+                          "id": "9f2c",
+                          "type": "file",
+                          "collection": "att",
+                          "alt": "cert-window.png"
+                        }
+                      }
+                    ]
                   }
                 ]
               }

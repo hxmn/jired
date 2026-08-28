@@ -8,6 +8,27 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.3.1] — 2026-08-28
+
+### Fixed
+
+- **A read-only region that is not at the left margin no longer blocks the
+  whole issue.** A region inside a quote or a list is written with its
+  container's indent on every line, the `<!--jired:raw:…-->` markers included.
+  The comparison that decides whether the region was edited did not know about
+  that indent, so it read it as an edit that had never happened — and `push`
+  then refused the issue for anything at all, booking time against it or
+  putting a label on it. jired contradicted itself in the process: `status`
+  said `fields: ["worklogs"]` and `lossy_touched: true` in the same breath, and
+  `diff` showed a description that had not moved. The indent is stripped before
+  the comparison now; a real edit inside the region still stops the push.
+
+- **`diff` no longer reports the entry above an appended one as changed.** Each
+  section is joined with newlines, so its last line ended without one and
+  growing a line ending counted as an edit. Booking time therefore accused you
+  of rewriting the previous worklog's note, byte-identical text on both sides
+  of the `-`/`+`, in exactly the place you read a diff to check that.
+
 ## [0.3.0] — 2026-08-28
 
 ### Added

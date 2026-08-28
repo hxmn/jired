@@ -964,6 +964,52 @@ fn editing_a_read_only_region_blocks_the_push_with_exit_6() {
     assert!(failed["hint"].as_str().unwrap().contains("--allow-lossy"));
 }
 
+/// PROJ-150 keeps a media node inside a bullet, so its markers are written at
+/// the list's indent rather than at the left margin. The gate used to read that
+/// indent as an edit and refuse the issue for anything at all — booking time
+/// against it, labelling it — while `status` and `diff` said the description
+/// was clean.
+#[test]
+fn an_indented_region_does_not_block_a_change_elsewhere_in_the_issue() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let file = "PROJ-0150. Rotate IdP certificate.md";
+    assert!(
+        ws.read(file).contains("  <!--jired:raw:"),
+        "the fixture must carry a region indented under a bullet:\n{}",
+        ws.read(file)
+    );
+
+    ws.json(&[
+        "logwork",
+        "PROJ-150",
+        "1h",
+        "--started",
+        "2026-08-24T09:00:00Z",
+    ]);
+    ws.json(&["label", "add", "probe-label", "PROJ-150"]);
+
+    // Neither change is anywhere near the description.
+    let dirty = &ws.json(&["status"])["dirty"][0];
+    assert_eq!(dirty["key"], "PROJ-150");
+    assert_eq!(
+        dirty["lossy_touched"], false,
+        "nothing touched the region: {dirty}"
+    );
+
+    let report = ws.json(&["push"]);
+    let result = report["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "PROJ-150")
+        .expect("PROJ-150 was pushed");
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
 #[test]
 fn an_untouched_lossy_region_pushes_back_byte_identically() {
     let ws = Ws::new();

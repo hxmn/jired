@@ -11,6 +11,7 @@ use crate::sync::render::{render_issue, RenderContext};
 use crate::sync::Engine;
 use serde::Serialize;
 use similar::TextDiff;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DiffReport {
@@ -414,7 +415,12 @@ fn unified(section: &str, from: &str, to: &str) -> Option<SectionDiff> {
     if from == to {
         return None;
     }
-    let diff = TextDiff::from_lines(from, to);
+    // Every section is built with `join("\n")`, so its last line ends without
+    // one. Diffed as they come, appending an entry rewrites the line above it —
+    // it grew a line ending — and the reader is told they edited someone else's
+    // worklog note, in the one place they are looking for exactly that.
+    let (from, to) = (line_terminated(from), line_terminated(to));
+    let diff = TextDiff::from_lines(from.as_ref(), to.as_ref());
     let mut added = 0;
     let mut removed = 0;
     let mut text = String::new();
@@ -442,6 +448,16 @@ fn unified(section: &str, from: &str, to: &str) -> Option<SectionDiff> {
         added,
         removed,
     })
+}
+
+/// Text whose last line ends like every other line, so that adding a line after
+/// it does not count as a change to it. Empty text stays empty.
+fn line_terminated(s: &str) -> Cow<'_, str> {
+    if s.is_empty() || s.ends_with('\n') {
+        Cow::Borrowed(s)
+    } else {
+        Cow::Owned(format!("{s}\n"))
+    }
 }
 
 #[cfg(test)]
@@ -499,6 +515,46 @@ mod tests {
         assert_eq!(d.sections[0].removed, 1);
         assert!(d.sections[0].unified.contains("-two"));
         assert!(d.sections[0].unified.contains("+TWO"));
+    }
+
+    /// Booking time is an append: the entry that was last must read as
+    /// untouched, or `diff` before `push` accuses the user of rewriting
+    /// somebody else's note.
+    #[test]
+    fn appending_a_worklog_leaves_the_one_above_it_alone() {
+        use crate::doc::{WorklogEntry, WorklogId};
+
+        let mut a = doc("s", "b");
+        a.worklogs.push(WorklogEntry {
+            id: WorklogId::Existing("90105".into()),
+            time_spent: "3h".into(),
+            author: "Denis B".into(),
+            started: "2026-08-28T00:00:00Z".into(),
+            body: "Working on issue PROJ-1".into(),
+        });
+        let mut b = a.clone();
+        b.worklogs.push(WorklogEntry {
+            id: WorklogId::New,
+            time_spent: "2h".into(),
+            author: String::new(),
+            started: "2026-08-24T00:00:00Z".into(),
+            body: "Review".into(),
+        });
+
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).unwrap();
+        let section = &d.sections[0];
+        assert_eq!(section.section, "Worklogs");
+        assert_eq!(
+            section.removed, 0,
+            "nothing was removed:\n{}",
+            section.unified
+        );
+        assert_eq!(section.added, 2, "{}", section.unified);
+        assert!(
+            !section.unified.contains("-  Working on issue PROJ-1"),
+            "the earlier note is unchanged:\n{}",
+            section.unified
+        );
     }
 
     #[test]
