@@ -235,6 +235,9 @@ pub enum Command {
     Boards(cmd::list::BoardsArgs),
     /// List sprints
     Sprints(cmd::list::SprintsArgs),
+    /// Work with sprints
+    #[command(subcommand)]
+    Sprint(cmd::sprint::SprintCmd),
     /// Generate a shell completion script
     Completion(cmd::completion::CompletionArgs),
     /// Regenerate CLAUDE.md and AGENTS.md
@@ -313,6 +316,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Projects(a) => cmd::list::run_projects(g, a, out),
         Command::Boards(a) => cmd::list::run_boards(g, a, out),
         Command::Sprints(a) => cmd::list::run_sprints(g, a, out),
+        Command::Sprint(a) => cmd::sprint::run(g, a, out),
         Command::AgentDocs(a) => cmd::agent_docs::run(g, a, out),
     }
 }

@@ -65,6 +65,8 @@ pub trait JiraApi: Send + Sync {
     async fn boards(&self, project: Option<&str>) -> Result<Vec<Board>>;
     async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>>;
     async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>>;
+    /// Create a sprint on a board. Returns it as the server now holds it.
+    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint>;
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage>;
     async fn issue(&self, key: &str) -> Result<RemoteIssue>;

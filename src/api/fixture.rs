@@ -306,6 +306,31 @@ impl JiraApi for FixtureClient {
             .unwrap_or_default())
     }
 
+    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint> {
+        self.record("POST", "/rest/agile/1.0/sprint", input.to_body())?;
+        let sprint = Sprint {
+            id: self.next_id(),
+            name: input.name.clone(),
+            // Jira decides this, and a sprint nobody has started yet is future.
+            state: "future".to_string(),
+            board_id: Some(input.board_id.clone()),
+            start_date: input.start,
+            end_date: input.end,
+            goal: input.goal.clone(),
+        };
+        // Written back to the fixture directory, so the next process to run —
+        // a `jired sprints` in the same test — sees the sprint that was just
+        // created rather than the recording it started from.
+        let mut all: Vec<Sprint> = read_json(&self.dir, "sprints.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        all.push(sprint.clone());
+        if let Ok(text) = serde_json::to_string_pretty(&all) {
+            let _ = std::fs::write(self.dir.join("sprints.json"), text);
+        }
+        Ok(sprint)
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         self.check_fault("POST", "/search")?;
         let issues = self.issues.lock().expect("fixture lock").clone();

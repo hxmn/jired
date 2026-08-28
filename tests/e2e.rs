@@ -1053,6 +1053,15 @@ fn every_json_output_validates_against_its_published_schema() {
     let status = ws.json(&["status"]);
     let diff = ws.json(&["diff"]);
     let push = ws.json(&["push", "--dry-run"]);
+    let sprint = ws.json(&[
+        "sprint",
+        "create",
+        "Sprint 44",
+        "--start",
+        "2026-09-01",
+        "--end",
+        "2026-09-15",
+    ]);
 
     for (name, doc) in [
         ("init", &init),
@@ -1060,6 +1069,7 @@ fn every_json_output_validates_against_its_published_schema() {
         ("status", &status),
         ("diff", &diff),
         ("push", &push),
+        ("sprint-create", &sprint),
     ] {
         let schema_text = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("schemas/{name}.json")),
@@ -3263,6 +3273,173 @@ fn a_sprint_the_workspace_does_not_know_is_reported_rather_than_guessed() {
     assert!(
         report["results"].as_array().unwrap().is_empty(),
         "nothing was sent"
+    );
+}
+
+/// A sprint has no file to stage it in, so `sprint create` is a write that goes
+/// straight to the server — and the sprint it made is in the listing after.
+#[test]
+fn creating_a_sprint_puts_it_on_the_board() {
+    let ws = Ws::new();
+    ws.init();
+
+    let out = ws.json(&[
+        "sprint",
+        "create",
+        "Sprint 44",
+        "--board",
+        "12",
+        "--start",
+        "2026-09-01T09:00:00Z",
+        "--end",
+        "2026-09-15T09:00:00Z",
+        "--goal",
+        "Ship SSO.",
+    ]);
+    assert_eq!(out["schema"], "jired/sprint-create/1");
+    assert_eq!(out["dry_run"], false);
+    assert_eq!(out["sprint"]["name"], "Sprint 44");
+    // Jira decides the state, and a sprint nobody has started yet is future.
+    assert_eq!(out["sprint"]["state"], "future");
+    assert_eq!(out["sprint"]["board_id"], "12");
+    assert_eq!(out["board"]["name"], "Platform Board");
+    assert_eq!(out["request"]["path"], "/rest/agile/1.0/sprint");
+    // The board id goes out as a number, which is what the agile API wants.
+    assert_eq!(out["request"]["body"]["originBoardId"], 12);
+    assert_eq!(out["request"]["body"]["startDate"], "2026-09-01T09:00:00Z");
+    assert_eq!(out["request"]["body"]["goal"], "Ship SSO.");
+
+    let listed = ws.json(&["sprints", "--board", "12"]);
+    let names: Vec<&str> = listed["sprints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"Sprint 44"), "{names:?}");
+}
+
+/// One board is not a choice, so it does not have to be named — and the name is
+/// then the only thing the command needs.
+#[test]
+fn a_project_with_one_board_needs_no_board_flag() {
+    let ws = Ws::new();
+    ws.init();
+
+    let out = ws.json(&["sprint", "create", "Hardening week"]);
+    assert_eq!(out["board"]["id"], "12");
+    assert_eq!(out["sprint"]["name"], "Hardening week");
+    // Neither date was given, so neither is sent: Jira takes both or neither.
+    assert!(out["request"]["body"].get("startDate").is_none(), "{out}");
+    assert_eq!(out["sprint"]["start_date"], Value::Null);
+}
+
+/// A board can be named the way a person has it rather than as an id.
+#[test]
+fn a_board_can_be_named_instead_of_numbered() {
+    let ws = Ws::new();
+    ws.init();
+
+    let out = ws.json(&["sprint", "create", "Sprint 44", "--board", "platform board"]);
+    assert_eq!(out["board"]["id"], "12");
+
+    let err = ws.json_err(&["sprint", "create", "Sprint 45", "--board", "Nope"], 2);
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("no board called `Nope`"));
+    assert!(err["hint"]
+        .as_str()
+        .unwrap()
+        .contains("Platform Board (12)"));
+}
+
+/// The same escape hatch `push` offers, for the same reason: this one cannot be
+/// reviewed with `diff` first.
+#[test]
+fn a_dry_run_prints_the_call_and_sends_nothing() {
+    let ws = Ws::new();
+    ws.init();
+
+    let out = ws.json(&["sprint", "create", "Sprint 44", "--dry-run"]);
+    assert_eq!(out["dry_run"], true);
+    assert_eq!(out["sprint"], Value::Null);
+    assert_eq!(out["request"]["body"]["name"], "Sprint 44");
+
+    let listed = ws.json(&["sprints", "--board", "12", "--all"]);
+    assert_eq!(
+        listed["sprints"].as_array().unwrap().len(),
+        3,
+        "the fixture's three sprints, and nothing new"
+    );
+}
+
+/// Every complaint the form makes with the cursor on the field is one the
+/// flags-only path has to make too.
+#[test]
+fn the_values_a_sprint_cannot_do_without_are_checked_without_a_terminal() {
+    let ws = Ws::new();
+    ws.init();
+
+    let err = ws.json_err(&["sprint", "create"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("a name is required"));
+
+    let err = ws.json_err(&["sprint", "create", "Sprint 44", "--start", "tuesday"], 2);
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("`tuesday` is not a date"));
+
+    // Jira takes both dates or neither; an end on its own is silently dropped.
+    let err = ws.json_err(&["sprint", "create", "S", "--end", "2026-09-15"], 2);
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("an end date needs a start date"));
+
+    let err = ws.json_err(
+        &[
+            "sprint",
+            "create",
+            "S",
+            "--start",
+            "2026-09-15",
+            "--end",
+            "2026-09-01",
+        ],
+        2,
+    );
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("ends before it starts"));
+}
+
+/// The sprint is in the local cache the moment it exists, so an issue can be
+/// moved into it without a fetch in between.
+#[test]
+fn a_new_sprint_can_be_used_before_the_next_fetch() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let created = ws.json(&["sprint", "create", "Sprint 44"]);
+    let id = created["sprint"]["id"].as_str().unwrap().to_string();
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("sprint: Sprint 42", "sprint: Sprint 44");
+    ws.write(ISSUE_FILE, &text);
+
+    let push = ws.json(&["push", "--dry-run"]);
+    let op = &push["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "move_sprint");
+    assert_eq!(
+        op["request"]["path"],
+        format!("/rest/agile/1.0/sprint/{id}/issue")
     );
 }
 

@@ -297,7 +297,8 @@ the filename you were just editing instead of retyping the key.
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
 | `open [ISSUE]` | open it in a browser, or `--print` the URL; without an issue, pick one from the list |
 | `whoami` | which account, which server, and where the credential is kept |
-| `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address |
+| `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and a project with one board needs neither |
+| `sprint create [NAME]` | make a sprint on a board — see [Sprints](#sprints) |
 | `doctor` | check the workspace over and repair it — see below |
 | `config get\|set\|unset\|list\|path\|edit` | read and write settings |
 | `completion <shell>` | print a completion script |
@@ -352,6 +353,36 @@ The picker writes them into the workspace config, not the global one — the lis
 was rearranged here. `category:` takes Jira's own three buckets (`new`,
 `indeterminate`, `done`), which is what survives a workflow whose statuses are
 named something local.
+
+### Sprints
+
+`jired sprints` lists what a board has; `jired sprint create` adds one.
+
+```sh
+jired sprints                                  # the board's sprints, open ones only
+jired sprints --board "Platform Board" --all   # by name, closed ones too
+
+jired sprint create                            # fill in a form
+jired sprint create "Sprint 44" --start 2026-09-01 --end 2026-09-15
+jired sprint create "Sprint 44" --dry-run      # the exact API call, nothing sent
+```
+
+Both take `--board` as either a name or an id, and neither needs it when the
+project has one board. A sprint has no file to stage it in, so `sprint create`
+is the one write that goes straight to the server instead of waiting for
+`push` — which is why it has a `--dry-run` of its own. Jira takes both dates or
+neither, and the new sprint is always `future` until someone starts it.
+
+The form fills in the name the board is due — a board whose last sprint is
+`Sprint 42` is offered `Sprint 43`, renumbered if you change the board and left
+alone once you type over it — and offers the dates a sprint usually runs
+between: next Monday, and one to four weeks after whatever the start says.
+Without a terminal, `--board` and a name are all it needs; without either, it
+exits 7 naming what is missing.
+
+Putting an issue *into* a sprint is a file edit like any other: set `sprint:` in
+the frontmatter and `push` moves it. See [Grouping folders](#grouping-folders)
+for the `sprints/` view of where everything is.
 
 ### Grouping folders
 

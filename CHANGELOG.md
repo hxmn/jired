@@ -40,6 +40,28 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Added
 
+- **`jired sprint create` makes a sprint.** A form when a terminal can draw one,
+  and `jired sprint create "Sprint 44" --board 12 --start 2026-09-01 --end
+  2026-09-15 --goal "…"` when it cannot; `--json` reports it as
+  `jired/sprint-create/1`. A sprint has no file to stage it in, so this is the
+  one write that goes straight to the server rather than waiting for `push` —
+  which is why it has a `-n/--dry-run` of its own that prints the exact call.
+  Jira takes both dates or neither, so an end without a start is refused rather
+  than sent and silently dropped, and the new sprint is always `future`.
+
+  The form prefills the name the board is due — a board whose last sprint is
+  `Sprint 42` is offered `Sprint 43`, renumbered when you change the board and
+  left alone once you type over it — and offers the dates a sprint usually runs
+  between. It says when a name is already taken on that board rather than
+  refusing it, because Jira allows it.
+
+- **`sprints --board` takes a name, and a project with one board needs no
+  `--board` at all.** `jired sprints --board "Platform Board"` used to ask the
+  server for a board by that literal id and fail; `jired sprints` with nothing
+  named used to exit 7 even when there was only one board it could have meant.
+  An id still goes straight through, so a board outside the workspace project is
+  still addressable.
+
 - **Colour across the read commands, and a `--no-color` to turn it off.**
   `log`, `search`, `projects`, `boards`, `sprints`, `whoami`, `transition --list`,
   `resolve --list`, `clean` and `doctor` printed plain text; they now follow the

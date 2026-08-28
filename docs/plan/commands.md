@@ -504,6 +504,35 @@ server instead of reporting the cached identity; `boards --for-project` is spell
 that way because a `--project` here would shadow the global flag. The listings had
 a `--refresh` that did nothing and it is gone; they always ask the server.
 
+`sprints --board` takes a name as well as an id. An id goes straight to the
+sprint endpoint — it is what the API wants, and it may name a board outside this
+project — so only a name, or no board at all, costs the extra `boards` request
+that resolves it. With nothing named, a project with one board uses it, because
+there is no choice to make; with several, the error lists them.
+
+### `jired sprint create [NAME] [--board B] [--start TS] [--end TS] [--goal TEXT] [-i] [-n]`
+The one write that does not go through `push`: a sprint has no file to stage it
+in, so this posts `/rest/agile/1.0/sprint` there and then, and `-n/--dry-run`
+prints the exact call instead — the same escape hatch `push` offers, for the same
+reason. The new sprint is written into the local sprint cache on the way out, so
+a `sprint:` naming it resolves before the next fetch has run.
+
+Three rungs, as everywhere: the full-screen form, line prompts, then exit 7
+naming what is missing. A name and a board are all it needs, and the board is
+only missing when the project has more than one. `--start`/`--end` are read in
+the reader's own timezone unless they name one, and go out in UTC; Jira takes
+both or neither, so an end on its own is refused rather than sent and silently
+dropped, and an end before its start is refused too. State is not settable: a
+sprint nobody has started is `future`.
+
+The form prefills the name the board is due — the highest number the board's
+sprints have used, plus one, in the same words and the same width, so `Sprint 09`
+is followed by `Sprint 10`. Changing the board renumbers it until someone types
+over it. A board whose sprints are not numbered gets an empty field rather than a
+guess at a naming scheme. A name the board already uses is pointed out beside the
+field and not refused: Jira allows it, though it does make an issue's `sprint:`
+ambiguous to resolve.
+
 ### `jired --version` / `-V`
 `-V` is one line — `jired 0.1.0 (9212430 2026-08-21T10:49:39Z)`; `--version` adds
 the compiler and target. The commit carries a `-dirty` suffix when the tree had

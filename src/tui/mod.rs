@@ -21,6 +21,7 @@ pub mod logwork;
 pub mod pick;
 mod picker;
 pub mod report;
+pub mod sprint;
 mod theme;
 pub mod when;
 

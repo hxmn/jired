@@ -305,32 +305,26 @@ impl JiraApi for Rest {
                 .cloned()
                 .unwrap_or_default();
             let n = values.len();
-            out.extend(values.iter().filter_map(|s| {
-                Some(Sprint {
-                    id: id_string(s.get("id")?)?,
-                    name: s.get("name")?.as_str()?.to_string(),
-                    state: s
-                        .get("state")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_ascii_lowercase(),
-                    board_id: Some(board_id.to_string()),
-                    start_date: s
-                        .get("startDate")
-                        .and_then(Value::as_str)
-                        .and_then(parse_timestamp),
-                    end_date: s
-                        .get("endDate")
-                        .and_then(Value::as_str)
-                        .and_then(parse_timestamp),
-                })
-            }));
+            out.extend(values.iter().filter_map(|s| sprint_from_json(s, board_id)));
             if v.get("isLast").and_then(Value::as_bool).unwrap_or(true) || n == 0 {
                 break;
             }
             start += n;
         }
         Ok(out)
+    }
+
+    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint> {
+        let v = self
+            .http
+            .post_json("/rest/agile/1.0/sprint", input.to_body())
+            .await?;
+        // The response is a sprint like any other, so it is read like any
+        // other; only its id is beyond invention if the server omits it.
+        sprint_from_json(&v, &input.board_id).ok_or_else(|| {
+            JiredError::generic("sprint creation returned nothing recognisable as a sprint")
+                .with_detail("response", v)
+        })
     }
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -713,6 +707,41 @@ fn project_from(v: &Value) -> Option<Project> {
             .get("projectTypeKey")
             .and_then(Value::as_str)
             .map(str::to_string),
+    })
+}
+
+/// One sprint out of an agile-API payload.
+///
+/// `board` is what the sprint belongs to when the payload does not say — a
+/// board's own sprint listing repeats the board in the URL rather than in
+/// every row.
+fn sprint_from_json(s: &Value, board: &str) -> Option<Sprint> {
+    Some(Sprint {
+        id: id_string(s.get("id")?)?,
+        name: s.get("name")?.as_str()?.to_string(),
+        state: s
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase(),
+        board_id: s
+            .get("originBoardId")
+            .and_then(id_string_ref)
+            .or_else(|| Some(board.to_string()))
+            .filter(|b| !b.is_empty()),
+        start_date: s
+            .get("startDate")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp),
+        end_date: s
+            .get("endDate")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp),
+        goal: s
+            .get("goal")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|g| !g.is_empty()),
     })
 }
 

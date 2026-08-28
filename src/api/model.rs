@@ -55,6 +55,50 @@ pub struct Sprint {
     pub start_date: Option<DateTime<Utc>>,
     #[serde(default)]
     pub end_date: Option<DateTime<Utc>>,
+    /// What the team said the sprint is for. Optional on every instance.
+    #[serde(default)]
+    pub goal: Option<String>,
+}
+
+/// A sprint on its way to the server.
+///
+/// There is no state here: Jira decides it, and a sprint that has just been
+/// created is always `future` until someone starts it.
+#[derive(Debug, Clone, Default)]
+pub struct SprintInput {
+    pub name: String,
+    /// The board the sprint belongs to, which the agile API calls its origin.
+    pub board_id: String,
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+    pub goal: Option<String>,
+}
+
+impl SprintInput {
+    /// The request body a sprint creation sends, on either deployment.
+    pub fn to_body(&self) -> serde_json::Value {
+        // `originBoardId` is a number on the wire. A board id that is not one
+        // is not something jired can invent, so it goes out as written and the
+        // server says what it makes of it.
+        let board: serde_json::Value = match self.board_id.parse::<i64>() {
+            Ok(n) => n.into(),
+            Err(_) => self.board_id.clone().into(),
+        };
+        let mut body = serde_json::json!({
+            "name": self.name,
+            "originBoardId": board,
+        });
+        if let Some(start) = &self.start {
+            body["startDate"] = serde_json::json!(format_timestamp(start));
+        }
+        if let Some(end) = &self.end {
+            body["endDate"] = serde_json::json!(format_timestamp(end));
+        }
+        if let Some(goal) = self.goal.as_deref().filter(|g| !g.trim().is_empty()) {
+            body["goal"] = serde_json::json!(goal);
+        }
+        body
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

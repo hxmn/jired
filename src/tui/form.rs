@@ -273,7 +273,13 @@ fn render_field(
     // A field that points at something else shows what: the check the user
     // actually wants is "did I pick the right issue?".
     if let Some(detail) = detail {
-        let used = fields[index].text().chars().count() as u16 + 2;
+        let text = fields[index].text().chars().count() as u16;
+        // Two columns of gap after the value — and after the `‹ ` and ` ›` a
+        // choice is drawn between, which are part of the value on screen.
+        let used = match &fields[index].value {
+            Value::Choice(_) => text + 6,
+            _ => text + 2,
+        };
         if value_width > used + 4 {
             frame.render_widget(
                 Paragraph::new(Span::styled(detail, theme::dim())),

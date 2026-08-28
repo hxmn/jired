@@ -26,6 +26,31 @@ pub fn ago(now: DateTime<Utc>, when: DateTime<Utc>) -> String {
     }
 }
 
+/// How long a stretch of time is, in the words someone would plan in.
+///
+/// A sprint is two weeks, not fourteen days: the unit a length is chosen in is
+/// the one it should be read back in, so whole weeks say weeks and anything
+/// else falls back to the days it really is.
+pub fn span(from: DateTime<Utc>, to: DateTime<Utc>) -> String {
+    let hours = (to - from).num_hours();
+    let days = hours / 24;
+    match (days, days % 7) {
+        (d, _) if d < 1 => plural(hours, "hour", "hours"),
+        (d, 0) => plural(d / 7, "week", "weeks"),
+        (d, _) => plural(d, "day", "days"),
+    }
+}
+
+/// Small counts read as words; past that the number is the point.
+fn plural(n: i64, one: &str, many: &str) -> String {
+    match n {
+        1 => format!("one {one}"),
+        2 => format!("two {many}"),
+        3 => format!("three {many}"),
+        _ => format!("{n} {many}"),
+    }
+}
+
 /// The same age in a table cell: at most five columns, one unit, no words.
 ///
 /// The unit steps up as soon as the number would need three digits, so the
@@ -63,6 +88,23 @@ mod tests {
         assert_eq!(ago(now, now - Duration::days(1)), "yesterday");
         assert_eq!(ago(now, now - Duration::days(3)), "3 days ago");
         assert_eq!(ago(now, now + Duration::hours(3)), "in the future");
+    }
+
+    /// A sprint is two weeks, not fourteen days.
+    #[test]
+    fn a_stretch_of_time_reads_in_the_unit_it_was_chosen_in() {
+        let now = now();
+        for (delta, expected) in [
+            (Duration::hours(5), "5 hours"),
+            (Duration::hours(1), "one hour"),
+            (Duration::days(3), "three days"),
+            (Duration::days(7), "one week"),
+            (Duration::days(10), "10 days"),
+            (Duration::days(14), "two weeks"),
+            (Duration::days(28), "4 weeks"),
+        ] {
+            assert_eq!(span(now, now + delta), expected, "{delta}");
+        }
     }
 
     /// Every cell has to fit the column the table reserves for it.

@@ -26,6 +26,7 @@ pub mod reset;
 pub mod resolve;
 pub mod schema;
 pub mod search;
+pub mod sprint;
 pub mod status;
 pub mod transition;
 pub mod whoami;

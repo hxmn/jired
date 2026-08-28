@@ -86,19 +86,78 @@ pub fn run_boards(g: &GlobalArgs, args: &BoardsArgs, out: Out) -> Result<ExitCod
     Ok(ExitCode::Success)
 }
 
+/// The board a `--board` value names, out of the ones a project has.
+///
+/// Matching is by id first and then by name, because an id is what the API
+/// wants and a name is what a person has. With nothing named, a project with
+/// one board needs no flag — there is no choice to make.
+pub(crate) fn pick_board<'a>(
+    boards: &'a [crate::api::Board],
+    wanted: Option<&str>,
+) -> Result<&'a crate::api::Board> {
+    let Some(wanted) = wanted.map(str::trim).filter(|w| !w.is_empty()) else {
+        return match boards {
+            [only] => Ok(only),
+            [] => Err(
+                crate::error::JiredError::missing_value("this project has no boards")
+                    .with_hint("run `jired boards` to see what this account can address"),
+            ),
+            many => Err(
+                crate::error::JiredError::missing_value("a board is required")
+                    .with_detail("flag", "--board")
+                    .with_hint(format!("one of: {}", board_names(many))),
+            ),
+        };
+    };
+    if let Some(by_id) = boards.iter().find(|b| b.id == wanted) {
+        return Ok(by_id);
+    }
+    let mut named = boards
+        .iter()
+        .filter(|b| b.name.eq_ignore_ascii_case(wanted));
+    let Some(first) = named.next() else {
+        return Err(
+            crate::error::JiredError::usage(format!("no board called `{wanted}`"))
+                .with_detail("board", wanted.to_string())
+                .with_hint(format!("one of: {}", board_names(boards))),
+        );
+    };
+    match named.next() {
+        None => Ok(first),
+        // Two boards with one name: an id is the only thing that tells them
+        // apart, and guessing would create the sprint on the wrong one.
+        Some(_) => Err(crate::error::JiredError::usage(format!(
+            "several boards are called `{wanted}`"
+        ))
+        .with_detail("board", wanted.to_string())
+        .with_hint("name the one you mean by its id — `jired boards` lists them")),
+    }
+}
+
+/// Boards by name, for an error that has to say what the choices are.
+pub(crate) fn board_names(boards: &[crate::api::Board]) -> String {
+    boards
+        .iter()
+        .map(|b| format!("{} ({})", b.name, b.id))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub fn run_sprints(g: &GlobalArgs, args: &SprintsArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
     let account = session.require_account()?;
     let client = crate::api::build_client(&mut ctx, &account)?;
+    // An id is what the sprint endpoint takes and may name a board outside this
+    // project, so it goes straight through. Anything else — a name, or nothing
+    // at all — only means something against the project's own boards, and that
+    // is what costs the extra request.
     let board = match &args.board {
-        Some(b) => b.clone(),
-        None => {
-            return Err(crate::error::JiredError::missing_value(
-                "a board is required to list sprints",
-            )
-            .with_detail("flag", "--board")
-            .with_hint("run `jired boards` to see available boards"))
+        Some(b) if b.chars().all(|c| c.is_ascii_digit()) && !b.is_empty() => b.clone(),
+        wanted => {
+            let project: Option<String> = ctx.resolver.get_quiet("workspace.project")?;
+            let boards = crate::api::block_on(client.boards(project.as_deref()))?;
+            pick_board(&boards, wanted.as_deref())?.id.clone()
         }
     };
     let include_closed = args.all

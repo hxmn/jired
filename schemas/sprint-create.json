@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/sprint-create/1",
+  "title": "jired sprint create result",
+  "description": "A sprint created on a board",
+  "type": "object",
+  "required": [
+    "schema",
+    "dry_run",
+    "sprint",
+    "board",
+    "request"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/sprint-create/1"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "True when --dry-run was given: nothing was sent and `sprint` is null"
+    },
+    "sprint": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The sprint as the server now holds it; null on a dry run",
+      "required": [
+        "id",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "description": "Always `future` for a sprint nobody has started yet"
+        },
+        "board_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO-8601 in UTC"
+        },
+        "end_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO-8601 in UTC"
+        },
+        "goal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "board": {
+      "type": "object",
+      "description": "The board the sprint was created on",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "description": "The API call, sent unless dry_run",
+      "required": [
+        "method",
+        "path",
+        "body"
+      ],
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "body": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

@@ -246,6 +246,14 @@ pub fn render() -> String {
          record of what happened and cannot be edited: changing them is reported \
          and not sent.\n\n",
     );
+    s.push_str(
+        "`jired sprint create NAME [--board B] [--start TS] [--end TS] [--goal TEXT]` \
+         makes a sprint. It is the one write that does not go through `push` — a sprint \
+         has no file to stage it in — so `-n/--dry-run` prints the call instead of \
+         sending it. `--board` takes a name or an id and is only needed when the project \
+         has more than one; the dates are read in the local timezone unless they name \
+         one, and Jira takes both or neither.\n\n",
+    );
 
     s.push_str("## Repairing a workspace\n\n");
     s.push_str(
