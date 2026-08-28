@@ -90,7 +90,14 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
         .map(|s| ChildItem {
             checked: s.done,
             key: Some(s.key.clone()),
-            title: s.summary.clone(),
+            // Trimmed, because `## Children` is a line-based section and
+            // reading one back cannot recover the space at its end: a subtask
+            // whose summary ends in one would otherwise leave base holding a
+            // title the file can never parse back to, and `diff` would report
+            // the issue as modified for ever while `status` called it clean and
+            // `push` had nothing to send. The checklist already does this to
+            // every title it builds, for the same reason.
+            title: s.summary.trim().to_string(),
         })
         .collect();
 

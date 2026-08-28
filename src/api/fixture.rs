@@ -301,13 +301,24 @@ impl JiraApi for FixtureClient {
     }
 
     async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
-        Ok(
+        let located =
             read_json(&self.dir, &format!("board-{board_id}-config.json")).and_then(|v| {
                 v.get("location")
                     .and_then(|l| l.get("projectKey").or_else(|| l.get("key")))
                     .and_then(Value::as_str)
                     .map(str::to_string)
-            }),
+            });
+        if located.is_some() {
+            return Ok(located);
+        }
+        // The Data Center shape: no `location` in the configuration, and the
+        // answer on the board's project listing instead. Read through the same
+        // function the real client uses, so a fixture cannot pass on a reading
+        // the server would not give.
+        Ok(
+            read_json(&self.dir, &format!("board-{board_id}-projects.json"))
+                .as_ref()
+                .and_then(crate::api::rest::single_project),
         )
     }
 

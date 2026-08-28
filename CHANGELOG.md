@@ -47,6 +47,23 @@ before something destructive, what an error says, and what the docs claim.
 
 ### Fixed
 
+- **A subtask whose summary ends in a space is no longer a permanent
+  difference.** `## Children` is line-based, so reading a file back trims the
+  title the snapshot still held: `diff` reported every issue with such a child as
+  modified while `status` called the workspace clean and `push` had nothing to
+  send — with no user edit involved, on a section a push cannot act on anyway.
+  The title is now trimmed where it is built from the server, which is what the
+  checklist already did to every title of its own, and again where the line is
+  written, so what jired writes it reads back unchanged. No file is rewritten:
+  the difference stops being reported at once.
+
+- **`-v` shows the REST paths it always claimed to.** The flag is documented as
+  revealing "REST paths, pids, causes" and no request was ever logged, so the way
+  to find out whether a call had even been made was to read the source — which is
+  the question a debug flag exists to answer. Every request now logs its method
+  and path at `-v`, with the status and elapsed time when it returns, and the
+  request body at `-vv`.
+
 - **`push` no longer refuses an issue the server has not touched.** Jira reports
   `updated` to the millisecond and the snapshot in `state.db` keeps whole
   seconds, so the same instant reached the staleness check spelled two ways and
@@ -322,10 +339,18 @@ before something destructive, what an error says, and what the docs claim.
 - **`jired boards` fills in `project_key` on Data Center.** The board listing
   leaves the project out there, so `--json` reported `null` for every board and a
   script had no way to tell which board belonged to the project it was working
-  in. The project is in the board's own configuration, which `boards` now asks
-  for any board that arrived unlabelled — one request each, in this command only,
-  and best-effort, so a board that will not say stays `null`. It is a column on
-  screen too, which is what tells two similarly named boards apart.
+  in. `boards` now asks the board itself for any that arrived unlabelled — one
+  request each, in this command only. It is a column on screen too, which is what
+  tells two similarly named boards apart.
+
+  Two endpoints answer this and neither answers on both deployments:
+  `location.projectKey` in the board's configuration is a Cloud field that Data
+  Center omits from that payload entirely, so reading only it left every DC board
+  `null` exactly as before. Each deployment now asks the one that answers it —
+  the project listing on Data Center — and falls back to the other. A board whose
+  filter spans several projects still reports `null`: one project is an answer,
+  several is not one, and naming the first would be a guess a script would act
+  on.
 - `push --dry-run` no longer panics on a summary containing non-ASCII text (it
   sliced a `String` on a byte boundary).
 - `jired status | head` exits 0 instead of panicking on a closed pipe.

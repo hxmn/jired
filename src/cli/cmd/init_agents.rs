@@ -581,9 +581,12 @@ pub fn render() -> String {
          moves those issues into it as `sprint add` would.\n\n",
     );
     s.push_str(
-        "`jired boards --json` says which project each board is filed under in \
-         `project_key`, which is what makes a board selectable without a human: \
-         it is asked of the board itself where the listing leaves it out. \
+        "`jired boards --json` names the project a board is filed under in \
+         `project_key`, which is what makes a board selectable without a human. \
+         Where the listing leaves it out — every board, on Data Center — it is \
+         asked of the board itself. Treat `null` as \"unknown\" rather than \
+         \"no project\": a board whose filter spans several projects has no one \
+         answer, and one the account cannot read stays unplaced. \
          `jired sprints` needs `--board` only when the project's boards would \
          answer differently — boards sharing one sprint pool answer the same, \
          and then the answer is simply given. The sprint a `sprint create` \

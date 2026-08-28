@@ -5215,6 +5215,46 @@ fn a_push_that_moves_nothing_leaves_the_folders_alone() {
     );
 }
 
+/// A subtask whose summary ends in a space used to put `diff` and `status`
+/// permanently at odds: `## Children` is line-based, so reading the file back
+/// trimmed the title the snapshot still held, and every issue with such a child
+/// was reported as modified while `status` called the workspace clean and
+/// `push` had nothing to send. No user edit was involved, and the section is
+/// not one a push can act on anyway.
+#[test]
+fn a_child_summary_ending_in_a_space_is_not_a_change() {
+    let ws = Ws::new();
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["subtasks"][0]["fields"]["summary"] =
+            "Реализовать иерархию ".to_string().into();
+    });
+    ws.init();
+    ws.json(&["pull"]);
+
+    // What the three of them say has to be the same thing.
+    assert!(
+        ws.json(&["status"])["dirty"].as_array().unwrap().is_empty(),
+        "nothing was edited"
+    );
+    let diff = ws.json(&["diff"]);
+    assert!(
+        diff["issues"].as_array().unwrap().is_empty(),
+        "the working copy matches its own base:\n{diff}"
+    );
+    assert_eq!(diff["stat"]["issues"], 0);
+    let push = ws.json(&["push", "--dry-run"]);
+    assert!(push["results"].as_array().unwrap().is_empty(), "{push}");
+
+    // The title is there, trimmed, and a second pull does not move it.
+    let text = ws.read(ISSUE_FILE);
+    assert!(
+        text.contains("- [ ] PROJ-143 Реализовать иерархию\n"),
+        "{text}"
+    );
+    ws.json(&["pull"]);
+    assert_eq!(ws.read(ISSUE_FILE), text, "the second pull rewrote nothing");
+}
+
 /// Three boards over one project's backlog commonly share a sprint pool: every
 /// one of them answers with the same sprints, and the sprints name the board
 /// that owns them rather than the board that was asked. Making somebody choose
@@ -5298,6 +5338,59 @@ fn boards_says_which_project_each_board_belongs_to() {
     let out = ws.json(&["boards"]);
     assert_eq!(out["boards"][0]["project_key"], "DC");
     assert!(out["boards"][1]["project_key"].is_null(), "{out}");
+}
+
+/// The `location` in a board's configuration is a Cloud field: Data Center
+/// leaves it out of that payload entirely and answers on the board's project
+/// listing instead. Reading only the Cloud shape is why every board on a real
+/// DC instance came back `project_key: null`, leaving a script no way to pick
+/// one — and why the column never appeared on screen either.
+#[test]
+fn a_data_center_board_is_placed_from_its_project_listing() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "boards.json",
+        serde_json::json!([
+            {"id": "11", "name": "TSK board", "type": "scrum"},
+            {"id": "12", "name": "sprints", "type": "scrum"},
+            {"id": "13", "name": "TSK", "type": "kanban"},
+        ]),
+    );
+    // What Data Center actually returns for a board configuration: the filter
+    // and the columns, and no `location` anywhere in it.
+    for id in ["11", "12", "13"] {
+        ws.write_fixture(
+            &format!("board-{id}-config.json"),
+            serde_json::json!({
+                "id": id,
+                "name": "a board",
+                "type": "scrum",
+                "filter": {"id": "10100"},
+            }),
+        );
+    }
+    for id in ["11", "12"] {
+        ws.write_fixture(
+            &format!("board-{id}-projects.json"),
+            serde_json::json!({"values": [{"id": "10000", "key": "DC", "name": "Data Centre"}]}),
+        );
+    }
+    // A filter spanning two projects has no single answer, and naming the first
+    // would be a guess a script would then act on.
+    ws.write_fixture(
+        "board-13-projects.json",
+        serde_json::json!({"values": [{"key": "DC"}, {"key": "OPS"}]}),
+    );
+    ws.init();
+
+    let out = ws.json(&["boards"]);
+    assert_eq!(out["boards"][0]["project_key"], "DC");
+    assert_eq!(out["boards"][1]["project_key"], "DC");
+    assert!(out["boards"][2]["project_key"].is_null(), "{out}");
+
+    // And on screen it is a column, which is what tells `TSK` from `TSK board`.
+    let text = String::from_utf8(ws.cmd(&["boards"]).output().unwrap().stdout).unwrap();
+    assert!(text.contains("DC"), "no project column in:\n{text}");
 }
 
 /// `sprint create` puts the new sprint in the local cache on the way out, so a

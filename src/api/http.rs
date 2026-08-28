@@ -195,11 +195,26 @@ impl HttpClient {
             if let Some(b) = &body {
                 req = req.header(CONTENT_TYPE, "application/json").json(b);
             }
+            // Every request, at `-v`. Without this, `-v` promised REST paths
+            // and printed nothing, so the way to find out whether a call was
+            // even made was to read the source — which is exactly the question
+            // a debug flag exists to answer. The body stays at `-vv`: it can
+            // carry issue content, and a token never travels in one.
+            let started = std::time::Instant::now();
+            tracing::debug!("{method} {path}");
+            if let Some(b) = &body {
+                tracing::trace!("{method} {path} body: {b}");
+            }
             let response = req.send().await;
 
             match response {
                 Ok(resp) => {
                     let status = resp.status();
+                    tracing::debug!(
+                        "{method} {path} → {} in {}ms",
+                        status.as_u16(),
+                        started.elapsed().as_millis()
+                    );
                     if status.is_success() {
                         // 204 and empty bodies are normal for PUT/DELETE.
                         let text = resp.text().await.unwrap_or_default();

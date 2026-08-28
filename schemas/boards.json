@@ -31,7 +31,7 @@
               "string",
               "null"
             ],
-            "description": "The project the board is filed under. Taken from the board listing where the server gives it (Cloud), and otherwise from the board's own configuration, which is where Data Center keeps it. Null only for a board that would not say — a board whose location is not a project, or one this account cannot read the configuration of."
+            "description": "The project the board is filed under. Taken from the board listing where the server gives it (Cloud), and otherwise asked of the board itself: `location.projectKey` in its configuration on Cloud, its project listing on Data Center, whose configuration payload has no `location` at all. Null means unknown rather than none — a board whose filter spans several projects has no single answer, and neither has one this account cannot read."
           }
         },
         "required": [

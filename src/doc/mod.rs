@@ -512,9 +512,14 @@ fn parse_children(content: &str) -> Vec<ChildItem> {
 
 fn render_child_item(item: &ChildItem) -> String {
     let mark = if item.checked { 'x' } else { ' ' };
+    // Trimmed here too, not only where the item is built: a checkbox line
+    // cannot carry whitespace at its edges through a parse, so writing one that
+    // reads back as a different title is a difference jired would then report
+    // against itself.
+    let title = item.title.trim();
     match &item.key {
-        Some(k) => format!("- [{mark}] {k} {}", item.title),
-        None => format!("- [{mark}] {}", item.title),
+        Some(k) => format!("- [{mark}] {k} {title}"),
+        None => format!("- [{mark}] {title}"),
     }
 }
 
@@ -829,6 +834,28 @@ fn parse_attachments(content: &str) -> Vec<AttachmentLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What jired writes, jired has to read back as the same thing. A checkbox
+    /// line cannot carry whitespace at its edges through a parse, so a title
+    /// that has some must be normalized before it is written — otherwise the
+    /// file and the snapshot it came from disagree for ever, which is what
+    /// `diff` then reports on an issue nobody has touched.
+    #[test]
+    fn a_child_title_with_edge_whitespace_reads_back_as_it_was_written() {
+        let written = ChildItem {
+            checked: true,
+            key: Some("PROJ-143".into()),
+            title: "  Реализовать иерархию  ".into(),
+        };
+        let line = render_child_item(&written);
+        assert_eq!(line, "- [x] PROJ-143 Реализовать иерархию");
+
+        let read_back = parse_children(&line);
+        assert_eq!(read_back.len(), 1);
+        assert_eq!(read_back[0].title, "Реализовать иерархию");
+        // And again, so nothing drifts on the second write.
+        assert_eq!(render_child_item(&read_back[0]), line);
+    }
 
     fn sample() -> String {
         let mut s = String::from("---\nkey: PROJ-142\nid: \"10023\"\nsummary: Fix login flow\n");

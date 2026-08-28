@@ -531,12 +531,20 @@ board that disagrees ends the walk and the error lists them all — so genuinely
 different boards cost two requests and then say `one of: sprints (12), TSK (13),
 TSK board (11)`.
 
-`boards` fills in `project_key` from the board's own configuration for any board
-the listing left unlabelled, which on Data Center is all of them: the project is
-only in `/board/{id}/configuration` there, and a board nobody can place cannot be
-selected by a script. One request per unlabelled board, in this command only —
-best-effort, so a board that will not answer stays `null` rather than failing a
-listing that is otherwise right.
+`boards` fills in `project_key` for any board the listing left unlabelled, which
+on Data Center is all of them — a board nobody can place cannot be selected by a
+script. Two endpoints answer this and neither answers on both deployments:
+`location.projectKey` in `/board/{id}/configuration` is a Cloud field that Data
+Center omits from that payload entirely, and `/board/{id}/project` lists the
+projects the board's filter covers. Each deployment asks the one that answers it
+first and falls back to the other, since which of them a given Jira version
+populates is not something to bet a `null` on.
+
+One request per unlabelled board, in this command only, and best-effort: a board
+that will not answer stays `null` rather than failing a listing that is otherwise
+right. So does a board whose filter spans several projects — one project is an
+answer, several is genuinely not one, and naming the first would be a guess a
+script would then act on.
 
 ### `jired sprint create [NAME] [--board B] [--start TS] [--end TS] [--goal TEXT] [-i] [-n]`
 The one write that does not go through `push`: a sprint has no file to stage it

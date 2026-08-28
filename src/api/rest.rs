@@ -23,7 +23,51 @@ pub struct Rest {
     field_map: OnceCell<FieldMap>,
 }
 
+/// Where a board's project can be read from. The two Jira deployments populate
+/// one each; see [`JiraApi::board_project`].
+#[derive(Debug, Clone, Copy)]
+enum Source {
+    /// `GET /board/{id}/configuration` → `location.projectKey` (Cloud).
+    Configuration,
+    /// `GET /board/{id}/project` → the projects the board's filter covers.
+    Listing,
+}
+
 impl Rest {
+    /// The project key one of the two endpoints gives for a board, if it does.
+    async fn board_project_from(&self, board_id: &str, source: Source) -> Result<Option<String>> {
+        match source {
+            Source::Configuration => {
+                let v = self
+                    .http
+                    .get_json(&format!("/rest/agile/1.0/board/{board_id}/configuration"))
+                    .await?;
+                // Cloud spells it `projectKey` in the board listing and `key`
+                // in the configuration.
+                Ok(v.get("location")
+                    .and_then(|l| {
+                        l.get("projectKey")
+                            .or_else(|| l.get("key"))
+                            .and_then(Value::as_str)
+                    })
+                    .map(str::to_string)
+                    .filter(|k| !k.is_empty()))
+            }
+            Source::Listing => {
+                let v = self
+                    .http
+                    .get_json(&format!(
+                        "/rest/agile/1.0/board/{board_id}/project?maxResults=50"
+                    ))
+                    .await?;
+                // A board is a filter, and a filter can span projects: one is
+                // an answer, several is genuinely not one, and naming the first
+                // would be a guess a script would then act on.
+                Ok(single_project(&v))
+            }
+        }
+    }
+
     pub fn new(http: HttpClient) -> Self {
         let deployment = http.deployment();
         Self {
@@ -290,20 +334,20 @@ impl JiraApi for Rest {
     }
 
     async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
-        let v = self
-            .http
-            .get_json(&format!("/rest/agile/1.0/board/{board_id}/configuration"))
-            .await?;
-        // Cloud spells it `projectKey` in the board listing and `key` in the
-        // configuration; Data Center only has the configuration. Both are read
-        // so neither deployment needs its own path.
-        Ok(v.get("location")
-            .and_then(|l| {
-                l.get("projectKey")
-                    .or_else(|| l.get("key"))
-                    .and_then(Value::as_str)
-            })
-            .map(str::to_string))
+        // Two endpoints answer this, one per deployment, and neither answers on
+        // both: `location` in the board configuration is a Cloud field that
+        // Data Center omits entirely, and asking for it there spends a request
+        // to learn nothing. So each deployment asks the one that answers it
+        // first — and still falls back to the other, because which endpoint a
+        // given Jira version populates is not something to bet a null on.
+        let (first, second) = match self.deployment {
+            Deployment::Cloud => (Source::Configuration, Source::Listing),
+            Deployment::DataCenter => (Source::Listing, Source::Configuration),
+        };
+        if let Some(key) = self.board_project_from(board_id, first).await? {
+            return Ok(Some(key));
+        }
+        self.board_project_from(board_id, second).await
     }
 
     async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>> {
@@ -760,6 +804,24 @@ fn sprint_from_json(s: &Value, board: &str) -> Option<Sprint> {
             .map(str::to_string)
             .filter(|g| !g.is_empty()),
     })
+}
+
+/// The one project a board's project listing names, or `None` when it names
+/// none or several.
+///
+/// Shared with the fixture client so both read the payload the same way.
+pub fn single_project(v: &Value) -> Option<String> {
+    let mut keys: Vec<&str> = v
+        .get("values")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|p| p.get("key").and_then(Value::as_str))
+        .collect();
+    keys.dedup();
+    match keys.as_slice() {
+        [only] => Some((*only).to_string()),
+        _ => None,
+    }
 }
 
 /// Jira is inconsistent about whether ids are numbers or strings.
