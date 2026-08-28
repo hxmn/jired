@@ -4182,6 +4182,63 @@ fn push_leads_with_a_one_line_summary() {
     // see `push_refuses_a_stale_issue_with_exit_5`.
 }
 
+/// The other half of any bulk edit: choosing what to edit. Without it the
+/// choice was `grep -l '^summary:.*\[ALL\]' *.md` — a regex over jired's file
+/// format, which is what the format exists to spare people.
+#[test]
+fn list_selects_issues_from_the_working_copy() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let all = ws.json(&["list"]);
+    assert_eq!(all["schema"], "jired/list/1");
+    let total = all["count"].as_u64().unwrap();
+    assert!(total >= 2, "{all}");
+    assert!(all["issues"][0]["file"].as_str().unwrap().ends_with(".md"));
+
+    // A summary is a substring search, which is what looking for `[ALL]` means.
+    let some = ws.json(&["list", "--summary-contains", "login"]);
+    assert_eq!(some["count"], 1);
+    assert_eq!(some["issues"][0]["key"], "PROJ-142");
+
+    // The rest match whole values.
+    assert_eq!(ws.json(&["list", "--status", "In Progress"])["count"], 1);
+    assert_eq!(ws.json(&["list", "--status", "In"])["count"], 0);
+    assert_eq!(ws.json(&["list", "--label", "auth"])["count"], 1);
+    assert_eq!(ws.json(&["list", "--sprint", "Sprint 42"])["count"], 1);
+
+    // Filters are a conjunction.
+    let none = ws.json(&["list", "--label", "auth", "--status", "Done"]);
+    assert_eq!(none["count"], 0);
+}
+
+/// `--keys` exists to be piped into the commands that take issues.
+#[test]
+fn list_keys_pipes_into_the_commands_that_edit() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws
+        .cmd(&["list", "--keys", "--label", "auth"])
+        .output()
+        .unwrap();
+    let keys: Vec<String> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(keys, ["PROJ-142"], "nothing but the keys, one per line");
+
+    // Which is exactly what `label add` takes.
+    let mut args = vec!["label", "add", "picked"];
+    args.extend(keys.iter().map(String::as_str));
+    let labelled = ws.json(&args);
+    assert_eq!(labelled["issues"][0]["key"], "PROJ-142");
+    assert!(ws.read(ISSUE_FILE).contains("- picked"));
+}
+
 // ---------------------------------------------------------------------------
 // Custom fields [M2.3]
 // ---------------------------------------------------------------------------

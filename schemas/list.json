@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/list/1",
+  "title": "jired list result",
+  "description": "Issues in the working copy that match every filter given",
+  "type": "object",
+  "required": [
+    "schema",
+    "issues",
+    "count"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/list/1"
+    },
+    "count": {
+      "type": "integer"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "summary",
+          "status",
+          "type",
+          "labels"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string",
+            "description": "Path to the issue file, relative to the workspace"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "As the file spells it: `@[Name](id)`"
+          },
+          "sprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sprint it is in now, the last of the ones it has been in"
+          }
+        }
+      }
+    }
+  }
+}

@@ -583,6 +583,31 @@ as `sprint add` would — creating one is almost always followed by filling it. 
 moves are ordinary file edits and stage like any other; `--push` sends them in the
 same command. `-n` names the issues it would move and creates nothing.
 
+### `jired list [--summary-contains T] [--label L] [--status S] [--sprint S] [--assignee U] [--type T] [--keys]`
+`search` is JQL on the server; this is its offline half, and the other half of
+any bulk edit — choosing what to edit. Without it the choice was a `grep` over
+the `.md` files, which means the caller writing regexes against jired's own
+format, and is wrong the moment a filename and a summary disagree (the filename
+is cosmetic).
+
+It reads the **files**, not the snapshot: the files are what a following
+`label add` or `set` will edit, so what this lists and what those change are the
+same set even when the working copy is ahead of the last fetch. A file that will
+not parse is skipped rather than failing the listing — `doctor` and `diff` are
+where a broken file is reported.
+
+Every filter is a conjunction, and every comparison ignores case: these are
+values read off a screen and typed back. `--summary-contains` is a substring,
+because that is what looking for `[ALL]` means; the rest match a whole value,
+because a status half-named is a different status. `--assignee` is a substring of
+the file's `@[Name](id)`, so either half finds the person. `--sprint` asks where
+the issue *is*, which is the last entry of its sprint history.
+
+`--keys` prints the keys alone, one per line, with no heading, count or colour,
+so the output is an argument list:
+`jired list --keys --label regular | xargs jired sprint add --sprint "Sprint 44"`.
+JSON: `{"schema":"jired/list/1","count":2,"issues":[{"key","file","summary","status","type","labels","assignee","sprint"}]}`.
+
 ### `jired label add|remove|set LABEL ISSUES… [--push] [--dry-run]`
 Labels are a list, so there are three verbs: `add` and `remove` touch one label
 and leave the rest, `set` replaces the lot and takes several comma-separated.

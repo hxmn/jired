@@ -339,6 +339,7 @@ the filename you were just editing instead of retyping the key.
 | `report time` | who booked how much time, a row per person and a column per day, off the files already on disk; `--days N` (default 7) and `--show-issues`, both of which the screen can change while it is open |
 | `log [ISSUE]` | what changed, newest first — every issue in the workspace, or just one; `--refresh` asks the server |
 | `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag) |
+| `list [--summary-contains T] [--label L] [--status S] [--sprint S] [--assignee U] [--type T]` | the same question asked of the working copy, offline; `--keys` prints keys alone, for piping |
 | `resolve` | list and clear recorded conflicts — see above |
 | `reset [ISSUES…]` | drop local changes and put the files back to the last sync; lists what would go and asks first, `-n/--dry-run` just lists, `--include-new` also deletes locally created issues |
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |

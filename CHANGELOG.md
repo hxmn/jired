@@ -12,6 +12,23 @@ version between the one you have and the one you are moving to.
 
 ### Added
 
+- **`jired list` picks issues out of the working copy, offline.** `search` is
+  JQL on the server; asking the local files "which issues say X" had no answer,
+  so it was answered with `grep -l '^summary:.*\[ALL\]' *.md` — the caller
+  writing regexes against jired's own file format, and getting it wrong whenever
+  a filename and a summary disagree.
+
+  ```sh
+  jired list --summary-contains '[ALL]' --status 'In Progress'
+  jired list --keys --label regular | xargs jired sprint add --sprint 'Sprint 44'
+  ```
+
+  Filters for summary, label, status, sprint, assignee and type, all
+  case-insensitive and all conjunctive; `--keys` prints keys alone so the output
+  is an argument list for the commands that take issues. It reads the files
+  rather than the snapshot, so what it lists and what a following `label add`
+  edits are the same set.
+
 - **`--fields` and `--json-compact` cut a result document down.** A full
   document is a complete record, which is the wrong size when the caller wanted
   three values: reading them meant piping jired's own JSON through a script that
