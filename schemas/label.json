@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/label/1",
+  "title": "jired label result",
+  "description": "Labels staged onto issues, or taken off them",
+  "type": "object",
+  "required": [
+    "schema",
+    "operation",
+    "labels",
+    "issues",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/label/1"
+    },
+    "operation": {
+      "enum": [
+        "add",
+        "remove",
+        "set"
+      ]
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The labels named on the command line"
+    },
+    "issues": {
+      "type": "array",
+      "description": "One entry per issue whose file was written",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the issue already had the value being written"
+          }
+        }
+      }
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

@@ -192,6 +192,94 @@ impl Frontmatter {
         };
         Some(v)
     }
+
+    /// Write a field by its frontmatter name, from the text a person would type.
+    ///
+    /// The inverse of [`Frontmatter::field`], and the reason `jired set` does
+    /// not need a flag per field. Reports whether the value actually moved, so
+    /// a command can tell "already had that" from "changed it" — the difference
+    /// between reporting and staging.
+    ///
+    /// An empty `value` clears the field, which is what a push sends as `null`.
+    /// A list takes its members comma-separated; a value with a comma in it is
+    /// not something Jira's own list fields can hold anyway.
+    pub fn set_field(&mut self, name: &str, value: &str) -> Result<bool> {
+        let before = self.field(name);
+        let text = value.trim();
+        let some = |t: &str| (!t.is_empty()).then(|| t.to_string());
+        let list = |t: &str| -> Vec<String> {
+            t.split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+        match name {
+            "summary" => self.summary = text.to_string(),
+            "status" => self.status = text.to_string(),
+            "type" => self.issue_type = text.to_string(),
+            "priority" => self.priority = some(text),
+            "assignee" => self.assignee = some(text),
+            "parent" => self.parent = some(text).map(|p| p.to_uppercase()),
+            "epic" => self.epic = some(text).map(|p| p.to_uppercase()),
+            "labels" => self.labels = list(text),
+            "components" => self.components = list(text),
+            "fix_versions" => self.fix_versions = list(text),
+            "affects_versions" => self.affects_versions = list(text),
+            // The list is a history and only its last entry is where the issue
+            // is now, so setting it means moving — the same rule
+            // `jired sprint add` follows.
+            "sprint" => {
+                self.sprint.retain(|s| !s.eq_ignore_ascii_case(text));
+                if !text.is_empty() {
+                    self.sprint.push(text.to_string());
+                }
+            }
+            "story_points" => {
+                self.story_points = match some(text) {
+                    None => None,
+                    Some(n) => Some(n.parse::<f64>().map_err(|_| {
+                        JiredError::usage(format!("`{text}` is not a number of story points"))
+                    })?),
+                }
+            }
+            // A custom field is addressed by its id, which is what the file
+            // shows and what the server wants.
+            id if id.starts_with("customfield_") => {
+                match some(text) {
+                    None => {
+                        self.custom.remove(id);
+                    }
+                    Some(v) => {
+                        // A value that reads as JSON is taken as JSON — that is
+                        // how a multi-select or a field jired could not
+                        // simplify is written in the file, so it has to be
+                        // writable the same way.
+                        let parsed = serde_json::from_str(&v)
+                            .unwrap_or(serde_json::Value::String(v.clone()));
+                        self.custom.insert(id.to_string(), parsed);
+                    }
+                }
+                // `field("custom")` compares the whole map, which is the right
+                // comparison for one entry inside it too.
+                return Ok(before != self.field("custom"));
+            }
+            "links" => {
+                return Err(JiredError::usage(
+                    "`links` cannot be set from the command line".to_string(),
+                )
+                .with_hint("edit `links:` in the file — one `- type: KEY` per line"))
+            }
+            other => {
+                return Err(
+                    JiredError::usage(format!("`{other}` is not a field jired can set")).with_hint(
+                        format!("one of: {}, or a customfield_* id", EDITABLE.join(", ")),
+                    ),
+                )
+            }
+        }
+        Ok(before != self.field(name))
+    }
 }
 
 /// `sprint:` holds one name or several.

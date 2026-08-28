@@ -3948,6 +3948,171 @@ fn an_issue_the_workspace_does_not_have_is_reported_and_the_rest_still_move() {
     );
 }
 
+/// Labelling six issues used to mean a script that rewrote `labels:` in the
+/// YAML — the caller parsing jired's own file format, which breaks the first
+/// time the format moves.
+#[test]
+fn label_add_and_remove_touch_one_label_and_leave_the_rest() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&["label", "add", "regular", "PROJ-142", "PROJ-150"]);
+    assert_eq!(out["schema"], "jired/label/1");
+    assert_eq!(out["operation"], "add");
+    assert_eq!(out["labels"][0], "regular");
+    assert_eq!(out["issues"].as_array().unwrap().len(), 2);
+
+    // The labels that were already there are still there.
+    let text = ws.read(ISSUE_FILE);
+    assert!(text.contains("- auth"), "{text}");
+    assert!(text.contains("- regular"), "{text}");
+
+    // Already labelled is reported, not staged a second time.
+    let again = ws.json(&["label", "add", "regular", "PROJ-142"]);
+    assert_eq!(again["issues"][0]["changed"], false);
+
+    let off = ws.json(&["label", "remove", "regular", "PROJ-142"]);
+    assert_eq!(off["issues"][0]["changed"], true);
+    let text = ws.read(ISSUE_FILE);
+    assert!(!text.contains("- regular"), "{text}");
+    assert!(text.contains("- auth"), "the others are untouched:\n{text}");
+}
+
+/// `set` replaces the lot, and the change goes out as an ordinary field update.
+#[test]
+fn label_set_replaces_every_label_and_pushes() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&["label", "set", "a,b", "PROJ-142", "--push"]);
+    assert_eq!(out["operation"], "set");
+    assert_eq!(out["pushed"], true);
+    let op = &out["push"]["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "update_fields");
+    assert_eq!(op["status"], "done");
+    let text = ws.read(ISSUE_FILE);
+    assert!(text.contains("- a\n- b"), "{text}");
+    assert!(!text.contains("- auth"), "set replaces:\n{text}");
+}
+
+/// A label with a space in it is a list somebody separated the wrong way, and
+/// sending it would make a label nobody meant.
+#[test]
+fn a_label_with_a_space_is_refused() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["label", "add", "two words", "PROJ-142"], 2);
+    assert!(
+        err["message"].as_str().unwrap().contains("no spaces"),
+        "{err}"
+    );
+    let err = ws.json_err(&["label", "add", "a,b", "PROJ-142"], 2);
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("one label at a time"),
+        "{err}"
+    );
+}
+
+/// The general form: any editable field, on any number of issues, without
+/// anybody outside jired writing YAML.
+#[test]
+fn set_writes_any_editable_field_across_issues() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&[
+        "set", "--field", "priority", "--value", "Low", "PROJ-142", "PROJ-150",
+    ]);
+    assert_eq!(out["schema"], "jired/set/1");
+    assert_eq!(out["field"], "priority");
+    assert_eq!(out["issues"].as_array().unwrap().len(), 2);
+    assert!(ws.read(ISSUE_FILE).contains("priority: Low"));
+
+    // A list field takes commas, and a number is parsed as one.
+    ws.json(&[
+        "set",
+        "--field",
+        "components",
+        "--value",
+        "Auth,API",
+        "PROJ-142",
+    ]);
+    let text = ws.read(ISSUE_FILE);
+    assert!(text.contains("- Auth"), "{text}");
+    assert!(text.contains("- API"), "{text}");
+    ws.json(&["set", "--field", "story_points", "--value", "8", "PROJ-142"]);
+    assert!(ws.read(ISSUE_FILE).contains("story_points: 8"));
+
+    // Setting what is already there is reported rather than staged.
+    let again = ws.json(&["set", "--field", "priority", "--value", "Low", "PROJ-142"]);
+    assert_eq!(again["issues"][0]["changed"], false);
+
+    // An empty value clears, which is what a push sends as null.
+    ws.json(&["set", "--field", "priority", "--value", "", "PROJ-142"]);
+    assert!(!ws.read(ISSUE_FILE).contains("priority:"));
+
+    let push = ws.json(&["push", "--dry-run"]);
+    let sent = &push["results"][0]["ops"][0]["request"]["body"]["fields"];
+    assert_eq!(sent["priority"], Value::Null, "{sent}");
+}
+
+/// A field nobody can write is a mistake about the command, not about one of
+/// the issues — so it is refused before any file is touched.
+#[test]
+fn set_refuses_a_field_it_cannot_write_before_editing_anything() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let before = ws.read(ISSUE_FILE);
+
+    let err = ws.json_err(
+        &["set", "--field", "nonsense", "--value", "x", "PROJ-142"],
+        2,
+    );
+    assert!(
+        err["hint"].as_str().unwrap().contains("customfield_"),
+        "{err}"
+    );
+
+    let err = ws.json_err(
+        &["set", "--field", "key", "--value", "PROJ-1", "PROJ-142"],
+        2,
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("identifies the issue"),
+        "{err}"
+    );
+
+    let err = ws.json_err(
+        &[
+            "set",
+            "--field",
+            "story_points",
+            "--value",
+            "many",
+            "PROJ-142",
+        ],
+        2,
+    );
+    assert!(
+        err["message"].as_str().unwrap().contains("not a number"),
+        "{err}"
+    );
+
+    assert_eq!(ws.read(ISSUE_FILE), before, "nothing was written");
+}
+
 // ---------------------------------------------------------------------------
 // Custom fields [M2.3]
 // ---------------------------------------------------------------------------

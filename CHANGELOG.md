@@ -10,6 +10,32 @@ version between the one you have and the one you are moving to.
 
 ## [0.2.0] — 2026-08-28
 
+### Added
+
+- **`jired label` and `jired set` edit fields across many issues.** Putting one
+  label on six issues meant a script that rewrote `labels:` in the YAML — the
+  caller parsing jired's own file format, which is the thing the format exists
+  to spare people, and which breaks the first time the format moves.
+
+  ```sh
+  jired label add regular PROJ-60 PROJ-65 PROJ-193
+  jired label remove regular PROJ-60
+  jired label set a,b PROJ-60 --push
+
+  jired set --field priority --value High PROJ-60 PROJ-65
+  jired set --field components --value Auth,API PROJ-60
+  jired set --field customfield_10456 --value Platform PROJ-60
+  ```
+
+  `label` has three verbs because labels are a list: `add` and `remove` touch
+  one and leave the rest, `set` replaces them. `set` writes any name in the
+  editable frontmatter list, or a `customfield_*` id, with commas separating a
+  list and an empty value clearing the field. Both stage like `assign` does —
+  the file is written, `status` and `diff` show it, `push` sends it, `--push`
+  sends it now — and both report an issue that already had the value instead of
+  staging a change that does nothing. `--json` reports them as `jired/label/1`
+  and `jired/set/1`.
+
 ### Fixed
 
 - **`push` no longer drops fields when it creates an issue.** A locally created

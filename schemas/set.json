@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/set/1",
+  "title": "jired set result",
+  "description": "One field written across issues",
+  "type": "object",
+  "required": [
+    "schema",
+    "field",
+    "value",
+    "issues",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/set/1"
+    },
+    "field": {
+      "type": "string",
+      "description": "The frontmatter field, or a customfield_* id"
+    },
+    "value": {
+      "type": "string",
+      "description": "As given; empty clears the field"
+    },
+    "issues": {
+      "type": "array",
+      "description": "One entry per issue whose file was written",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the issue already had the value being written"
+          }
+        }
+      }
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

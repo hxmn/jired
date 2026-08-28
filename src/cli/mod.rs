@@ -207,6 +207,11 @@ pub enum Command {
     Transition(cmd::transition::TransitionArgs),
     /// Assign an issue
     Assign(cmd::assign::AssignArgs),
+    /// Put a label on issues, or take one off
+    #[command(subcommand)]
+    Label(cmd::label::LabelCmd),
+    /// Write any editable field on any number of issues
+    Set(cmd::set::SetArgs),
     /// Stage a file for upload to an issue
     Attach(cmd::attach::AttachArgs),
     /// Work with attachments
@@ -306,6 +311,8 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Edit(a) => cmd::edit::run(g, a, out),
         Command::Transition(a) => cmd::transition::run(g, a, out),
         Command::Assign(a) => cmd::assign::run(g, a, out),
+        Command::Label(a) => cmd::label::run(g, a, out),
+        Command::Set(a) => cmd::set::run(g, a, out),
         Command::Attach(a) => cmd::attach::run(g, a, out),
         Command::Attachments(a) => cmd::attach::run_attachments(g, a, out),
         Command::Open(a) => cmd::open::run(g, a, out),

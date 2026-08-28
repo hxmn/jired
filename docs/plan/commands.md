@@ -574,6 +574,38 @@ as `sprint add` would — creating one is almost always followed by filling it. 
 moves are ordinary file edits and stage like any other; `--push` sends them in the
 same command. `-n` names the issues it would move and creates nothing.
 
+### `jired label add|remove|set LABEL ISSUES… [--push] [--dry-run]`
+Labels are a list, so there are three verbs: `add` and `remove` touch one label
+and leave the rest, `set` replaces the lot and takes several comma-separated.
+Staged like `assign` — the file is written, `status` and `diff` show it, `push`
+sends it, `--push` sends it now. An issue that already has the label (or already
+lacks it, for `remove`) is reported and not staged: staging a change that does
+nothing only gives `push` something to explain.
+
+A label containing whitespace is exit 2 — Jira labels have no spaces, so it is a
+list somebody separated the wrong way — and so is passing several to `add` or
+`remove`, which act on one at a time.
+JSON: `{"schema":"jired/label/1","operation":"add","labels":["regular"],"issues":[…],"pushed":false}`.
+
+### `jired set --field F --value V ISSUES… [--push] [--dry-run]`
+The general form of the three above, for the fields that do not earn their own
+spelling: `components`, `story_points`, `priority`, and an instance's own custom
+fields by id. Without it, setting one of those across six issues meant a script
+rewriting the YAML — the caller parsing jired's file format, which breaks the
+first time the format moves.
+
+`--field` takes any name in `frontmatter::EDITABLE` or a `customfield_*` id;
+`--value` takes the text a person would type, with commas separating a list and
+an empty string clearing the field (what a push sends as `null`). A custom value
+that parses as JSON is stored as JSON, which is how a multi-select is written in
+the file. `links` is refused — it is a list of maps, not a value — and so are
+`key` and `id`, which identify the issue.
+
+Both checks happen before a file is opened: a field nobody can write is a
+mistake about the command, not about one of the issues, and finding out on the
+fourth would leave three already edited.
+JSON: `{"schema":"jired/set/1","field":"priority","value":"Low","issues":[…],"pushed":false}`.
+
 ### `jired sprint add ISSUES… --sprint S [--push] [--dry-run]` · `jired sprint remove ISSUES… [--push] [--dry-run]`
 The scriptable single-field commands for an issue's sprint, alongside
 `transition`, `assign` and `comment`, and behaving like them: the frontmatter is

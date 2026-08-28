@@ -15,16 +15,16 @@
 //! the key order and that its last entry is the one a move can act on.
 
 use crate::api::{Board, JiraApi, Sprint, SprintInput};
-use crate::cli::cmd::edit::{edit_issue, push_these, report_push};
+use crate::cli::cmd::edit::{push_these, report_push};
 use crate::cli::cmd::list::{board_names, pick_board};
 use crate::cli::cmd::prompt::Ui;
+use crate::cli::cmd::stage::{self, Staged, Wording};
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::store::state::SprintRow;
 use crate::style::{self, CYAN};
-use crate::sync::push::PushReport;
 use crate::tui::sprint::{BoardSprint, KnownBoard, NewSprint, Seed, SprintScreen};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
@@ -136,15 +136,6 @@ pub fn run(g: &GlobalArgs, cmd: &SprintCmd, out: Out) -> Result<ExitCode> {
     }
 }
 
-/// One issue's staged move.
-#[derive(Debug, Clone, serde::Serialize)]
-struct Moved {
-    key: String,
-    file: String,
-    /// False when the issue was already where it was being sent.
-    changed: bool,
-}
-
 /// The sprint a `--sprint` value names, as this workspace knows it.
 ///
 /// A name or an id, because both are things a person has: an id from `jired
@@ -190,41 +181,19 @@ fn resolve_sprint(ctx: &Context, wanted: &str) -> Result<SprintRow> {
 }
 
 /// Write the sprint change into each issue's file.
-///
-/// One bad issue does not stop the others, the same promise `push` makes: a key
-/// the workspace does not have is reported and the rest are still staged.
 fn stage_moves(
     ctx: &mut Context,
     issues: &[String],
     target: Option<&SprintRow>,
     out: Out,
-) -> Result<Vec<Moved>> {
-    let mut staged = Vec::new();
-    let mut failed = 0;
-    for issue in issues {
-        let key = crate::project::naming::key_from_input(issue);
-        let mut changed = false;
-        let name = target.map(|t| t.name.clone());
-        let edited = edit_issue(ctx, &key, |doc| {
-            changed = set_current_sprint(&mut doc.frontmatter.sprint, name.as_deref());
-            Ok(())
-        });
-        match edited {
-            Ok(file) => staged.push(Moved { key, file, changed }),
-            Err(e) => {
-                failed += 1;
-                out.warn(format!("{key}: {}", e.message));
-            }
-        }
-    }
-    // Every one of them failing is the command failing, not a quiet success.
-    if failed > 0 && staged.is_empty() {
-        return Err(JiredError::usage(format!(
-            "none of the {failed} issue(s) named are in this workspace"
+) -> Result<Vec<Staged>> {
+    let name = target.map(|t| t.name.clone());
+    stage::stage(ctx, issues, out, move |doc| {
+        Ok(set_current_sprint(
+            &mut doc.frontmatter.sprint,
+            name.as_deref(),
         ))
-        .with_hint("run `jired pull` first, or check the keys"));
-    }
-    Ok(staged)
+    })
 }
 
 /// Put `target` at the end of an issue's sprint list, which is where it is now.
@@ -255,7 +224,7 @@ fn set_current_sprint(sprints: &mut Vec<String>, target: Option<&str>) -> bool {
 /// Report the staged moves, and send them when asked.
 fn finish(
     ctx: &mut Context,
-    moved: Vec<Moved>,
+    moved: Vec<Staged>,
     target: Option<SprintRow>,
     push: bool,
     dry_run: bool,
@@ -265,63 +234,25 @@ fn finish(
         .as_ref()
         .map(|t| t.name.clone())
         .unwrap_or_else(|| "the backlog".to_string());
-    let changed: Vec<&Moved> = moved.iter().filter(|m| m.changed).collect();
-
-    let pushed: Option<PushReport> = if push && !changed.is_empty() {
-        let keys: Vec<String> = changed.iter().map(|m| m.key.clone()).collect();
-        let report = push_these(ctx, &keys, dry_run)?;
-        report_push(&report, out);
-        Some(report)
-    } else {
-        None
-    };
-
-    for m in &moved {
-        if !m.changed {
-            out.say(format!(
-                "{} is already in {where_to}",
-                style::out(CYAN, &m.key)
-            ));
-        }
-    }
-    match &pushed {
-        _ if changed.is_empty() => {}
-        Some(r) if r.dry_run => {}
-        Some(r) if r.results.iter().all(|x| x.ok) => {
-            out.say(format!("moved {} issue(s) to {where_to}", changed.len()))
-        }
-        Some(_) => out.say(format!(
-            "{} issue(s) are staged for {where_to}, but the push failed — \
-             fix the cause and run `jired push`",
-            changed.len()
-        )),
-        None => {
-            for m in &changed {
-                out.say(format!(
-                    "staged {} → {where_to} in {}",
-                    style::out(CYAN, &m.key),
-                    m.file
-                ));
-            }
-            out.hint("run `jired push` to move them");
-        }
-    }
-
-    out.emit(
-        "sprint-move",
-        &serde_json::json!({
+    let outcome = stage::finish(
+        ctx,
+        moved,
+        &Wording {
+            what: &where_to,
+            verb: "moved",
+            already: &format!("is already in {where_to}"),
+        },
+        push,
+        dry_run,
+        out,
+        serde_json::json!({
             "sprint": target.map(|t| serde_json::json!({
                 "id": t.id, "name": t.name, "state": t.state, "board_id": t.board_id,
             })),
-            "issues": moved,
-            "pushed": pushed.is_some(),
-            "push": pushed,
         }),
-    );
-    Ok(match pushed {
-        Some(report) => report.exit_code(),
-        None => ExitCode::Success,
-    })
+    )?;
+    out.emit("sprint-move", &outcome.doc);
+    Ok(outcome.exit)
 }
 
 fn create(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {

@@ -310,6 +310,10 @@ the filename you were just editing instead of retyping the key.
 | `create --summary S` | write a `NEW-<hex>. Summary.md`; push creates the issue and renames the file to the real key. `--template NAME` starts from `.jired/templates/NAME.md` |
 | `transition ISSUE --to STATUS` | stage a workflow change; `--list` shows what is available, `--field k=v` fills a transition screen |
 | `assign ISSUE --me\|--user Q\|--none` | stage an assignee change |
+| `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues; `add`/`remove` keep the other labels, `set` replaces them |
+| `set --field F --value V ISSUES…` | stage any editable field across issues, including `customfield_*` ids |
+| `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues |
+| `set --field F --value V ISSUES…` | stage any editable field across issues |
 | `attach ISSUE FILE…` | stage an upload into the issue's attachment folder |
 | `attachments pull [ISSUES…]` / `list` | download attachment content over the stubs, or show what is present |
 | `logwork [ISSUE] [TIME]` | book time — `jired logwork PROJ-142 "2h 30m"`; with either missing it opens a form, `--push` sends it straight away |

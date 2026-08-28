@@ -51,6 +51,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
         "init-agents",
         include_str!("../../../schemas/init-agents.json"),
     ),
+    ("label", include_str!("../../../schemas/label.json")),
     ("log", include_str!("../../../schemas/log.json")),
     ("logwork", include_str!("../../../schemas/logwork.json")),
     ("open", include_str!("../../../schemas/open.json")),
@@ -64,6 +65,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("reset", include_str!("../../../schemas/reset.json")),
     ("resolve", include_str!("../../../schemas/resolve.json")),
     ("search", include_str!("../../../schemas/search.json")),
+    ("set", include_str!("../../../schemas/set.json")),
     (
         "sprint-create",
         include_str!("../../../schemas/sprint-create.json"),
