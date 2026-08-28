@@ -4339,6 +4339,66 @@ fn a_set_that_is_not_field_equals_value_is_refused() {
     assert!(err["message"].as_str().unwrap().contains("`nope`"), "{err}");
 }
 
+/// A worklog somebody logged while you worked has nothing to do with the label
+/// you are sending. Dropping the issue over it is stricter than it needs to be,
+/// and recovering took three commands and a full pull of the workspace.
+#[test]
+fn refresh_stale_retries_an_issue_whose_incoming_change_is_unrelated() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["label", "add", "regular", "PROJ-142"]);
+
+    // Somebody else touches a field this push is not sending.
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["description"] = "Someone else edited this.".into();
+    });
+
+    // Without the flag it is refused, exactly as before.
+    let refused = ws.json_code(&["push"], 5);
+    assert_eq!(refused["summary"]["stale"][0], "PROJ-142");
+
+    // With it, the issue is re-fetched and sent.
+    let out = ws.json(&["push", "--refresh-stale"]);
+    assert!(
+        out["summary"]["stale"].as_array().unwrap().is_empty(),
+        "{out}"
+    );
+    assert_eq!(out["summary"]["ok"], 1, "{out}");
+    assert_eq!(out["results"][0]["ops"][0]["kind"], "update_fields");
+    // Both changes survive: theirs came in on the re-fetch, ours went out.
+    let text = ws.read(ISSUE_FILE);
+    assert!(text.contains("- regular"), "{text}");
+    assert!(text.contains("Someone else edited this."), "{text}");
+}
+
+/// A change under a change is a real conflict, and stays refused.
+#[test]
+fn refresh_stale_leaves_a_real_conflict_alone() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["set", "--field", "priority", "--value", "Low", "PROJ-142"]);
+
+    // The same field, changed on the server.
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["priority"] = serde_json::json!({ "name": "Highest" });
+    });
+
+    let out = ws.json_code(&["push", "--refresh-stale"], 5);
+    assert_eq!(out["summary"]["stale"][0], "PROJ-142", "{out}");
+    assert!(
+        out["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("touches a field you changed")),
+        "{out}"
+    );
+    // The local edit is untouched, so nothing was lost.
+    assert!(ws.read(ISSUE_FILE).contains("priority: Low"));
+}
+
 // ---------------------------------------------------------------------------
 // Custom fields [M2.3]
 // ---------------------------------------------------------------------------

@@ -35,6 +35,15 @@ pub struct PushArgs {
     /// Replay operations left pending by an interrupted push
     #[arg(long)]
     pub resume: bool,
+
+    /// Re-fetch issues refused as stale and retry the ones that still merge
+    ///
+    /// A worklog somebody added has nothing to do with the labels you are
+    /// sending; dropping the issue over it is stricter than it needs to be.
+    /// An issue whose incoming change touches a field you also changed is a
+    /// real conflict and is still refused.
+    #[arg(long, conflicts_with = "force")]
+    pub refresh_stale: bool,
 }
 
 pub fn run(g: &GlobalArgs, args: &PushArgs, out: Out) -> Result<ExitCode> {

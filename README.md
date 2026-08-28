@@ -320,7 +320,7 @@ the filename you were just editing instead of retyping the key.
 |---|---|
 | `fetch [ISSUES…]` | update the local snapshot from the server without touching files; `--jql/--sprint/--board/--updated-since` widen the scope, `--full` ignores the incremental watermark, `--slim` skips changelogs to keep `state.db` small |
 | `pull [ISSUES…]` | fetch and merge into the files; `-n/--dry-run` shows what would be written |
-| `push [ISSUES…]` | send staged changes; shows the plan and asks first when interactive (`-y` skips), `-n/--dry-run` (alias `preview`) prints the exact API calls |
+| `push [ISSUES…]` | send staged changes; shows the plan and asks first when interactive (`-y` skips), `-n/--dry-run` (alias `preview`) prints the exact API calls, `--refresh-stale` re-fetches and retries the issues the server moved on from |
 | `diff [ISSUES…]` | `--against base` (default: what `push` would send) or `--against remote` (what `pull` would bring in); `--stat`, `--exit-code` |
 | `status` | dirty, behind, staged, conflicted; `--all` also lists unchanged issues |
 | `edit [ISSUE]` | change an issue on a form; without an issue, pick one from the list — see [The issue picker](#the-issue-picker) |
@@ -542,7 +542,7 @@ out of the way.
 | 2 | an edit left a file jired cannot parse | `jired diff` to see what changed, or `jired reset "PROJ-0142. Fix login flow.md"` to throw the edit away and start from the last sync |
 | 3 | the credential was rejected — an expired or revoked token, or the wrong identity for this server | `jired whoami`, then `jired init --force` to authenticate again |
 | 4 | DNS, connect, timeout or TLS | `jired doctor` verifies connectivity; see TLS and proxies below |
-| 5 | `pull` found fields changed on both sides, or `push` refused an issue the server has moved on from | `jired pull --strategy merge` then `jired resolve`; for a stale push, `jired pull` first |
+| 5 | `pull` found fields changed on both sides, or `push` refused an issue the server has moved on from | `jired pull --strategy merge` then `jired resolve`; for a stale push, `jired push --refresh-stale` re-fetches and retries the ones whose incoming change is unrelated |
 | 6 | a read-only region was edited and its original markup cannot be rebuilt | `jired diff` to see it, restore the block, or `jired push --allow-lossy` |
 | 8 | another jired process holds the workspace lock (the message names its pid and start time) | wait — the lock is released when that process exits, including if it is killed |
 | 9 | a local database will not open or holds something unreadable | see "the databases" below |

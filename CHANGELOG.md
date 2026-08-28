@@ -12,6 +12,19 @@ version between the one you have and the one you are moving to.
 
 ### Added
 
+- **`jired push --refresh-stale` recovers from a stale push in one step.**
+  Sending a label to six issues and having one refused because somebody logged
+  work on it meanwhile took three more commands — `pull --dry-run` to check the
+  incoming change was not a conflict, `pull`, `push` — and a full pull of the
+  workspace to send one label.
+
+  The flag re-fetches the refused issues, merges them, and pushes again the ones
+  that still merge cleanly. That is the right test for "the staleness does not
+  touch what I am sending", and it is one that already existed: a three-way
+  merge conflicts exactly when the incoming change and the local one touch the
+  same field. A real conflict is still refused and now says why. Detection is
+  unchanged — this is only the recovery path.
+
 - **`jired create` takes the fields an issue is raised with.** It accepted only
   `--type`, `--summary`, `--parent`, `--description` and `--template`, so
   everything else meant creating the file, editing the YAML by hand and pushing:

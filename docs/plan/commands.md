@@ -203,6 +203,18 @@ that only adds a comment, a worklog or an attachment leaves the tree alone, so a
 card dragged between board columns and not yet pushed survives it.
 JSON: `{"schema":"jired/push/1","results":[{"key":"PROJ-1","ok":true,"ops":[…]},{"key":"NEW-x7f3a2","ok":true,"new_key":"PROJ-201"}]}`.
 
+`--refresh-stale` is the recovery path for exit 5. Every issue the concurrency
+check refused is re-fetched and merged (abort strategy, scoped to just those),
+and the ones that merge cleanly are pushed again. "Merges cleanly" is the right
+test for "the staleness does not touch what I am sending", and it is a test that
+already exists: a three-way merge conflicts exactly when the incoming change and
+the local one touch the same field. A worklog logged while you worked has nothing
+to do with the labels you are sending; a priority changed under a priority you
+changed is a real conflict and stays refused, named in the warnings. The retry
+runs with the flag off, so an issue that goes stale twice in one push reports
+rather than looping. It conflicts with `--force`, which answers the same question
+by not asking it.
+
 ### `jired diff`
 `jired diff [ISSUE…] [--against base|remote] [--remote] [--stat] [--exit-code]`
 Modes: working↔base (`--against base`, the default: what `push` would send),

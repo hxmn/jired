@@ -546,6 +546,14 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     }
 
     report.results.sort_by(|a, b| a.key.cmp(&b.key));
+
+    // Before the regroup below, so an issue that only went out on the retry
+    // still moves the folders it belongs in. `engine` owns its handles rather
+    // than borrowing `ctx`, so the retry can open its own alongside it.
+    if args.refresh_stale && !args.dry_run && !report.stale.is_empty() {
+        retry_stale(ctx, &mut report, args)?;
+    }
+
     report.summary = PushSummary {
         ok: report.results.iter().filter(|r| r.ok).count(),
         failed: report.results.iter().filter(|r| !r.ok).count(),
@@ -925,6 +933,88 @@ fn plan_custom_fields(
             fields.insert(id.clone(), Value::Null);
         }
     }
+}
+
+/// Re-fetch the issues refused as stale and push again the ones that still
+/// merge cleanly.
+///
+/// "Still merges" is the right test for "the staleness does not touch what I am
+/// sending", and it is a test that already exists: a three-way merge conflicts
+/// exactly when the incoming change and the local one touch the same field. A
+/// worklog somebody logged while you were working has nothing to do with the
+/// labels you are sending, and dropping the whole issue over it is stricter
+/// than it needs to be — but a priority they changed under a priority you
+/// changed is a real conflict and stays refused.
+///
+/// The recovery this replaces was three commands and a full pull of every issue
+/// in the workspace to send one label.
+fn retry_stale(ctx: &mut Context, report: &mut PushReport, args: &PushArgs) -> Result<()> {
+    let stale = report.stale.clone();
+    ctx.out.say(format!(
+        "re-fetching {} issue(s) the server had moved on from",
+        stale.len()
+    ));
+
+    let pull_args = crate::cli::cmd::pull::PullArgs {
+        // Abort, deliberately: a conflicting issue must be left exactly as a
+        // plain push would leave it, not merged with markers behind the user's
+        // back in the middle of a push they did not ask to be interactive.
+        strategy: crate::cli::cmd::pull::Strategy::Abort,
+        ..Default::default()
+    };
+    let pulled = match crate::sync::pull::run_scoped(ctx, &pull_args, Some(&stale)) {
+        Ok(pulled) => pulled,
+        // A failed re-fetch leaves every stale issue stale, which is where they
+        // already were: worth saying, not worth failing the push that worked.
+        Err(e) => {
+            report.warnings.push(format!(
+                "could not re-fetch the stale issues: {}",
+                e.message
+            ));
+            return Ok(());
+        }
+    };
+
+    let conflicted: std::collections::BTreeSet<&str> =
+        pulled.conflicts.iter().map(|c| c.key.as_str()).collect();
+    let retryable: Vec<String> = stale
+        .iter()
+        .filter(|k| !conflicted.contains(k.as_str()))
+        .cloned()
+        .collect();
+    for key in &stale {
+        if conflicted.contains(key.as_str()) {
+            report.warnings.push(format!(
+                "{key}: the incoming change touches a field you changed, so it was not retried"
+            ));
+        }
+    }
+    if retryable.is_empty() {
+        return Ok(());
+    }
+
+    // `refresh_stale` off, so a second round of staleness reports rather than
+    // looping: an issue that goes stale twice in one push is a signal, not
+    // something to keep chasing.
+    let retry = PushArgs {
+        issues: retryable.clone(),
+        refresh_stale: false,
+        ..args.clone()
+    };
+    let second = run(ctx, &retry)?;
+
+    // The retried issues replace their stale results; everything else stands.
+    let retried: std::collections::BTreeSet<&str> =
+        second.results.iter().map(|r| r.key.as_str()).collect();
+    report.results.retain(|r| !retried.contains(r.key.as_str()));
+    report.results.extend(second.results);
+    report.results.sort_by(|a, b| a.key.cmp(&b.key));
+    report.stale = second.stale;
+    report.warnings.extend(second.warnings);
+    if second.groups.is_some() {
+        report.groups = second.groups;
+    }
+    Ok(())
 }
 
 /// An operation the create call cannot carry, to run once the issue has a key.
