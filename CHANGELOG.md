@@ -38,7 +38,41 @@ before something destructive, what an error says, and what the docs claim.
 - `search --pull` and `resolve --field` are hidden and now fail immediately with
   exit 2 instead of exit 1 after doing part of the work; neither is implemented.
 
+### Fixed
+
+- **`push` no longer refuses an issue the server has not touched.** Jira reports
+  `updated` to the millisecond and the snapshot in `state.db` keeps whole
+  seconds, so the same instant reached the staleness check spelled two ways and
+  every push against an issue whose `updated` had a non-zero millisecond was
+  refused as a conflict — with a message printing what looked like two identical
+  timestamps. `pull` could not clear it, because snapshot and server really did
+  agree; only `--force` got through. The check now compares whole seconds, which
+  is the precision both sides have.
+
+  Its message also spells the offset on both timestamps (`2026-08-28T08:42:10+02:00`)
+  rather than printing bare local time, so it can be checked against the UTC
+  `jired.base_updated` in the file without doing the subtraction in your head.
+
 ### Added
+
+- **`jired sprint add` and `jired sprint remove` move issues between sprints.**
+  The scriptable single-field commands for an issue's sprint, alongside
+  `transition`, `assign` and `comment`, and staging the same way — the
+  frontmatter is written, `status` and `diff` show it, `push` sends it, `--push`
+  sends it now:
+
+  ```sh
+  jired sprint add PROJ-142 PROJ-150 --sprint "Sprint 44"
+  jired sprint remove PROJ-142            # back to the backlog
+  ```
+
+  `--sprint` takes a name or an id, and a name no board knows is an error while
+  the typo is on screen rather than a warning after the push has skipped the
+  issue. An issue already in the sprint is said so, not staged. `--json` reports
+  it as `jired/sprint-move/1`.
+
+  `jired sprint create --issues K1,K2 [--push]` does both in one command, since
+  creating a sprint is almost always followed by filling it.
 
 - **`jired sprint create` makes a sprint.** A form when a terminal can draw one,
   and `jired sprint create "Sprint 44" --board 12 --start 2026-09-01 --end

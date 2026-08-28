@@ -232,8 +232,19 @@ pub fn edit_issue(
 
 /// Push just this issue, reusing the normal push path.
 pub fn push_one(ctx: &mut Context, key: &str, dry_run: bool) -> Result<PushReport> {
+    push_these(ctx, std::slice::from_ref(&key.to_string()), dry_run)
+}
+
+/// The same, for a command that staged a change across several issues.
+///
+/// One call rather than one per issue: the report is then the whole outcome,
+/// and an issue that fails does not hide the ones that went out.
+pub fn push_these(ctx: &mut Context, keys: &[String], dry_run: bool) -> Result<PushReport> {
     let args = PushArgs {
-        issues: vec![crate::project::naming::key_from_input(key)],
+        issues: keys
+            .iter()
+            .map(|k| crate::project::naming::key_from_input(k))
+            .collect(),
         dry_run,
         ..Default::default()
     };

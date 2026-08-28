@@ -547,6 +547,33 @@ guess at a naming scheme. A name the board already uses is pointed out beside th
 field and not refused: Jira allows it, though it does make an issue's `sprint:`
 ambiguous to resolve.
 
+`--issues K1,K2` moves those issues into the sprint the moment it exists, exactly
+as `sprint add` would — creating one is almost always followed by filling it. The
+moves are ordinary file edits and stage like any other; `--push` sends them in the
+same command. `-n` names the issues it would move and creates nothing.
+
+### `jired sprint add ISSUES… --sprint S [--push] [--dry-run]` · `jired sprint remove ISSUES… [--push] [--dry-run]`
+The scriptable single-field commands for an issue's sprint, alongside
+`transition`, `assign` and `comment`, and behaving like them: the frontmatter is
+written, the change shows up in `status` and `diff`, and `push` sends it — or
+`--push` does, straight away. What they save is knowing where `sprint:` sits in
+the key order and that its last entry is the one a move can act on.
+
+`--sprint` takes a name or an id, matched against the sprints the workspace has
+fetched, preferring an open one where a name repeats; the board's own spelling is
+what gets written, whatever case was typed. A name no board knows is exit 2 here,
+listing the open ones — the same condition `push` could only report afterwards as
+a warning, having already skipped the issue.
+
+The list is a history, so a move appends and drops any earlier entry for the same
+sprint rather than leaving the name in twice. An issue already in the sprint is
+reported and not staged: staging a change that does nothing would only give `push`
+something to explain. `remove` empties the list, which is what the backlog looks
+like in a file. Issues are named as keys or file paths, positionally or
+comma-separated; one that the workspace does not have is a warning and the others
+still move, and exit 2 only when none of them are here.
+JSON: `{"schema":"jired/sprint-move/1","sprint":{…}|null,"issues":[{"key","file","changed"}],"pushed":false}`.
+
 ### `jired --version` / `-V`
 `-V` is one line — `jired 0.1.0 (9212430 2026-08-21T10:49:39Z)`; `--version` adds
 the compiler and target. The commit carries a `-dirty` suffix when the tree had

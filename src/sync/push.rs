@@ -1284,6 +1284,26 @@ fn plan(
     Ok(ops)
 }
 
+/// Whether the server has moved on from the snapshot this push was planned
+/// against.
+///
+/// The two values do not arrive at the same precision. Jira reports `updated`
+/// to the millisecond, but the snapshot in `state.db` keeps it in jired's own
+/// timestamp format, which stops at the second — so an issue last written at
+/// `08:42:10.123` is remembered as `08:42:10.000`, and a plain `live > base`
+/// calls it stale against its own unchanged self, for ever, on every issue
+/// whose `updated` has a non-zero millisecond. `pull` cannot clear that: it
+/// compares snapshot to snapshot and correctly finds nothing to do.
+///
+/// Comparing whole seconds is what makes the two comparable. It costs the
+/// ability to notice a change landing inside the same second as the snapshot,
+/// which is a narrower window than the one between this check and the write it
+/// guards — already the residual risk this check accepts (decision D8).
+fn moved_on(live: chrono::DateTime<chrono::Utc>, base: chrono::DateTime<chrono::Utc>) -> bool {
+    use chrono::Timelike;
+    live.with_nanosecond(0).unwrap_or(live) > base
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute(
     _ctx: &mut Context,
@@ -1307,7 +1327,7 @@ fn execute(
     // between this read and the write below is the residual risk (decision D8).
     if !args.force {
         let live = crate::api::block_on(client.issue_updated(key))?;
-        if live > *base_updated {
+        if moved_on(live, *base_updated) {
             for id in &op_ids {
                 engine.state.mark_op(*id, "failed", Some("stale"))?;
             }
@@ -1315,10 +1335,14 @@ fn execute(
                 key: key.to_string(),
                 ok: false,
                 new_key: None,
+                // Spelled with the offset, not as bare local time: this is a
+                // value to check against `jired.base_updated` in the file,
+                // which is UTC, so it has to name one instant rather than
+                // leave the reader subtracting.
                 error: Some(format!(
                     "the server changed at {} but this workspace last synced {}",
-                    crate::api::model::format_local(&live),
-                    crate::api::model::format_local(base_updated)
+                    crate::api::model::format_local_iso(&live),
+                    crate::api::model::format_local_iso(base_updated)
                 )),
                 error_kind: Some("conflict".into()),
                 hint: Some(
@@ -1556,6 +1580,48 @@ fn first_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
+        crate::api::model::parse_timestamp(text).expect("a timestamp")
+    }
+
+    /// The snapshot keeps `updated` to the second and the server reports it to
+    /// the millisecond, so the same instant reaches this check spelled two
+    /// ways. Reading that as "the server changed" refused every push against an
+    /// untouched issue, and no amount of pulling cleared it.
+    #[test]
+    fn an_issue_the_server_has_not_touched_is_not_stale() {
+        // The reported case: the snapshot's own timestamp, to the second.
+        let base = at("2026-08-28T06:42:10Z");
+        assert!(!moved_on(base, base), "equal timestamps are not a change");
+        assert!(
+            !moved_on(at("2026-08-28T06:42:10.123Z"), base),
+            "the same second, reported with the milliseconds the snapshot dropped"
+        );
+        assert!(
+            !moved_on(at("2026-08-28T06:42:10.999Z"), base),
+            "still the same second"
+        );
+        // A snapshot that did keep its milliseconds must not read as behind the
+        // truncation of its own value.
+        let exact = at("2026-08-28T06:42:10.123Z");
+        assert!(!moved_on(exact, exact));
+        assert!(!moved_on(at("2026-08-28T06:42:09.500Z"), exact));
+    }
+
+    #[test]
+    fn a_server_write_after_the_snapshot_is_still_caught() {
+        let base = at("2026-08-28T06:42:10Z");
+        assert!(moved_on(at("2026-08-28T06:42:11Z"), base));
+        assert!(moved_on(at("2026-08-28T06:42:11.001Z"), base));
+        assert!(moved_on(at("2026-08-28T09:15:00.480Z"), base));
+        // Across the second boundary, which is the tightest a snapshot holding
+        // milliseconds can still be told apart from a later write.
+        assert!(moved_on(
+            at("2026-08-28T06:42:11.001Z"),
+            at("2026-08-28T06:42:10.999Z")
+        ));
+    }
 
     #[test]
     fn exit_code_reflects_the_worst_outcome() {

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/sprint-move/1",
+  "title": "jired sprint add|remove result",
+  "description": "Issues staged for a sprint, or for the backlog",
+  "type": "object",
+  "required": [
+    "schema",
+    "sprint",
+    "issues",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/sprint-move/1"
+    },
+    "sprint": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Where the issues were sent; null means the backlog (`sprint remove`)",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "board_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "description": "One entry per issue whose file was written",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the issue was already where it was being sent"
+          }
+        }
+      }
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

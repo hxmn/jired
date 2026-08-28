@@ -68,6 +68,10 @@ pub const SCHEMAS: &[(&str, &str)] = &[
         "sprint-create",
         include_str!("../../../schemas/sprint-create.json"),
     ),
+    (
+        "sprint-move",
+        include_str!("../../../schemas/sprint-move.json"),
+    ),
     ("sprints", include_str!("../../../schemas/sprints.json")),
     ("status", include_str!("../../../schemas/status.json")),
     (

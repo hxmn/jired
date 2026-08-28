@@ -298,7 +298,7 @@ the filename you were just editing instead of retyping the key.
 | `open [ISSUE]` | open it in a browser, or `--print` the URL; without an issue, pick one from the list |
 | `whoami` | which account, which server, and where the credential is kept |
 | `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and a project with one board needs neither |
-| `sprint create [NAME]` | make a sprint on a board — see [Sprints](#sprints) |
+| `sprint create [NAME]` / `sprint add ISSUES… --sprint S` / `sprint remove ISSUES…` | make a sprint, and move issues in and out of one — see [Sprints](#sprints) |
 | `doctor` | check the workspace over and repair it — see below |
 | `config get\|set\|unset\|list\|path\|edit` | read and write settings |
 | `completion <shell>` | print a completion script |
@@ -356,7 +356,8 @@ named something local.
 
 ### Sprints
 
-`jired sprints` lists what a board has; `jired sprint create` adds one.
+`jired sprints` lists what a board has, `jired sprint create` adds one, and
+`jired sprint add`/`remove` move issues in and out.
 
 ```sh
 jired sprints                                  # the board's sprints, open ones only
@@ -365,13 +366,20 @@ jired sprints --board "Platform Board" --all   # by name, closed ones too
 jired sprint create                            # fill in a form
 jired sprint create "Sprint 44" --start 2026-09-01 --end 2026-09-15
 jired sprint create "Sprint 44" --dry-run      # the exact API call, nothing sent
+
+jired sprint add PROJ-142 PROJ-150 --sprint "Sprint 44"   # stage the move
+jired sprint add PROJ-142 --sprint 44 --push              # and send it
+jired sprint remove PROJ-142                              # back to the backlog
+
+jired sprint create "Sprint 44" --issues PROJ-142,PROJ-150 --push   # both, in one
 ```
 
-Both take `--board` as either a name or an id, and neither needs it when the
-project has one board. A sprint has no file to stage it in, so `sprint create`
-is the one write that goes straight to the server instead of waiting for
-`push` — which is why it has a `--dry-run` of its own. Jira takes both dates or
-neither, and the new sprint is always `future` until someone starts it.
+`sprints` and `sprint create` take `--board` as either a name or an id, and
+neither needs it when the project has one board. A sprint has no file to stage
+it in, so `sprint create` is the one write that goes straight to the server
+instead of waiting for `push` — which is why it has a `--dry-run` of its own.
+Jira takes both dates or neither, and the new sprint is always `future` until
+someone starts it.
 
 The form fills in the name the board is due — a board whose last sprint is
 `Sprint 42` is offered `Sprint 43`, renumbered if you change the board and left
@@ -380,9 +388,21 @@ between: next Monday, and one to four weeks after whatever the start says.
 Without a terminal, `--board` and a name are all it needs; without either, it
 exits 7 naming what is missing.
 
-Putting an issue *into* a sprint is a file edit like any other: set `sprint:` in
-the frontmatter and `push` moves it. See [Grouping folders](#grouping-folders)
-for the `sprints/` view of where everything is.
+`sprint add` and `sprint remove` are the scriptable single-field commands for an
+issue's sprint, alongside `transition`, `assign` and `comment`: they write the
+frontmatter and stage it, so the change shows up in `status` and `diff` and goes
+out with the next `push` — or immediately with `--push`. `--sprint` takes a name
+or an id, matched against the sprints this workspace has fetched, and a name no
+board knows is an error rather than a push that quietly skips it. An issue
+already in the sprint is left alone and said so, rather than staged as a change
+that does nothing.
+
+The frontmatter is still the interface, and `sprint:` is a history — an issue
+that rolls over stays in the sprint it came from — so a move appends to the list
+and only its last entry is where the issue is now. `sprint remove` empties it,
+which is what the backlog looks like in a file. See
+[Grouping folders](#grouping-folders) for the `sprints/` view of where
+everything is.
 
 ### Grouping folders
 

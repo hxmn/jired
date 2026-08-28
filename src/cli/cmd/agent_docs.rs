@@ -258,12 +258,21 @@ pub fn render() -> String {
          `sprints.include_closed`.\n\n",
     );
     s.push_str(
-        "`jired sprint create NAME [--board B] [--start TS] [--end TS] [--goal TEXT]` \
-         makes a sprint. It is the one write that does not go through `push` — a sprint \
-         has no file to stage it in — so `-n/--dry-run` prints the call instead of \
-         sending it. `--board` takes a name or an id and is only needed when the project \
-         has more than one; the dates are read in the local timezone unless they name \
-         one, and Jira takes both or neither.\n\n",
+        "`jired sprint add KEY… --sprint S` and `jired sprint remove KEY…` are the \
+         scriptable way to move issues, and stage like `transition` and `assign` do: \
+         they write `sprint:` and `push` sends it, or `--push` does immediately. \
+         `--sprint` takes a name or an id and is checked against the sprints already \
+         fetched, so a name no board knows is exit 2 rather than a skipped push. An \
+         issue already in the sprint is reported, not staged.\n\n",
+    );
+    s.push_str(
+        "`jired sprint create NAME [--board B] [--start TS] [--end TS] [--goal TEXT] \
+         [--issues K1,K2] [--push]` makes a sprint. It is the one write that does not go \
+         through `push` — a sprint has no file to stage it in — so `-n/--dry-run` prints \
+         the call instead of sending it. `--board` takes a name or an id and is only \
+         needed when the project has more than one; the dates are read in the local \
+         timezone unless they name one, and Jira takes both or neither. `--issues` \
+         moves those issues into it as `sprint add` would.\n\n",
     );
 
     s.push_str("## Repairing a workspace\n\n");

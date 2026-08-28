@@ -259,6 +259,24 @@ impl Ws {
         }
         std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
     }
+
+    /// Stamp an issue's `updated` on the "server" to now, milliseconds and all.
+    ///
+    /// Which is how a real Jira reports it, and the precision `mutate_remote`
+    /// does not reproduce because it writes whole seconds.
+    fn touch_remote_with_millis(&self, key: &str) -> String {
+        let stamp = jired::store::now_rfc3339().replace('Z', ".480Z");
+        let path = self.fixtures.join("issues.json");
+        let mut issues: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for issue in issues.as_array_mut().unwrap() {
+            if issue["key"] == key {
+                issue["fields"]["updated"] = stamp.clone().into();
+            }
+        }
+        std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
+        stamp
+    }
 }
 
 const ISSUE_FILE: &str = "PROJ-0142. Fix login flow.md";
@@ -900,6 +918,73 @@ fn push_refuses_a_stale_issue_with_exit_5() {
 
     // The local edit is untouched, so nothing was lost.
     assert!(ws.read(ISSUE_FILE).contains("summary: Local rename"));
+}
+
+/// Jira reports `updated` to the millisecond; the snapshot keeps whole seconds.
+/// The same instant spelled two ways used to read as "the server changed",
+/// refusing every push against an untouched issue — and `pull` could not clear
+/// it, because snapshot and server really did agree.
+#[test]
+fn an_issue_the_server_has_not_touched_is_not_refused_as_stale() {
+    let ws = Ws::new();
+    ws.init();
+    let stamp = ws.touch_remote_with_millis("PROJ-142");
+    ws.json(&["pull"]);
+
+    // What the file records is the truncation: whole seconds, no milliseconds.
+    let file = ws.read(ISSUE_FILE);
+    assert!(
+        file.contains(&format!("base_updated: {}", stamp.replace(".480Z", "Z"))),
+        "the snapshot should hold the truncated stamp:\n{file}"
+    );
+
+    let text = file.replace("sprint: Sprint 42", "sprint: Sprint 43");
+    ws.write(ISSUE_FILE, &text);
+
+    let report = ws.json(&["push"]);
+    assert!(
+        report["stale"].as_array().unwrap().is_empty(),
+        "nothing on the server moved: {report}"
+    );
+    assert_eq!(report["results"][0]["ok"], true, "{report}");
+    assert_eq!(report["results"][0]["ops"][0]["kind"], "move_sprint");
+    assert_eq!(report["results"][0]["ops"][0]["status"], "done");
+}
+
+/// The two timestamps are checked against `jired.base_updated` in the file,
+/// which is UTC, so the message has to name one instant rather than leave the
+/// reader subtracting an offset it never printed.
+#[test]
+fn the_stale_message_names_the_zone_its_timestamps_are_in() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("summary: Fix login flow", "summary: Local rename");
+    ws.write(ISSUE_FILE, &text);
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["priority"] = serde_json::json!({ "name": "Low" });
+    });
+
+    let report = ws.json_code(&["push"], 5);
+    let message = report["results"][0]["error"].as_str().unwrap();
+    // An offset, or `Z` where the reader is on UTC — either way, a zone.
+    let zoned = |stamp: &str| {
+        stamp.ends_with('Z') || stamp[10..].contains('+') || stamp[10..].contains('-')
+    };
+    for stamp in message.split_whitespace().filter(|w| w.contains('T')) {
+        assert!(zoned(stamp), "`{stamp}` names no timezone in: {message}");
+    }
+    assert_eq!(
+        message
+            .split_whitespace()
+            .filter(|w| w.contains('T'))
+            .count(),
+        2,
+        "both timestamps are in the message: {message}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3440,6 +3525,178 @@ fn a_new_sprint_can_be_used_before_the_next_fetch() {
     assert_eq!(
         op["request"]["path"],
         format!("/rest/agile/1.0/sprint/{id}/issue")
+    );
+}
+
+/// The scriptable equivalent of editing `sprint:` by hand: it stages, the way
+/// `transition` and `assign` do, so it shows up in `status` and `diff` and goes
+/// out through the normal push.
+#[test]
+fn sprint_add_stages_the_move_on_every_issue_named() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&[
+        "sprint",
+        "add",
+        "PROJ-142",
+        "PROJ-150",
+        "--sprint",
+        "Sprint 43",
+    ]);
+    assert_eq!(out["schema"], "jired/sprint-move/1");
+    assert_eq!(out["sprint"]["id"], "43");
+    assert_eq!(out["sprint"]["name"], "Sprint 43");
+    assert_eq!(out["pushed"], false);
+    let keys: Vec<&str> = out["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["PROJ-142", "PROJ-150"]);
+
+    // The list is a history, so a move appends rather than overwrites.
+    let text = ws.read(ISSUE_FILE);
+    assert!(
+        text.contains("sprint:\n- Sprint 42\n- Sprint 43"),
+        "the sprint it came from is kept:\n{text}"
+    );
+
+    // Staged, not sent — and `push` turns it into the board call.
+    assert_eq!(ws.json(&["status"])["dirty"].as_array().unwrap().len(), 2);
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = &dry["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "move_sprint");
+    assert_eq!(op["request"]["path"], "/rest/agile/1.0/sprint/43/issue");
+}
+
+/// A sprint can be named the way the board has it or by the id the listing
+/// shows, and a name no board knows is an error here rather than a warning
+/// after the push has already skipped it.
+#[test]
+fn sprint_add_takes_a_name_or_an_id_and_refuses_neither() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let by_id = ws.json(&["sprint", "add", "PROJ-142", "--sprint", "43"]);
+    assert_eq!(by_id["sprint"]["name"], "Sprint 43");
+    // Written in the board's own spelling, not the one that was typed.
+    let lower = ws.json(&["sprint", "add", "PROJ-150", "--sprint", "sprint 43"]);
+    assert_eq!(lower["sprint"]["name"], "Sprint 43");
+    assert!(ws
+        .read("PROJ-0150. Rotate IdP certificate.md")
+        .contains("Sprint 43"));
+
+    let err = ws.json_err(&["sprint", "add", "PROJ-142", "--sprint", "Sprint 99"], 2);
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("`Sprint 99` is not a sprint this workspace knows"));
+    assert!(err["hint"].as_str().unwrap().contains("Sprint 43"));
+}
+
+/// Already being where you are being sent is not a change, and must not stage
+/// an edit that `push` would then have to explain away.
+#[test]
+fn sprint_add_says_so_when_the_issue_is_already_there() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&["sprint", "add", "PROJ-142", "--sprint", "Sprint 42"]);
+    assert_eq!(out["issues"][0]["changed"], false);
+    assert!(
+        ws.json(&["status"])["dirty"].as_array().unwrap().is_empty(),
+        "nothing was staged"
+    );
+}
+
+/// Removing them all is how a file says "the backlog".
+#[test]
+fn sprint_remove_sends_the_issue_back_to_the_backlog() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&["sprint", "remove", "PROJ-142", "--push"]);
+    assert_eq!(out["sprint"], Value::Null);
+    assert_eq!(out["pushed"], true);
+    let op = &out["push"]["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "move_sprint");
+    assert_eq!(op["status"], "done");
+    assert!(!ws.read(ISSUE_FILE).contains("sprint:"));
+}
+
+/// Creating a sprint is almost always followed by filling it, so it can be done
+/// in one command.
+#[test]
+fn a_sprint_can_be_created_and_seeded_in_one_go() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&[
+        "sprint",
+        "create",
+        "Sprint 44",
+        "--issues",
+        "PROJ-142,PROJ-150",
+        "--push",
+    ]);
+    assert_eq!(out["issues"].as_array().unwrap().len(), 2);
+    assert_eq!(out["push"]["results"][0]["ok"], true);
+    assert_eq!(out["push"]["results"][0]["ops"][0]["kind"], "move_sprint");
+    assert_eq!(out["push"]["results"][0]["ops"][0]["status"], "done");
+    // The push wrote the server's answer back, which is the new sprint alone.
+    assert!(ws.read(ISSUE_FILE).contains("sprint: Sprint 44"));
+
+    // The issues really are on the new sprint, not merely staged for it.
+    let id = out["sprint"]["id"].as_str().unwrap().to_string();
+    ws.json(&["pull"]);
+    assert!(
+        ws.path().join("sprints/Sprint 44").is_dir(),
+        "sprint {id} should have a grouping folder now"
+    );
+}
+
+/// One key that is not here does not cost the others their move.
+#[test]
+fn an_issue_the_workspace_does_not_have_is_reported_and_the_rest_still_move() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&["sprint", "add", "PROJ-142", "PROJ-999", "--sprint", "43"]);
+    let keys: Vec<&str> = out["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["PROJ-142"]);
+    assert!(
+        out["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("PROJ-999")),
+        "{out}"
+    );
+
+    // None of them being here is the command failing, not a quiet success.
+    let err = ws.json_err(&["sprint", "add", "PROJ-998", "--sprint", "43"], 2);
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("not in this workspace")
+            || err["message"]
+                .as_str()
+                .unwrap()
+                .contains("none of the 1 issue(s) named")
     );
 }
 

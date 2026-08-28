@@ -104,6 +104,36 @@
           "type": "object"
         }
       }
+    },
+    "issues": {
+      "type": "array",
+      "description": "Issues staged into the new sprint by --issues; empty without it",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --issues --push was given"
     }
   }
 }
