@@ -619,7 +619,7 @@ and target — so a report says which source produced the behaviour:
 
 ```
 $ jired --version
-jired 0.1.0
+jired 0.2.0
 commit:  9212430
 built:   2026-08-21T10:49:39Z
 rustc:   rustc 1.97.1 (8bab26f4f 2026-07-14)

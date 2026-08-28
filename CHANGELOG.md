@@ -4,10 +4,47 @@ Notable user-facing changes. Anything that changes a command's spelling, its exi
 code, or what it does without asking is called out as **Breaking**; internal
 refactors are not listed.
 
-## Unreleased
+Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
+bump is where breaking changes go, so read the **Breaking** section of every
+version between the one you have and the one you are moving to.
 
-A usability pass over the whole CLI: what the flags are called, what happens
-before something destructive, what an error says, and what the docs claim.
+## [0.2.0] — 2026-08-28
+
+### Fixed
+
+- **`push` no longer drops fields when it creates an issue.** A locally created
+  issue sent `project`, `summary`, `issuetype`, `description`, `labels`,
+  `parent` and `priority` and silently discarded the rest — `assignee` most
+  visibly, but `components`, `fix_versions`, `affects_versions` and
+  `story_points` went the same way. `diff` had promised to send them, `push`
+  reported clean success, and the values were gone from the rewritten file with
+  nothing saying so; the only way to notice was to re-read the file after every
+  create.
+
+  The cause was two independent lists of what a frontmatter field becomes on the
+  wire: a field handled for updates was simply absent from the create path.
+  There is now one mapping, read by both, and a test asserts every editable
+  field is answered by it — sent, carried by another operation, or refused out
+  loud.
+
+- **A field push cannot send now says so instead of reporting success.** `epic`
+  and `links` are in the file format and `diff` calls them sendable, but push
+  has no call for either and never mentioned it. Both now produce a warning
+  naming the field and the issue. They are still not sent — that is a feature,
+  not a fix — but a push no longer claims to have done something it did not.
+
+- **`push --dry-run` shows the operations that follow a create.** Moving the new
+  issue into its sprint, and transitioning it to a status the workflow does not
+  start in, happen after the create call and were invisible until the file came
+  back. The plan now lists them, and a real run reports each one, so the plan
+  and the outcome line up operation for operation.
+
+## [0.1.0] — 2026-08-28
+
+The first release: the whole offline-first cycle — `init`, `fetch`, `pull`,
+`diff`, `push` — plus a usability pass over the CLI surface, covering what the
+flags are called, what happens before something destructive, what an error says,
+and what the docs claim.
 
 ### Breaking
 

@@ -2099,6 +2099,123 @@ fn create_makes_a_local_issue_that_push_turns_into_a_real_one() {
     assert!(created.contains("Check every tenant."));
 }
 
+/// Everything the file says has to reach the server or be complained about.
+/// `assignee` was handled for updates and simply absent from the create call,
+/// so `diff` promised to send it, `push` reported clean success, and the value
+/// was gone from the rewritten file with nothing saying so.
+#[test]
+fn creating_an_issue_sends_every_field_the_file_carries() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["create", "--summary", "Audit the SSO config"]);
+    let file = report["file"].as_str().unwrap().to_string();
+    let text = ws
+        .read(&file)
+        .replace("labels: []", "labels:\n- regular")
+        .replace("components: []", "components:\n- Auth")
+        .replace("fix_versions: []", "fix_versions:\n- '2.1'")
+        .replace(
+            "url: ''",
+            "url: ''\npriority: High\nassignee: '@[Ilya A](5b10a2ilya)'\nsprint: Sprint 43",
+        );
+    ws.write(&file, &text);
+
+    // What diff promises is what push has to send.
+    let diff = ws.json(&["diff"]);
+    let promised: Vec<&str> = diff["issues"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["sendable"] == true)
+        .map(|f| f["field"].as_str().unwrap())
+        .collect();
+    for field in ["priority", "assignee", "components", "labels"] {
+        assert!(promised.contains(&field), "diff promised: {promised:?}");
+    }
+
+    // The plan shows the follow-ups too, not just the create.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let sent = &dry["results"][0]["ops"][0]["request"]["body"]["fields"];
+    // Cloud identifies a user by account id, Data Center by name.
+    assert_eq!(sent["assignee"]["accountId"], "5b10a2ilya", "{sent}");
+    assert_eq!(sent["priority"]["name"], "High");
+    assert_eq!(sent["components"][0]["name"], "Auth");
+    assert_eq!(sent["labels"][0], "regular");
+    assert_eq!(sent["fixVersions"][0]["name"], "2.1");
+    let kinds: Vec<&str> = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["create_issue", "move_sprint"],
+        "the sprint move is part of the plan"
+    );
+
+    let push = ws.json(&["push"]);
+    assert_eq!(push["results"][0]["ok"], true, "{push}");
+    let new_key = push["results"][0]["new_key"].as_str().unwrap().to_string();
+    let ops: Vec<&str> = push["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(ops, ["create_issue", "move_sprint"]);
+
+    // And the issue that came back really has them.
+    let number = new_key.rsplit('-').next().unwrap();
+    let created = ws.read(&format!("PROJ-{number:0>4}. Audit the SSO config.md"));
+    assert!(
+        created.contains("assignee:"),
+        "assignee is gone:\n{created}"
+    );
+    assert!(created.contains("priority: High"), "{created}");
+    assert!(created.contains("Auth"), "{created}");
+    // The sprint is the `move_sprint` op above rather than anything in this
+    // payload: the fixture records the move without inventing the custom field
+    // a real instance keeps its sprint in.
+}
+
+/// A field jired cannot send must not be reported as a clean success. `epic`
+/// and `links` are in the format and in `diff`, and push has no call for
+/// either; saying so is the difference between a known gap and a lost value.
+#[test]
+fn a_field_push_cannot_send_is_warned_about_rather_than_dropped() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("epic: PROJ-90", "epic: PROJ-100");
+    ws.write(ISSUE_FILE, &text);
+
+    // `diff` calls it a change, so a push that says nothing has misreported.
+    let diff = ws.json(&["diff"]);
+    assert!(
+        diff["issues"][0]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["field"] == "epic"),
+        "{diff}"
+    );
+
+    let push = ws.json(&["push"]);
+    let warnings = push["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("`epic`")),
+        "no warning about the field that was not sent: {push}"
+    );
+}
+
 #[test]
 fn create_requires_a_summary() {
     let ws = Ws::new();

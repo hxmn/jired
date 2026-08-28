@@ -603,12 +603,12 @@ disk on purpose: the copy that describes the binary in your hand is the one it
 was built with, a checkout beside it has moved on, and an installed binary has no
 checkout at all. It costs ~19 KB of `.rodata`, which is the whole price of being
 able to answer "what changed" without the source.
-JSON: `{"schema":"jired/version/1","version":"0.1.0","commit":"9212430","built":…,"rustc":…,"target":…,"changelog":null}`.
+JSON: `{"schema":"jired/version/1","version":"0.2.0","commit":"9212430","built":…,"rustc":…,"target":…,"changelog":null}`.
 `changelog` is null unless `--changelog` was given: every agent that never reads
 it would otherwise pay for it in every document.
 
 ### `jired --version` / `-V`
-`-V` is one line — `jired 0.1.0 (9212430 2026-08-21T10:49:39Z)`; `--version` adds
+`-V` is one line — `jired 0.2.0 (9212430 2026-08-21T10:49:39Z)`; `--version` adds
 the compiler and target. The commit carries a `-dirty` suffix when the tree had
 uncommitted changes, and reads `unknown` when built from a tarball with no git.
 `SOURCE_DATE_EPOCH` fixes the timestamp for reproducible builds.

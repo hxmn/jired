@@ -608,15 +608,42 @@ fn create_issue(
         let rich = convert::from_markdown(&doc.description, markup, &[]);
         fields.insert("description".into(), rich.to_field_value());
     }
-    if !doc.frontmatter.labels.is_empty() {
-        fields.insert("labels".into(), json!(doc.frontmatter.labels));
+
+    // Everything else the file already says, through the same mapping an update
+    // uses. Building this list by hand is what lost `assignee`: it was handled
+    // for updates and simply absent here, so a create sent four fields, dropped
+    // the rest, and reported success.
+    let field_map = engine.field_map()?;
+    for name in crate::doc::frontmatter::EDITABLE {
+        // Summary and type are already in, and the create call decides the
+        // project rather than the file.
+        if matches!(*name, "summary" | "type") {
+            continue;
+        }
+        match issue_field(
+            name,
+            &doc.frontmatter,
+            engine.account.deployment,
+            field_map.story_points.as_deref(),
+        ) {
+            Mapped::Send(id, value) if worth_creating(&value) => {
+                fields.insert(id, value);
+            }
+            Mapped::Send(_, _) | Mapped::Elsewhere => {}
+            // Only worth saying when the file actually set the thing.
+            Mapped::Refused(why) => {
+                if doc
+                    .frontmatter
+                    .field(name)
+                    .is_some_and(|v| worth_creating(&v))
+                {
+                    ctx.out
+                        .warn(format!("{temp_key}: {why}; the value was not sent"));
+                }
+            }
+        }
     }
-    if let Some(parent) = &doc.frontmatter.parent {
-        fields.insert("parent".into(), json!({ "key": parent }));
-    }
-    if let Some(priority) = &doc.frontmatter.priority {
-        fields.insert("priority".into(), json!({ "name": priority }));
-    }
+
     // A locally created issue may already carry custom fields; there is no
     // previous value to learn the shape from, so the schema decides.
     let field_meta = engine.state.field_meta_by_id()?;
@@ -634,7 +661,30 @@ fn create_issue(
     let payload = Value::Object(fields);
     let request = json!({"method": "POST", "path": "/issue", "body": {"fields": payload}});
 
+    // What the create call cannot carry, and so happens after it. Planned here
+    // rather than after the write so `--dry-run` can show them: a plan that
+    // listed only `create_issue` was how a move or a transition went unnoticed
+    // until the file came back without it.
+    let (follow_ups, follow_up_warnings) = follow_ups_after_create(&doc, &sprints);
+    for w in &follow_up_warnings {
+        ctx.out.warn(w);
+    }
+
     if args.dry_run {
+        let mut ops = vec![OpReport {
+            kind: "create_issue",
+            status: "planned",
+            summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
+            request: Some(request),
+            error: None,
+        }];
+        ops.extend(follow_ups.iter().map(|f| OpReport {
+            kind: f.kind,
+            status: "planned",
+            summary: Some(f.summary.clone()),
+            request: Some(f.request.clone()),
+            error: None,
+        }));
         return Ok(IssueResult {
             key: temp_key.to_string(),
             ok: true,
@@ -642,13 +692,7 @@ fn create_issue(
             error: None,
             error_kind: None,
             hint: None,
-            ops: vec![OpReport {
-                kind: "create_issue",
-                status: "planned",
-                summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
-                request: Some(request),
-                error: None,
-            }],
+            ops,
         });
     }
 
@@ -684,24 +728,40 @@ fn create_issue(
     engine.state.rekey_issue(temp_key, &new_key, &new_id)?;
     engine.state.forget_new_issue_project(temp_key)?;
 
-    // A sprint is not part of the create call: the field is read-only on most
-    // instances, so the issue is created first and moved second. A move that
-    // fails is worth saying out loud but not worth failing a created issue for.
-    if let Some(name) = doc.frontmatter.sprint.last() {
-        match sprint_target(Some(name), &sprints) {
-            Ok(target) => {
-                if let Err(e) = crate::api::block_on(
-                    client.move_to_sprint(target.as_deref(), std::slice::from_ref(&new_key)),
-                ) {
-                    ctx.out.warn(format!(
-                        "{new_key} was created but not moved into `{name}`: {}",
-                        e.message
-                    ));
-                }
+    // The operations the create call could not carry, now that there is a key
+    // to aim them at. One that fails is worth saying out loud and reporting as
+    // a failed op, but not worth failing an issue the server has already
+    // created — and each is reported, so a `--dry-run` plan and what actually
+    // happened line up op for op.
+    let mut reports = vec![OpReport {
+        kind: "create_issue",
+        status: "done",
+        summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
+        request: None,
+        error: None,
+    }];
+    for f in &follow_ups {
+        match perform(client, &new_key, &f.action) {
+            Ok(()) => reports.push(OpReport {
+                kind: f.kind,
+                status: "done",
+                summary: Some(f.summary.clone()),
+                request: None,
+                error: None,
+            }),
+            Err(e) => {
+                ctx.out.warn(format!(
+                    "{new_key} was created, but {}: {}",
+                    f.summary, e.message
+                ));
+                reports.push(OpReport {
+                    kind: f.kind,
+                    status: "failed",
+                    summary: Some(f.summary.clone()),
+                    request: None,
+                    error: Some(e.message.clone()),
+                });
             }
-            Err(_) => ctx.out.warn(format!(
-                "{new_key} was created; `{name}` is not a sprint this workspace knows"
-            )),
         }
     }
 
@@ -717,13 +777,7 @@ fn create_issue(
         error: None,
         error_kind: None,
         hint: None,
-        ops: vec![OpReport {
-            kind: "create_issue",
-            status: "done",
-            summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
-            request: None,
-            error: None,
-        }],
+        ops: reports,
     })
 }
 
@@ -853,6 +907,167 @@ fn plan_custom_fields(
     }
 }
 
+/// An operation the create call cannot carry, to run once the issue has a key.
+struct FollowUp {
+    kind: &'static str,
+    summary: String,
+    request: Value,
+    action: Action,
+}
+
+/// What has to happen after a create, because the create call cannot do it.
+///
+/// The sprint is a board move — the Sprint field is read-only on most instances
+/// — and a status the workflow does not start in is a transition. Both are
+/// worked out before the write rather than after it, so `--dry-run` can show
+/// them: a plan listing `create_issue` alone was how the rest of a file went
+/// unnoticed until it came back missing.
+fn follow_ups_after_create(
+    doc: &IssueDoc,
+    sprints: &[crate::store::state::SprintRow],
+) -> (Vec<FollowUp>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut warnings = Vec::new();
+
+    if let Some(name) = doc.frontmatter.sprint.last() {
+        match sprint_target(Some(name), sprints) {
+            Ok(target) => {
+                let path = match &target {
+                    Some(id) => format!("/rest/agile/1.0/sprint/{id}/issue"),
+                    None => "/rest/agile/1.0/backlog/issue".to_string(),
+                };
+                out.push(FollowUp {
+                    kind: "move_sprint",
+                    summary: format!("the backlog → {name}"),
+                    request: json!({"method": "POST", "path": path,
+                                    "body": {"issues": ["{key}"]}}),
+                    action: Action::MoveSprint { sprint: target },
+                });
+            }
+            Err(_) => warnings.push(format!(
+                "`{name}` is not a sprint this workspace knows; the new issue was not moved into it"
+            )),
+        }
+    }
+
+    // An empty status is the usual case — `create` writes one — and means
+    // "wherever the workflow starts".
+    let status = doc.frontmatter.status.trim();
+    if !status.is_empty() {
+        out.push(FollowUp {
+            kind: "transition",
+            summary: format!("→ {status}"),
+            request: json!({"method": "POST", "path": "/issue/{key}/transitions",
+                            "body": {"to": status}}),
+            action: Action::Transition {
+                to_status: status.to_string(),
+            },
+        });
+    }
+    (out, warnings)
+}
+
+/// What an editable frontmatter field becomes on the wire.
+pub enum Mapped {
+    /// The Jira field id, and the value for the frontmatter as it now stands.
+    Send(String, Value),
+    /// Not a field update: another operation carries this one — a transition, a
+    /// board move, a request of its own.
+    Elsewhere,
+    /// Nothing can send it, and this is why. Said out loud rather than dropped.
+    Refused(String),
+}
+
+/// The Jira field an editable frontmatter field maps to.
+///
+/// One mapping, read by both paths: `plan` sends the fields that differ from
+/// base, `create_issue` sends the ones a new file arrives with. Keeping two
+/// lists is what let `assignee` reach an update and never a create — a field
+/// handled in one was simply absent from the other, and nothing said so, which
+/// is the failure mode a silent success is made of.
+///
+/// Every name in [`frontmatter::EDITABLE`] is answered here; the test below
+/// proves it, so a field added to the format cannot quietly go nowhere.
+pub fn issue_field(
+    name: &str,
+    fm: &crate::doc::Frontmatter,
+    deployment: crate::api::Deployment,
+    story_points_field: Option<&str>,
+) -> Mapped {
+    let named = |values: &[String]| {
+        json!(values
+            .iter()
+            .map(|v| json!({ "name": v }))
+            .collect::<Vec<_>>())
+    };
+    match name {
+        "summary" => Mapped::Send("summary".into(), json!(fm.summary)),
+        "labels" => Mapped::Send("labels".into(), json!(fm.labels)),
+        "components" => Mapped::Send("components".into(), named(&fm.components)),
+        "fix_versions" => Mapped::Send("fixVersions".into(), named(&fm.fix_versions)),
+        "affects_versions" => Mapped::Send("versions".into(), named(&fm.affects_versions)),
+        "type" => Mapped::Send("issuetype".into(), json!({ "name": fm.issue_type })),
+        "priority" => Mapped::Send(
+            "priority".into(),
+            fm.priority
+                .as_ref()
+                .map(|p| json!({ "name": p }))
+                .unwrap_or(Value::Null),
+        ),
+        "parent" => Mapped::Send(
+            "parent".into(),
+            fm.parent
+                .as_ref()
+                .map(|p| json!({ "key": p }))
+                .unwrap_or(Value::Null),
+        ),
+        "assignee" => {
+            let id = fm
+                .assignee
+                .as_deref()
+                .and_then(crate::doc::frontmatter::parse_user);
+            Mapped::Send(
+                "assignee".into(),
+                crate::api::user_field_value(deployment, id.as_deref()),
+            )
+        }
+        // Story points live in a custom field whose id differs per instance,
+        // which is why it is set through the field map rather than by name.
+        "story_points" => match story_points_field {
+            Some(id) => Mapped::Send(id.to_string(), json!(fm.story_points)),
+            None => Mapped::Refused("this instance has no Story Points field".to_string()),
+        },
+        // Carried by an operation of their own further down.
+        "status" | "sprint" | "custom" => Mapped::Elsewhere,
+        // Known to the format, not yet to push. Warned about rather than
+        // dropped: `diff` calls these sendable, and a push that reported clean
+        // success without them would be lying about what it did.
+        "epic" => Mapped::Refused(
+            "jired cannot send `epic` yet; set the epic in Jira and pull".to_string(),
+        ),
+        "links" => Mapped::Refused(
+            "jired cannot send `links` yet; add the link in Jira and pull".to_string(),
+        ),
+        other => Mapped::Refused(format!("`{other}` is not a field jired knows how to send")),
+    }
+}
+
+/// Whether a mapped value is worth putting in a *create* payload.
+///
+/// An update sends `null` and `[]` to clear a field; a create has nothing to
+/// clear, and sending empties would only ask the server to unset what it never
+/// set — and can be refused outright on a field the create screen does not
+/// offer.
+fn worth_creating(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Array(a) => !a.is_empty(),
+        Value::String(s) => !s.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+        _ => true,
+    }
+}
+
 /// Build the ordered operation list for one issue (decision D23).
 #[allow(clippy::too_many_arguments)]
 fn plan(
@@ -881,83 +1096,21 @@ fn plan(
     let bf = &base.frontmatter;
     let wf = &working.frontmatter;
 
-    if bf.summary != wf.summary {
-        fields.insert("summary".into(), json!(wf.summary));
-    }
-    if bf.labels != wf.labels {
-        fields.insert("labels".into(), json!(wf.labels));
-    }
-    if bf.components != wf.components {
-        fields.insert(
-            "components".into(),
-            json!(wf
-                .components
-                .iter()
-                .map(|c| json!({"name": c}))
-                .collect::<Vec<_>>()),
-        );
-    }
-    if bf.priority != wf.priority {
-        fields.insert(
-            "priority".into(),
-            wf.priority
-                .as_ref()
-                .map(|p| json!({ "name": p }))
-                .unwrap_or(Value::Null),
-        );
-    }
-    if bf.issue_type != wf.issue_type {
-        fields.insert("issuetype".into(), json!({ "name": wf.issue_type }));
-    }
-    if bf.assignee != wf.assignee {
-        let id = wf
-            .assignee
-            .as_deref()
-            .and_then(crate::doc::frontmatter::parse_user);
-        fields.insert(
-            "assignee".into(),
-            crate::api::user_field_value(engine.account.deployment, id.as_deref()),
-        );
-    }
-    if bf.fix_versions != wf.fix_versions {
-        fields.insert(
-            "fixVersions".into(),
-            json!(wf
-                .fix_versions
-                .iter()
-                .map(|v| json!({"name": v}))
-                .collect::<Vec<_>>()),
-        );
-    }
-    if bf.affects_versions != wf.affects_versions {
-        fields.insert(
-            "versions".into(),
-            json!(wf
-                .affects_versions
-                .iter()
-                .map(|v| json!({"name": v}))
-                .collect::<Vec<_>>()),
-        );
-    }
-    if bf.parent != wf.parent {
-        fields.insert(
-            "parent".into(),
-            wf.parent
-                .as_ref()
-                .map(|p| json!({ "key": p }))
-                .unwrap_or(Value::Null),
-        );
-    }
-    // Story points live in a custom field whose id differs per instance, which
-    // is why it is set through the field map rather than by name.
-    if bf.story_points != wf.story_points {
-        match story_points_field {
-            Some(id) => {
-                fields.insert(id.to_string(), json!(wf.story_points));
+    // Every editable field, compared the way `diff` compares it and mapped the
+    // way `create` maps it. A field jired cannot send says so here rather than
+    // going quietly missing from a push that then reports success.
+    for name in crate::doc::frontmatter::EDITABLE {
+        if bf.field(name) == wf.field(name) {
+            continue;
+        }
+        match issue_field(name, wf, engine.account.deployment, story_points_field) {
+            Mapped::Send(id, value) => {
+                fields.insert(id, value);
             }
-            None => warnings.push(
-                "this instance has no Story Points field; the change was not sent".to_string(),
-            ),
+            Mapped::Elsewhere => {}
+            Mapped::Refused(why) => {
+                warnings.push(format!("{}: {why}; the change was not sent", bf.key))
+            }
         }
     }
     plan_custom_fields(
@@ -1583,6 +1736,31 @@ mod tests {
 
     fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
         crate::api::model::parse_timestamp(text).expect("a timestamp")
+    }
+
+    /// The drift this mapping exists to prevent: `assignee` was handled for an
+    /// update and absent from a create, so the value went nowhere and the push
+    /// reported success. Every editable field must be answered here — sent,
+    /// carried by another operation, or refused out loud.
+    #[test]
+    fn every_editable_field_is_answered_by_the_mapping() {
+        let fm = crate::doc::Frontmatter::default();
+        for name in crate::doc::frontmatter::EDITABLE {
+            let mapped = issue_field(name, &fm, crate::api::Deployment::Cloud, Some("cf_1"));
+            if let Mapped::Refused(why) = &mapped {
+                // A refusal is a promise to say something useful about it.
+                assert!(
+                    why.contains(name) || why.contains("Story Points"),
+                    "`{name}` is refused without naming itself: {why}"
+                );
+            }
+            // The catch-all arm means a field nobody mapped; it names the field
+            // rather than describing it, which is how this test tells them apart.
+            assert!(
+                !matches!(&mapped, Mapped::Refused(why) if why.ends_with("is not a field jired knows how to send")),
+                "`{name}` fell through to the catch-all: add it to `issue_field`"
+            );
+        }
     }
 
     /// The snapshot keeps `updated` to the second and the server reports it to
