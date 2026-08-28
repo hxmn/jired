@@ -30,7 +30,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The project the board is filed under. Taken from the board listing where the server gives it (Cloud), and otherwise from the board's own configuration, which is where Data Center keeps it. Null only for a board that would not say — a board whose location is not a project, or one this account cannot read the configuration of."
           }
         },
         "required": [

@@ -289,6 +289,23 @@ impl JiraApi for Rest {
             .unwrap_or_default())
     }
 
+    async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
+        let v = self
+            .http
+            .get_json(&format!("/rest/agile/1.0/board/{board_id}/configuration"))
+            .await?;
+        // Cloud spells it `projectKey` in the board listing and `key` in the
+        // configuration; Data Center only has the configuration. Both are read
+        // so neither deployment needs its own path.
+        Ok(v.get("location")
+            .and_then(|l| {
+                l.get("projectKey")
+                    .or_else(|| l.get("key"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::to_string))
+    }
+
     async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>> {
         let mut out = Vec::new();
         let mut start = 0usize;

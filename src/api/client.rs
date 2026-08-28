@@ -64,6 +64,13 @@ pub trait JiraApi: Send + Sync {
 
     async fn boards(&self, project: Option<&str>) -> Result<Vec<Board>>;
     async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>>;
+    /// The project a board is filed under, asked of the board itself.
+    ///
+    /// The board listing carries this on Cloud and not on Data Center, where it
+    /// is only in the board's own configuration — one request per board, which
+    /// is why it is asked for a board at a time rather than folded into
+    /// [`JiraApi::boards`].
+    async fn board_project(&self, board_id: &str) -> Result<Option<String>>;
     async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>>;
     /// Create a sprint on a board. Returns it as the server now holds it.
     async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint>;

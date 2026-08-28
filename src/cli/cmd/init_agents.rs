@@ -580,6 +580,16 @@ pub fn render() -> String {
          timezone unless they name one, and Jira takes both or neither. `--issues` \
          moves those issues into it as `sprint add` would.\n\n",
     );
+    s.push_str(
+        "`jired boards --json` says which project each board is filed under in \
+         `project_key`, which is what makes a board selectable without a human: \
+         it is asked of the board itself where the listing leaves it out. \
+         `jired sprints` needs `--board` only when the project's boards would \
+         answer differently — boards sharing one sprint pool answer the same, \
+         and then the answer is simply given. The sprint a `sprint create` \
+         returns is usable in a `sprint:` immediately; no fetch is needed \
+         first.\n\n",
+    );
 
     s.push_str("## Repairing a workspace\n\n");
     s.push_str(

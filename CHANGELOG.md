@@ -313,6 +313,19 @@ before something destructive, what an error says, and what the docs claim.
   not yet pushed still survives it.
 - `sprint create` says where the sprint's folder will appear and when — a sprint
   with nothing in it has no folder, which reads like the sprint never happened.
+- **`jired sprints` stops demanding `--board` when the boards all say the same
+  thing.** Several boards over one project's backlog commonly share a sprint
+  pool, and every answer to "which board?" was the same answer; the command asked
+  anyway and exited 7. It now asks the boards in turn and prints what they agree
+  on, stopping at the first one that disagrees — where there really is a choice,
+  the error lists the choices exactly as before.
+- **`jired boards` fills in `project_key` on Data Center.** The board listing
+  leaves the project out there, so `--json` reported `null` for every board and a
+  script had no way to tell which board belonged to the project it was working
+  in. The project is in the board's own configuration, which `boards` now asks
+  for any board that arrived unlabelled — one request each, in this command only,
+  and best-effort, so a board that will not say stays `null`. It is a column on
+  screen too, which is what tells two similarly named boards apart.
 - `push --dry-run` no longer panics on a summary containing non-ASCII text (it
   sliced a `String` on a byte boundary).
 - `jired status | head` exits 0 instead of panicking on a closed pipe.

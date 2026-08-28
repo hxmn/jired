@@ -300,8 +300,23 @@ impl JiraApi for FixtureClient {
         )
     }
 
-    async fn sprints(&self, _board_id: &str) -> Result<Vec<Sprint>> {
-        Ok(read_json(&self.dir, "sprints.json")
+    async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
+        Ok(
+            read_json(&self.dir, &format!("board-{board_id}-config.json")).and_then(|v| {
+                v.get("location")
+                    .and_then(|l| l.get("projectKey").or_else(|| l.get("key")))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        )
+    }
+
+    async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>> {
+        // Boards that share a sprint pool answer identically, which is what the
+        // single `sprints.json` stands for; a board with a pool of its own gets
+        // a file of its own.
+        Ok(read_json(&self.dir, &format!("sprints-{board_id}.json"))
+            .or_else(|| read_json(&self.dir, "sprints.json"))
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default())
     }

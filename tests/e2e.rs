@@ -241,6 +241,17 @@ impl Ws {
         std::fs::write(self.path().join(name), text).unwrap();
     }
 
+    /// Replace one of the "server's" files, for a test that needs a shape the
+    /// shared fixture does not have — three boards, say. Each workspace has its
+    /// own copy, so this cannot reach another test.
+    fn write_fixture(&self, name: &str, value: Value) {
+        std::fs::write(
+            self.fixtures.join(name),
+            serde_json::to_string_pretty(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
     /// Change an issue on the "server" so the next fetch sees it move.
     ///
     /// The `updated` stamp is set to now rather than to a date written into the
@@ -5202,4 +5213,123 @@ fn a_push_that_moves_nothing_leaves_the_folders_alone() {
         push["groups"].is_null(),
         "nothing moved, nothing rebuilt: {push}"
     );
+}
+
+/// Three boards over one project's backlog commonly share a sprint pool: every
+/// one of them answers with the same sprints, and the sprints name the board
+/// that owns them rather than the board that was asked. Making somebody choose
+/// between three identical answers is a question not worth asking.
+#[test]
+fn sprints_needs_no_board_when_every_board_gives_the_same_answer() {
+    let ws = Ws::new();
+    ws.write_fixture(
+        "boards.json",
+        serde_json::json!([
+            {"id": "11", "name": "TSK board", "type": "scrum"},
+            {"id": "12", "name": "sprints", "type": "scrum"},
+            {"id": "13", "name": "TSK", "type": "scrum"},
+        ]),
+    );
+    ws.init();
+
+    let out = ws.json(&["sprints"]);
+    let names: Vec<&str> = out["sprints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"Sprint 42"), "{out}");
+}
+
+/// When the boards really do have different sprints there is a choice to make,
+/// and the error makes it: it names every value that would work.
+#[test]
+fn sprints_asks_which_board_when_the_boards_disagree() {
+    let ws = Ws::new();
+    ws.write_fixture(
+        "boards.json",
+        serde_json::json!([
+            {"id": "11", "name": "TSK board", "type": "scrum"},
+            {"id": "12", "name": "sprints", "type": "scrum"},
+        ]),
+    );
+    ws.write_fixture(
+        "sprints-11.json",
+        serde_json::json!([
+            {"id": "77", "name": "Ops Sprint 7", "state": "active", "board_id": "11"},
+        ]),
+    );
+    ws.init();
+
+    let err = ws.json_err(&["sprints"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    let hint = err["hint"].as_str().unwrap_or_default();
+    assert!(
+        hint.contains("TSK board (11)") && hint.contains("sprints (12)"),
+        "{err}"
+    );
+
+    // Naming one answers it.
+    let out = ws.json(&["sprints", "--board", "11"]);
+    assert_eq!(out["sprints"][0]["name"], "Ops Sprint 7");
+}
+
+/// Data Center leaves the project out of the board listing, so a script cannot
+/// tell which board belongs to the project it is working in. The board's own
+/// configuration knows, and `jired boards` asks it.
+#[test]
+fn boards_says_which_project_each_board_belongs_to() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "boards.json",
+        serde_json::json!([
+            {"id": "11", "name": "TSK board", "type": "scrum"},
+            {"id": "13", "name": "TSK", "type": "kanban"},
+        ]),
+    );
+    ws.write_fixture(
+        "board-11-config.json",
+        serde_json::json!({"location": {"type": "project", "key": "DC", "name": "Data Centre"}}),
+    );
+    // A board that will not say stays null rather than failing the listing.
+    ws.init();
+
+    let out = ws.json(&["boards"]);
+    assert_eq!(out["boards"][0]["project_key"], "DC");
+    assert!(out["boards"][1]["project_key"].is_null(), "{out}");
+}
+
+/// `sprint create` puts the new sprint in the local cache on the way out, so a
+/// `sprint:` naming it resolves on the very next push — no fetch in between.
+/// Without that, creating a sprint and using it would need a round trip nobody
+/// would think to make.
+#[test]
+fn a_sprint_just_created_can_be_pushed_into_without_a_fetch() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let created = ws.json(&["sprint", "create", "--board", "12", "Sprint 44"]);
+    let id = created["sprint"]["id"].as_str().unwrap().to_string();
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("sprint: Sprint 42", "sprint: Sprint 44");
+    ws.write(ISSUE_FILE, &text);
+
+    // The name resolves to the id the create returned, with nothing fetched in
+    // between — the plan proves it before anything is sent.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let op = &dry["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "move_sprint");
+    assert_eq!(
+        op["request"]["path"],
+        format!("/rest/agile/1.0/sprint/{id}/issue")
+    );
+    assert_eq!(op["summary"], "Sprint 42 → Sprint 44");
+    assert!(dry["warnings"].as_array().unwrap().is_empty(), "{dry}");
+
+    let push = ws.json(&["push"]);
+    assert_eq!(push["results"][0]["ops"][0]["status"], "done");
 }

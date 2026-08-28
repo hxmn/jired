@@ -524,7 +524,19 @@ a `--refresh` that did nothing and it is gone; they always ask the server.
 sprint endpoint — it is what the API wants, and it may name a board outside this
 project — so only a name, or no board at all, costs the extra `boards` request
 that resolves it. With nothing named, a project with one board uses it, because
-there is no choice to make; with several, the error lists them.
+there is no choice to make. With several, they are asked in turn: boards over one
+project's backlog commonly share a sprint pool and answer identically, and then
+there is still no choice to make, so the shared answer is printed. The first
+board that disagrees ends the walk and the error lists them all — so genuinely
+different boards cost two requests and then say `one of: sprints (12), TSK (13),
+TSK board (11)`.
+
+`boards` fills in `project_key` from the board's own configuration for any board
+the listing left unlabelled, which on Data Center is all of them: the project is
+only in `/board/{id}/configuration` there, and a board nobody can place cannot be
+selected by a script. One request per unlabelled board, in this command only —
+best-effort, so a board that will not answer stays `null` rather than failing a
+listing that is otherwise right.
 
 ### `jired sprint create [NAME] [--board B] [--start TS] [--end TS] [--goal TEXT] [-i] [-n]`
 The one write that does not go through `push`: a sprint has no file to stage it

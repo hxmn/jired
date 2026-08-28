@@ -321,7 +321,7 @@ the filename you were just editing instead of retyping the key.
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
 | `open [ISSUE]` | open it in a browser, or `--print` the URL; without an issue, pick one from the list |
 | `whoami` | which account, which server, and where the credential is kept |
-| `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and a project with one board needs neither |
+| `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and is needed only when the project's boards would answer differently; `boards` says which project each board is filed under |
 | `sprint create [NAME]` / `sprint add ISSUES… --sprint S` / `sprint remove ISSUES…` | make a sprint, and move issues in and out of one — see [Sprints](#sprints) |
 | `doctor` | check the workspace over and repair it — see below |
 | `config get\|set\|unset\|list\|path\|edit` | read and write settings |
@@ -400,8 +400,13 @@ jired sprint create "Sprint 44" --issues PROJ-142,PROJ-150 --push   # both, in o
 ```
 
 `sprints` and `sprint create` take `--board` as either a name or an id, and
-neither needs it when the project has one board. A sprint has no file to stage
-it in, so `sprint create` is the one write that goes straight to the server
+neither needs it when the project has one board. Nor does `sprints` when the
+project's boards share one sprint pool and every one of them answers the same —
+a common arrangement, and one where the flag would have made no difference; it is
+asked for only when the boards genuinely differ, and the error then lists them.
+`jired boards` reports which project each board belongs to, asking the board
+itself on Data Center, where the listing does not say. A sprint has no file to
+stage it in, so `sprint create` is the one write that goes straight to the server
 instead of waiting for `push` — which is why it has a `--dry-run` of its own.
 Jira takes both dates or neither, and the new sprint is always `future` until
 someone starts it.
