@@ -4239,6 +4239,106 @@ fn list_keys_pipes_into_the_commands_that_edit() {
     assert!(ws.read(ISSUE_FILE).contains("- picked"));
 }
 
+/// "Raise an issue in a sprint" was three steps and a YAML edit: create the
+/// file, edit the frontmatter by hand, push. With the create call sending every
+/// field, it is one command.
+#[test]
+fn create_takes_the_fields_an_issue_is_raised_with() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&[
+        "create",
+        "-s",
+        "Ship SSO",
+        "--assignee",
+        "@[Ilya A](5b10a2ilya)",
+        "--sprint",
+        "Sprint 43",
+        "--labels",
+        "regular,auth",
+        "--priority",
+        "High",
+        "--component",
+        "Auth",
+        "--set",
+        "story_points=5",
+        "--set",
+        "customfield_10456=Platform",
+    ]);
+    let file = report["file"].as_str().unwrap();
+    let text = ws.read(file);
+    for expected in [
+        "priority: High",
+        "- regular",
+        "- Auth",
+        "story_points: 5",
+        "sprint: Sprint 43",
+        "customfield_10456: Platform",
+    ] {
+        assert!(text.contains(expected), "{expected} missing from\n{text}");
+    }
+
+    // And every one of them reaches the server, not just the file.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let sent = &dry["results"][0]["ops"][0]["request"]["body"]["fields"];
+    assert_eq!(sent["priority"]["name"], "High");
+    assert_eq!(sent["assignee"]["accountId"], "5b10a2ilya");
+    assert_eq!(sent["components"][0]["name"], "Auth");
+    assert_eq!(sent["labels"][0], "regular");
+    let kinds: Vec<&str> = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create_issue", "move_sprint"]);
+}
+
+/// A skeleton can live in the repository being worked on rather than having to
+/// be copied into every workspace, and `--set` overrides what it said.
+#[test]
+fn a_template_can_be_a_path_and_set_overrides_it() {
+    let ws = Ws::new();
+    ws.init();
+
+    ws.write(
+        "skeleton.md",
+        "---\ntype: Bug\npriority: Low\nlabels:\n- incident\njired: {}\n---\n\n         ## Description\n\nWhat happened?\n",
+    );
+    let report = ws.json(&[
+        "create",
+        "-s",
+        "Login is down",
+        "--template",
+        "skeleton.md",
+        "--set",
+        "priority=Highest",
+    ]);
+    let text = ws.read(report["file"].as_str().unwrap());
+    assert!(text.contains("type: Bug"), "the template's:\n{text}");
+    assert!(text.contains("- incident"), "{text}");
+    assert!(text.contains("What happened?"), "{text}");
+    assert!(
+        text.contains("priority: Highest"),
+        "--set beats the template:\n{text}"
+    );
+}
+
+#[test]
+fn a_set_that_is_not_field_equals_value_is_refused() {
+    let ws = Ws::new();
+    ws.init();
+    let err = ws.json_err(&["create", "-s", "x", "--set", "nonsense"], 2);
+    assert!(
+        err["message"].as_str().unwrap().contains("field=value"),
+        "{err}"
+    );
+    let err = ws.json_err(&["create", "-s", "x", "--set", "nope=1"], 2);
+    assert!(err["message"].as_str().unwrap().contains("`nope`"), "{err}");
+}
+
 // ---------------------------------------------------------------------------
 // Custom fields [M2.3]
 // ---------------------------------------------------------------------------

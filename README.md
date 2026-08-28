@@ -326,7 +326,7 @@ the filename you were just editing instead of retyping the key.
 | `edit [ISSUE]` | change an issue on a form; without an issue, pick one from the list — see [The issue picker](#the-issue-picker) |
 | `logwork [ISSUE] [TIME]` | book time against an issue; fills in a form when either is missing |
 | `comment [ISSUE] [-m TEXT]` | stage a comment; without an issue, pick one from the list; without `-m` it opens `$VISUAL`/`$EDITOR`, or reads stdin when piped |
-| `create --summary S` | write a `NEW-<hex>. Summary.md`; push creates the issue and renames the file to the real key. `--template NAME` starts from `.jired/templates/NAME.md` |
+| `create --summary S` | write a `NEW-<hex>. Summary.md`; push creates the issue and renames the file to the real key. `--assignee`, `--sprint`, `--labels`, `--priority`, `--component`, `--epic` and `--set field=value` fill it in; `--template NAME\|PATH` starts from a skeleton |
 | `transition ISSUE --to STATUS` | stage a workflow change; `--list` shows what is available, `--field k=v` fills a transition screen |
 | `assign ISSUE --me\|--user Q\|--none` | stage an assignee change |
 | `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues; `add`/`remove` keep the other labels, `set` replaces them |
@@ -480,8 +480,21 @@ regenerated, so edits there are lost.
 
 `jired create --template bug` starts from `.jired/templates/bug.md` — an issue file
 without the identity fields, so a team's usual description skeleton, labels and
-components come pre-filled. The file gets a placeholder `NEW-<hex>` key until
-`push` creates the issue in Jira and renames it to the real one.
+components come pre-filled. `--template` also takes a path, so a skeleton can
+live in the repository being worked on rather than being copied into every
+workspace. The file gets a placeholder `NEW-<hex>` key until `push` creates the
+issue in Jira and renames it to the real one.
+
+Flags beat the template, and `--set field=value` beats both, which is how one
+skeleton stamps out variations:
+
+```sh
+jired create -s 'Ship SSO' --template bug --set priority=Highest \
+             --assignee nilsson.m --sprint 'Sprint 44' --labels regular --push
+```
+
+`--set` takes any editable frontmatter name or a `customfield_*` id, the same
+vocabulary [`jired set`](#commands) uses.
 
 ### Shell completions
 

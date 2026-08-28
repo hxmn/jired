@@ -28,7 +28,7 @@ pub struct CreateArgs {
     /// Issue type (Story, Bug, Task, …) [default: Task]
     #[arg(long)]
     pub r#type: Option<String>,
-    /// Template file under .jired/templates
+    /// Template to start from: a name under .jired/templates, or a path
     #[arg(long)]
     pub template: Option<String>,
     /// Issue summary (asked for when omitted at a terminal)
@@ -40,6 +40,31 @@ pub struct CreateArgs {
     /// Description body (opens $EDITOR when omitted at a terminal)
     #[arg(long, short = 'd')]
     pub description: Option<String>,
+    /// Assign it: a name, an email, or an account id
+    #[arg(long)]
+    pub assignee: Option<String>,
+    /// Sprint to put it in, by name or id
+    #[arg(long)]
+    pub sprint: Option<String>,
+    /// Labels, comma-separated
+    #[arg(long, value_name = "LABELS", value_delimiter = ',')]
+    pub labels: Vec<String>,
+    /// Priority (Highest, High, Medium, …)
+    #[arg(long)]
+    pub priority: Option<String>,
+    /// Component; repeat the flag for several
+    #[arg(long = "component", value_name = "COMPONENT")]
+    pub components: Vec<String>,
+    /// Epic this belongs under
+    #[arg(long)]
+    pub epic: Option<String>,
+    /// Any other field: `--set story_points=5`, `--set customfield_10456=Platform`
+    ///
+    /// Repeatable, and the escape hatch for the fields with no flag of their
+    /// own — including an instance's custom fields, by id.
+    #[arg(long = "set", value_name = "FIELD=VALUE")]
+    pub set: Vec<String>,
+
     /// Fill in the form even when the flags would have been enough
     #[arg(long, short = 'i')]
     pub interactive: bool,
@@ -73,6 +98,11 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
     doc.frontmatter.priority = draft.priority.clone();
     doc.frontmatter.labels = draft.labels.clone();
     doc.description = draft.description.clone();
+    // The fields the form does not show, and the general `--set`. Applied after
+    // the draft so a flag beats what a template said, and through the same
+    // setter `jired set` uses so the two cannot disagree about what a field is
+    // called or how its value is spelled.
+    apply_flags(&mut doc.frontmatter, args)?;
 
     let outcome = engine.projector.write(&doc, None)?;
     // Recording it now is what makes `status` list it and `push` find it.
@@ -135,8 +165,12 @@ fn seed(ctx: &mut Context, args: &CreateArgs, doc: &IssueDoc) -> Result<Seed> {
         summary: args.summary.clone().or_else(|| some(&fm.summary)),
         description: args.description.clone().or_else(|| some(&doc.description)),
         parent: args.parent.clone().or_else(|| fm.parent.clone()),
-        priority: fm.priority.clone(),
-        labels: fm.labels.clone(),
+        priority: args.priority.clone().or_else(|| fm.priority.clone()),
+        labels: if args.labels.is_empty() {
+            fm.labels.clone()
+        } else {
+            args.labels.clone()
+        },
     })
 }
 
@@ -262,24 +296,86 @@ fn new_key(engine: &Engine) -> Result<String> {
     )
 }
 
+/// Write the flags that name a field, and then whatever `--set` names.
+///
+/// `--set` is applied last so it can override a flag as well as a template,
+/// which is what makes one template plus overrides a way to stamp out issues.
+fn apply_flags(fm: &mut Frontmatter, args: &CreateArgs) -> Result<()> {
+    for (field, value) in [
+        ("assignee", args.assignee.clone()),
+        ("sprint", args.sprint.clone()),
+        ("epic", args.epic.clone()),
+    ] {
+        if let Some(v) = value {
+            fm.set_field(field, &v)?;
+        }
+    }
+    if !args.components.is_empty() {
+        fm.set_field("components", &args.components.join(","))?;
+    }
+
+    for pair in &args.set {
+        let (field, value) = pair.split_once('=').ok_or_else(|| {
+            JiredError::usage(format!("`{pair}` is not `field=value`"))
+                .with_hint("`--set story_points=5`, `--set customfield_10456=Platform`")
+        })?;
+        fm.set_field(field.trim(), value)?;
+    }
+    Ok(())
+}
+
 fn template(ctx: &Context, args: &CreateArgs) -> Result<IssueDoc> {
     let Some(name) = &args.template else {
         return Ok(blank());
     };
-    let path = ctx.workspace.templates_dir().join(format!("{name}.md"));
+    // A name means one of the workspace's templates; anything that exists as a
+    // path is that file, so a skeleton can live in the repository being worked
+    // on rather than having to be copied into every workspace first.
+    let named = ctx.workspace.templates_dir().join(format!("{name}.md"));
+    let as_path = std::path::Path::new(name);
+    let path = if named.is_file() || !as_path.is_file() {
+        named
+    } else {
+        as_path.to_path_buf()
+    };
     let text = std::fs::read_to_string(&path).map_err(|e| {
         JiredError::usage(format!("cannot read template {}: {e}", path.display()))
-            .with_hint("templates live in .jired/templates/<name>.md")
+            .with_hint("templates live in .jired/templates/<name>.md, or name a path")
     })?;
-    // A template is a partial file: it has no key yet, so the identity fields
-    // are filled in afterwards rather than parsed.
-    let with_key = if text.starts_with("---") {
-        text
-    } else {
-        format!("---\nkey: NEW-000000\nid: ''\njired: {{}}\n---\n\n{text}")
-    };
-    IssueDoc::parse(&with_key)
+    IssueDoc::parse(&with_identity(&text))
         .map_err(|e| JiredError::usage(format!("template {name}: {}", e.message)))
+}
+
+/// A template with the fields the parser insists on, added if they are absent.
+///
+/// A template is a partial file — the README calls it "an issue file without
+/// the identity fields" — and `create` fills the real key in afterwards. Making
+/// every template carry a placeholder `key:` to get past the parser contradicts
+/// that, and is the sort of thing nobody discovers until their first template
+/// fails to load.
+fn with_identity(text: &str) -> String {
+    let placeholder = "key: NEW-000000\nid: ''\njired: {}\n";
+    let Some(rest) = text.strip_prefix("---\n") else {
+        // No header at all: the whole file is the body.
+        return format!("---\n{placeholder}---\n\n{text}");
+    };
+    let (header, body) = match rest.split_once("\n---") {
+        Some((h, b)) => (h, b),
+        // An opening fence and no closing one is not a header; leave it to the
+        // parser to say so, rather than guessing at where it ends.
+        None => return text.to_string(),
+    };
+    let mut missing = String::new();
+    for (field, line) in [
+        ("key:", "key: NEW-000000\n"),
+        ("id:", "id: ''\n"),
+        ("jired:", "jired: {}\n"),
+    ] {
+        if !header.lines().any(|l| l.starts_with(field)) {
+            missing.push_str(line);
+        }
+    }
+    format!("---\n{missing}{header}\n---{body}")
 }
 
 fn blank() -> IssueDoc {

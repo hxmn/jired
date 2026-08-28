@@ -583,6 +583,19 @@ as `sprint add` would — creating one is almost always followed by filling it. 
 moves are ordinary file edits and stage like any other; `--push` sends them in the
 same command. `-n` names the issues it would move and creates nothing.
 
+### `jired create` — the field flags
+`--assignee`, `--sprint`, `--labels`, `--priority`, `--component` (repeatable),
+`--epic`, and `--set field=value` (repeatable) for everything else, including an
+instance's custom fields by id. They go through `Frontmatter::set_field`, the
+same setter `jired set` uses, so the two cannot disagree about what a field is
+called or how a value is spelled. Precedence is template, then flag, then
+`--set`, which is what lets one skeleton stamp out variations.
+
+`--template` takes a name under `.jired/templates` or a path, preferring the
+named one when both exist. A template is a partial file: the identity fields
+(`key`, `id`, `jired`) are supplied if it does not carry them, so a skeleton with
+frontmatter no longer needs a placeholder key to get past the parser.
+
 ### `jired list [--summary-contains T] [--label L] [--status S] [--sprint S] [--assignee U] [--type T] [--keys]`
 `search` is JQL on the server; this is its offline half, and the other half of
 any bulk edit — choosing what to edit. Without it the choice was a `grep` over

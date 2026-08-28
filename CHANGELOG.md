@@ -12,6 +12,23 @@ version between the one you have and the one you are moving to.
 
 ### Added
 
+- **`jired create` takes the fields an issue is raised with.** It accepted only
+  `--type`, `--summary`, `--parent`, `--description` and `--template`, so
+  everything else meant creating the file, editing the YAML by hand and pushing:
+  three steps and a hand-edit for one API call. It now takes `--assignee`,
+  `--sprint`, `--labels`, `--priority`, `--component`, `--epic`, and
+  `--set field=value` for anything else including custom fields by id.
+
+  ```sh
+  jired create -s 'Ship SSO' --assignee nilsson.m --sprint 'Sprint 44' \
+               --labels regular --push
+  ```
+
+  `--template` now also takes a path, so a skeleton can live in the repository
+  being worked on rather than being copied into every workspace, and a template
+  no longer has to carry a placeholder `key:` to get past the parser — which the
+  README had always said it did not.
+
 - **`jired list` picks issues out of the working copy, offline.** `search` is
   JQL on the server; asking the local files "which issues say X" had no answer,
   so it was answered with `grep -l '^summary:.*\[ALL\]' *.md` — the caller
