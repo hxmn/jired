@@ -8,6 +8,38 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.3.2] — 2026-08-28
+
+### Fixed
+
+- **The indent a region is written at is still not an edit — this time past the
+  first line.** 0.3.1 took the container's prefix off the marker's own line,
+  which is only where the indent is when the region starts one. A region that
+  opens mid-line — a `{color}` macro inside a numbered item — runs onto lines
+  the list indents and the store never saw, so 0.3.1 still refused those
+  issues for anything at all. What comes off now is the indent the region's
+  lines *share*, off both sides of the comparison, so indentation belonging to
+  the region itself survives and a change to it still reads as one.
+
+- **A read-only region in a comment or a worklog note is covered by the same
+  gate.** Only the description was checked, so an edit inside a region anywhere
+  else was dropped on the way out: the payload is rebuilt from the stored
+  original either way, and `push` reported success having sent the original
+  text back over a comment somebody else wrote. It now fails with exit 6 like
+  the documentation always said it would.
+
+- **`--allow-lossy` sends the edit it was reached for.** It skipped the gate and
+  nothing else, so the conversion still rebuilt the region from the store: the
+  edit was discarded and the original markup — the thing the flag says it
+  replaces — went back to the server unchanged. The markers now come out of the
+  text, and what the file says is what is sent, as plain Markdown.
+
+- **`status` reports an edit to a comment that is already on the server.** It
+  counted only new comments, so editing an existing one left the workspace
+  reported clean while `push` went on planning the `update_comment` for it.
+  `status` and `push` now ask the same question about regions too, instead of
+  `status` looking at the description alone.
+
 ## [0.3.1] — 2026-08-28
 
 ### Fixed

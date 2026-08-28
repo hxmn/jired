@@ -93,7 +93,7 @@
             },
             "created": "2026-08-12T11:05:00.000+0200",
             "updated": "2026-08-12T11:05:00.000+0200",
-            "body": "Confirmed with [~ilya] \u2014 the *staging* bind account is already rotated.\n\n{noformat}\nbind: cn=svc,ou=apps\n{noformat}"
+            "body": "Confirmed with [~ilya] \u2014 the *staging* bind account is already rotated.\n\n{color:#00875a}Checked against the audit log{color}\n\n{noformat}\nbind: cn=svc,ou=apps\n{noformat}"
           }
         ]
       },
@@ -168,7 +168,7 @@
       "components": [],
       "created": "2026-07-31T09:00:00.000+0200",
       "updated": "2026-08-09T12:00:00.000+0200",
-      "description": "bq. Rollback must be possible without a restart.\n\n# Restore the previous secret\n# Reload the connector\n\nSee [the runbook|https://wiki.corp.example/ldap] for detail.",
+      "description": "bq. Rollback must be possible without a restart.\n\n# Restore the previous secret {color:#00875a}verified on staging{color}\n# Reload the connector\n\n* Check the pool\n** Watch the {color:red}connection count{color}\n\nSee [the runbook|https://wiki.corp.example/ldap] for detail.",
       "subtasks": [],
       "comment": {
         "comments": []

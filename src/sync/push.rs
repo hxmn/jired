@@ -442,7 +442,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         // that one bad issue does not stop the others, and a `?` here would
         // throw away the report of everything already pushed.
         let prepared = (|| -> Result<Vec<Op>> {
-            let working = engine.projector.read(&file.relative)?;
+            let mut working = engine.projector.read(&file.relative)?;
             let base_issue = crate::api::normalize::issue_from_json(&base.raw, markup, &fields)?;
             let base_doc = render_issue(
                 &base_issue,
@@ -456,26 +456,37 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
 
             // A read-only region that was edited must stop this issue before any
             // call is made, or the original markup would be silently discarded.
-            let raw = engine.state.raw_blocks(&row.key, "description")?;
-            let edited = convert::edited_regions(&working.description, &raw);
-            if !edited.is_empty() && !args.allow_lossy {
-                let labels: Vec<&str> = raw
-                    .iter()
-                    .filter(|b| edited.contains(&b.id))
-                    .map(|b| b.label.as_str())
-                    .collect();
-                return Err(JiredError::lossy(format!(
-                    "{}: a read-only region was edited and cannot be converted back",
-                    row.key
-                ))
-                .with_detail("issue", row.key.clone())
-                .with_detail("regions", json!(edited))
-                .with_detail("node_types", json!(labels))
-                .with_hint(
-                    "restore the region, or pass --allow-lossy to replace it with plain Markdown",
-                ));
+            //
+            // The description is not the only place one can live: a comment or
+            // a worklog note carries its own, and an edit inside one of those
+            // went out as a success having sent the original text back, because
+            // the payload is rebuilt from the store either way.
+            let touched = edited_regions(&engine.state, &row.key, &base_doc, &working)?;
+            let edited: Vec<String> = touched.iter().map(|(id, _)| id.clone()).collect();
+            let labels: Vec<String> = touched.into_iter().map(|(_, label)| label).collect();
+
+            if !edited.is_empty() {
+                if !args.allow_lossy {
+                    return Err(JiredError::lossy(format!(
+                        "{}: a read-only region was edited and cannot be converted back",
+                        row.key
+                    ))
+                    .with_detail("issue", row.key.clone())
+                    .with_detail("regions", json!(edited))
+                    .with_detail("node_types", json!(labels))
+                    .with_hint(
+                        "restore the region, or pass --allow-lossy to replace it with plain \
+                         Markdown",
+                    ));
+                }
+                // `--allow-lossy` says the region goes as plain Markdown, so the
+                // markers come out and the file's own text is what is sent.
+                // Left in, they would still resolve against the store and the
+                // edit the flag was reached for would be dropped.
+                unwrap_edited_regions(&mut working, &edited);
             }
 
+            let raw = engine.state.raw_blocks(&row.key, "description")?;
             plan(
                 &base_doc,
                 &working,
@@ -584,6 +595,71 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         }
     }
     Ok(report)
+}
+
+/// Every read-only region the user edited, by id and by what it is on the
+/// server, across every container the issue carries.
+///
+/// `push` refuses the issue over this and `status` reports it, and the two have
+/// to answer the same question or the file is clean right up until the push
+/// that fails.
+///
+/// The description is checked always; a comment or a worklog only when its text
+/// changed. A note nobody touched cannot have had its regions edited, and
+/// checking it anyway would let some later difference in how it renders block a
+/// push that has nothing to do with it.
+pub fn edited_regions(
+    state: &crate::store::state::StateStore,
+    key: &str,
+    base: &IssueDoc,
+    working: &IssueDoc,
+) -> Result<Vec<(String, String)>> {
+    let mut containers: Vec<(String, &str)> =
+        vec![("description".into(), working.description.as_str())];
+    for c in &working.comments {
+        if let CommentId::Existing(id) = &c.id {
+            if base.comment(id).is_some_and(|b| b.body != c.body) {
+                containers.push((format!("comment:{id}"), c.body.as_str()));
+            }
+        }
+    }
+    for w in &working.worklogs {
+        if let WorklogId::Existing(id) = &w.id {
+            if base.worklog(id).is_some_and(|b| b.body != w.body) {
+                containers.push((format!("worklog:{id}"), w.body.as_str()));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (container, text) in containers {
+        let raw = state.raw_blocks(key, &container)?;
+        for id in convert::edited_regions(text, &raw) {
+            let label = raw
+                .iter()
+                .find(|b| b.id == id)
+                .map(|b| b.label.clone())
+                .unwrap_or_default();
+            out.push((id, label));
+        }
+    }
+    Ok(out)
+}
+
+/// Take the markers of the edited regions out of every text the issue carries,
+/// so what the file says is what gets converted.
+///
+/// Applied everywhere rather than only where each id was found: an id that is
+/// not in a text is not in it, and looking is cheaper than tracking which
+/// container each one came from.
+fn unwrap_edited_regions(working: &mut IssueDoc, edited: &[String]) {
+    working.description = convert::markdown::unwrap_regions(&working.description, edited);
+    for c in &mut working.comments {
+        c.body = convert::markdown::unwrap_regions(&c.body, edited);
+    }
+    for w in &mut working.worklogs {
+        w.body = convert::markdown::unwrap_regions(&w.body, edited);
+    }
 }
 
 /// Whether an applied op leaves the grouping folders describing where the issue

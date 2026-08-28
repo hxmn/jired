@@ -964,6 +964,130 @@ fn editing_a_read_only_region_blocks_the_push_with_exit_6() {
     assert!(failed["hint"].as_str().unwrap().contains("--allow-lossy"));
 }
 
+/// A comment carries regions of its own, and the gate used to look only at the
+/// description. The edit was dropped on the way out — the payload is rebuilt
+/// from the store — and push reported success having sent the original text
+/// back over somebody else's comment.
+#[test]
+fn editing_a_region_inside_a_comment_blocks_the_push_too() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let file = ws.issue_file();
+    let text = ws.read(file);
+    assert!(
+        text.contains("Checked against the audit log"),
+        "the fixture comment must carry a region:\n{text}"
+    );
+    ws.write(
+        file,
+        &text.replace(
+            "Checked against the audit log",
+            "Checked against the audit log twice",
+        ),
+    );
+
+    // `status` has to agree with the push it precedes.
+    let dirty = &ws.json(&["status"])["dirty"][0];
+    assert_eq!(dirty["key"], "DC-77");
+    assert_eq!(dirty["lossy_touched"], true, "{dirty}");
+
+    let report = ws.json_code(&["push", "DC-77"], 6);
+    let failed = &report["results"][0];
+    assert_eq!(failed["ok"], false);
+    assert_eq!(failed["error_kind"], "lossy");
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("a read-only region was edited"),
+        "{failed}"
+    );
+    assert!(failed["hint"].as_str().unwrap().contains("--allow-lossy"));
+}
+
+/// `status` counted new comments and nothing else, so editing one already on
+/// the server left the workspace looking clean while `push` went on planning
+/// the `update_comment` for it. Nobody reads a diff for work they have been
+/// told they do not have.
+#[test]
+fn editing_a_comment_already_on_the_server_is_reported_as_dirty() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("Repro confirmed on staging.", "Repro confirmed on prod.");
+    ws.write(ISSUE_FILE, &text);
+
+    let dirty = &ws.json(&["status"])["dirty"][0];
+    assert_eq!(dirty["key"], "PROJ-142");
+    assert!(
+        dirty["fields"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("comments")),
+        "{dirty}"
+    );
+
+    // What `status` reports and what `push` sends are the same change.
+    let ops = ws.json(&["push", "PROJ-142"])["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(ops.iter().any(|o| o["kind"] == "update_comment"), "{ops:?}");
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// The flag the error points at has to do what the error says it does. It used
+/// to skip the gate and nothing else, so the conversion still rebuilt the
+/// region from the store: the edit that the flag was reached for was dropped,
+/// and the original markup — the thing `--allow-lossy` says it replaces — was
+/// sent straight back.
+#[test]
+fn allow_lossy_sends_the_edited_text_rather_than_the_original_markup() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(ISSUE_FILE).replace(
+        "Do not deploy before the cert rotation.",
+        "Do not deploy until the cert rotation lands.",
+    );
+    ws.write(ISSUE_FILE, &text);
+
+    let journal = ws.path().join("calls.jsonl");
+    let out = ws
+        .cmd(&["push", "PROJ-142", "--json", "--allow-lossy"])
+        .env("JIRED_FIXTURE_JOURNAL", &journal)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let sent = std::fs::read_to_string(&journal)
+        .unwrap()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find_map(|c| c["body"]["fields"]["description"].as_object().cloned())
+        .expect("a description update was sent");
+    let sent = serde_json::to_string(&sent).unwrap();
+
+    assert!(
+        sent.contains("Do not deploy until the cert rotation lands."),
+        "the edit is what the flag exists to send:\n{sent}"
+    );
+    assert!(
+        !sent.contains("\"panel\""),
+        "the panel is what the flag says it replaces:\n{sent}"
+    );
+}
+
 /// PROJ-150 keeps a media node inside a bullet, so its markers are written at
 /// the list's indent rather than at the left margin. The gate used to read that
 /// indent as an edit and refuse the issue for anything at all — booking time
@@ -1008,6 +1132,68 @@ fn an_indented_region_does_not_block_a_change_elsewhere_in_the_issue() {
         .expect("PROJ-150 was pushed");
     assert_eq!(result["ok"], true, "{result}");
     assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// The indent is not only on the marker's line. DC-78 carries a colour macro
+/// inside a numbered item and another inside a nested bullet: both open
+/// mid-line, and their approximation runs onto a second line that the list
+/// indents and the store never saw.
+#[test]
+fn a_region_running_past_its_first_line_does_not_block_the_issue() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let file = "DC-0078. Document the LDAP rollback plan.md";
+    let text = ws.read(file);
+    // `1. …<!--jired:raw:…-->` opens mid-line, and the line under it is indented
+    // to sit inside the item.
+    assert!(
+        text.contains("1. Restore the previous secret <!--jired:raw:"),
+        "the fixture must open a region mid-item:\n{text}"
+    );
+    assert!(
+        text.contains("\n   verified on staging<!--/jired:raw:"),
+        "the region must run onto an indented line:\n{text}"
+    );
+    assert!(
+        text.contains("\n    connection count<!--/jired:raw:"),
+        "the nested bullet must indent further still:\n{text}"
+    );
+
+    ws.json(&[
+        "logwork",
+        "DC-78",
+        "1h",
+        "--started",
+        "2026-08-24T09:00:00Z",
+    ]);
+
+    let dirty = &ws.json(&["status"])["dirty"][0];
+    assert_eq!(dirty["key"], "DC-78");
+    assert_eq!(
+        dirty["lossy_touched"], false,
+        "nothing touched either region: {dirty}"
+    );
+
+    let report = ws.json(&["push"]);
+    let result = report["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "DC-78")
+        .expect("DC-78 was pushed");
+    assert_eq!(result["ok"], true, "{result}");
+
+    // Still a gate: an edit *inside* one of them is refused, at the indent it
+    // is written at.
+    let text = ws.read(file).replace(
+        "\n   verified on staging",
+        "\n   verified on staging and in production",
+    );
+    ws.write(file, &text);
+    let blocked = ws.json_code(&["push", "DC-78"], 6);
+    assert_eq!(blocked["results"][0]["error_kind"], "lossy");
 }
 
 #[test]

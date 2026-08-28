@@ -622,8 +622,11 @@ pub fn render() -> String {
         "Blocks between `<!--jired:raw:ID-->` and `<!--/jired:raw:ID-->` are Jira content \
          Markdown cannot represent (panels, macros, media). They are read-only: leave them \
          untouched and they push back byte-identical. Editing one makes `push` fail with \
-         exit code 6 unless you pass `--allow-lossy`, which discards the original markup. \
-         Files containing such a region have `lossy: true` in the `jired:` block.\n\n",
+         exit code 6 unless you pass `--allow-lossy`, which sends what the file says \
+         instead, as plain Markdown, and discards the original markup. The rule covers a \
+         region wherever it sits — the description, a comment, a worklog note — and a \
+         region indented inside a list or a quote is not an edit. Files containing such a \
+         region have `lossy: true` in the `jired:` block.\n\n",
     );
 
     s.push_str("## Conflicts\n\n");

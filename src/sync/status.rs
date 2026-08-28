@@ -394,7 +394,10 @@ pub fn run(ctx: &mut Context, args: &StatusArgs) -> Result<StatusReport> {
         if base_doc.doc.children != working.children {
             fields.push("children".into());
         }
-        if working.new_comments().count() > 0 {
+        // An edit to a comment already on the server is unpushed work too, and
+        // `push` plans an `update_comment` for it — reporting only the new ones
+        // left `status` calling a file clean that the next push would send.
+        if working.new_comments().count() > 0 || base_doc.doc.comments != working.comments {
             fields.push("comments".into());
         }
         // Staged time and edits to time already booked are both unpushed work.
@@ -415,8 +418,12 @@ pub fn run(ctx: &mut Context, args: &StatusArgs) -> Result<StatusReport> {
             fields.push("attachments".into());
         }
 
-        let raw = engine.state.raw_blocks(&row.key, "description")?;
-        let lossy_touched = !crate::convert::edited_regions(&working.description, &raw).is_empty();
+        // The same question `push` asks, asked the same way: a region edited in
+        // a comment blocks the push too, and reporting only the description's
+        // would leave the file looking pushable.
+        let lossy_touched =
+            !crate::sync::push::edited_regions(&engine.state, &row.key, &base_doc.doc, &working)?
+                .is_empty();
 
         if !fields.is_empty() || lossy_touched {
             dirty.push(DirtyIssue {

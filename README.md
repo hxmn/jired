@@ -246,8 +246,13 @@ than sent, and the next write from the server restores it.
 `<!--jired:raw:…-->` region: Jira content that Markdown cannot represent. Push
 rebuilds those regions from the stored original, so leaving them alone is free.
 Edit one and that issue fails with exit 6 and a list of the regions; `push
---allow-lossy` sends it anyway, replacing the original markup with plain Markdown.
-Other issues in the same push are unaffected.
+--allow-lossy` sends what the file says instead, as plain Markdown, replacing the
+original markup. Other issues in the same push are unaffected.
+
+A region can sit in a comment or a worklog note as well as in the description,
+and the same rule covers it wherever it is. Indentation is not an edit: a region
+written inside a list or a quote carries that container's indent on every line,
+and push compares what is between the markers without it.
 
 `pull --strategy merge` writes git-style `<<<<<<< LOCAL` / `=======` /
 `>>>>>>> REMOTE` markers into the file and exits 5. Fix them with `jired resolve`:

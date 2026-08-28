@@ -188,6 +188,112 @@ pub fn region_body(md: &str, id: &str) -> Option<String> {
     )
 }
 
+/// The same text with the markers of `ids` gone, leaving what was between them
+/// as ordinary Markdown.
+///
+/// This is what `--allow-lossy` sends. The user changed a read-only region, so
+/// the stored original no longer describes what the file says, and rebuilding
+/// from it would throw the edit away — which is what push used to do, quietly,
+/// while reporting success.
+///
+/// A marker that had a line to itself takes the line with it; one that opened a
+/// list item or a quote leaves the item's own characters behind, because
+/// removing them would take the item apart.
+pub fn unwrap_regions(md: &str, ids: &[String]) -> String {
+    let mut out = md.to_string();
+    for id in ids {
+        for marker in [
+            format!("{MARKER_OPEN}{id}{MARKER_END}"),
+            format!("{MARKER_CLOSE}{id}{MARKER_END}"),
+        ] {
+            out = remove_marker(&out, &marker);
+        }
+    }
+    out
+}
+
+fn remove_marker(md: &str, marker: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut pos = 0;
+    while let Some(rel) = md[pos..].find(marker) {
+        let start = pos + rel;
+        let end = start + marker.len();
+        let line_start = md[..start].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = md[end..].find('\n').map(|i| end + i);
+        if md[line_start..start].trim().is_empty()
+            && md[end..line_end.unwrap_or(md.len())].trim().is_empty()
+        {
+            out.push_str(&md[pos..line_start]);
+            pos = line_end.map_or(md.len(), |i| i + 1);
+        } else {
+            out.push_str(&md[pos..start]);
+            pos = end;
+        }
+    }
+    out.push_str(&md[pos..]);
+    out
+}
+
+/// A region's text with its container's continuation indent taken off, so that
+/// the same region compares equal wherever it was written.
+///
+/// [`region_body`] can only strip what precedes the opening marker, and that is
+/// one line's worth. An inline region opens mid-line and runs on, and every
+/// line after the first carries the enclosing block's continuation indent —
+/// three spaces under `1. `, `> ` inside a quote — which the store never saw.
+///
+/// What comes off is the indent those lines *share*, and it comes off both
+/// sides of the comparison, so indentation belonging to the region itself
+/// survives on both and a change to it still reads as a change.
+pub fn dedent_region(body: &str) -> String {
+    let mut lines = body.split('\n');
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let rest: Vec<&str> = lines.collect();
+    let indent = shared_indent(&rest);
+    if indent == 0 {
+        return body.to_string();
+    }
+    let mut out = first.to_string();
+    for line in rest {
+        out.push('\n');
+        out.push_str(&line[indent.min(line.len())..]);
+    }
+    out
+}
+
+/// How many bytes of container indent every non-blank line begins with.
+///
+/// Only the characters a container can put there count: a list indents with
+/// spaces, a quote with `> `. A blank line carries no indent to compare — a
+/// list writes it as nothing at all — so it does not narrow the answer.
+fn shared_indent(lines: &[&str]) -> usize {
+    let mut shared: Option<&str> = None;
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = &line[..line
+            .find(|c| !matches!(c, ' ' | '\t' | '>'))
+            .unwrap_or(line.len())];
+        shared = Some(match shared {
+            None => indent,
+            Some(prev) => {
+                let common = prev
+                    .char_indices()
+                    .zip(indent.chars())
+                    .take_while(|((_, a), b)| a == b)
+                    .map(|((i, a), _)| i + a.len_utf8())
+                    .last()
+                    .unwrap_or(0);
+                &prev[..common]
+            }
+        });
+    }
+    shared.map_or(0, str::len)
+}
+
 /// Could this text be the indent a quote or a list puts in front of a block?
 fn is_container_prefix(s: &str) -> bool {
     s.chars()
