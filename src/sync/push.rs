@@ -272,6 +272,16 @@ enum Action {
     MoveSprint {
         /// The sprint's id, or `None` for the backlog.
         sprint: Option<String>,
+        /// The sprint's name, or `None` for the backlog: what the re-read after
+        /// the push has to show for the move to have happened. Ids do not
+        /// survive into a rendered issue — names are what the file carries — so
+        /// the check is made on the name.
+        to: Option<String>,
+        /// Where it was. A move to the backlog is checked against this rather
+        /// than against an empty list: Jira keeps the sprints an issue was in
+        /// when they closed, so "in no sprint at all" is not what leaving one
+        /// looks like.
+        from: Option<String>,
     },
     /// Transition a *different* issue: ticking a subtask's box under `## Children`.
     TransitionOther {
@@ -433,10 +443,6 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             }
         }
 
-        // Everything from here to the API call can fail for *this* issue. Each
-        // failure becomes a result and the loop goes on: `commands.md` promises
-        // that one bad issue does not stop the others, and a `?` here would
-        // throw away the report of everything already pushed.
         // Everything from here to the API call can fail for *this* issue. Each
         // failure becomes a result and the loop goes on: `commands.md` promises
         // that one bad issue does not stop the others, and a `?` here would
@@ -862,7 +868,7 @@ fn create_issue(
                     kind: f.kind,
                     status: "failed",
                     summary: Some(f.summary.clone()),
-                    request: None,
+                    request: Some(f.request.clone()),
                     error: Some(e.message.clone()),
                 });
             }
@@ -870,6 +876,27 @@ fn create_issue(
     }
 
     let confirmed = crate::api::block_on(client.issue(&new_key))?;
+
+    // The same silence a follow-up can meet: a sub-task created into a sprint
+    // gets a 204 from the board and stays wherever its parent is. Unlike an
+    // update there is nothing to protect — the file is being rebuilt around a
+    // key it did not have, and the sprint it comes back with is the truth about
+    // the issue — so this reports rather than refuses, which is all a create
+    // that did happen can honestly do.
+    for (f, report) in follow_ups.iter().zip(reports.iter_mut().skip(1)) {
+        if report.status != "done" {
+            continue;
+        }
+        let Some(why) = unapplied(&f.action, &confirmed) else {
+            continue;
+        };
+        ctx.out
+            .warn(format!("{new_key} was created, but {}: {why}", f.summary));
+        report.status = "failed";
+        report.request = Some(f.request.clone());
+        report.error = Some(why);
+    }
+
     let base_url = engine.base_url().to_string();
     rewrite_after_push(engine, &confirmed, file, markup, &base_url)?;
     engine.state.clear_ops(&new_key)?;
@@ -1127,7 +1154,14 @@ fn follow_ups_after_create(
                     summary: format!("the backlog → {name}"),
                     request: json!({"method": "POST", "path": path,
                                     "body": {"issues": ["{key}"]}}),
-                    action: Action::MoveSprint { sprint: target },
+                    action: Action::MoveSprint {
+                        // Not `name` itself: a blank `sprint:` entry resolves to
+                        // the backlog, and the check has to expect what the call
+                        // is actually making happen.
+                        to: target.as_ref().map(|_| name.clone()),
+                        sprint: target,
+                        from: None,
+                    },
                 });
             }
             Err(_) => warnings.push(format!(
@@ -1300,6 +1334,29 @@ fn plan(
             }
         }
     }
+    // Jira re-parents a sub-task through the Move operation, and Data Center
+    // exposes that nowhere in the REST API. `PUT /issue` takes the payload,
+    // answers success and leaves the parent exactly where it was — so this has
+    // to be refused rather than sent, and refused here rather than after the
+    // fact, so `--dry-run` says so before the user trusts a green plan.
+    if fields.contains_key("parent")
+        && is_subtask(base_raw)
+        && engine.account.deployment == crate::api::Deployment::DataCenter
+    {
+        return Err(JiredError::unsupported_server(format!(
+            "{}: a sub-task's parent can only be changed by Jira's Move operation, \
+             which Data Center does not offer over the API",
+            bf.key
+        ))
+        .with_detail("issue", bf.key.clone())
+        .with_detail("from", json!(bf.parent))
+        .with_detail("to", json!(wf.parent))
+        .with_hint(
+            "move the sub-task in Jira and pull, or put `parent:` back to what the \
+             server holds",
+        ));
+    }
+
     plan_custom_fields(
         bf,
         wf,
@@ -1341,6 +1398,25 @@ fn plan(
     if bf.sprint != wf.sprint {
         let (before, after) = (bf.sprint.last(), wf.sprint.last());
         if !crate::doc::frontmatter::sprint_history_only(&bf.sprint, &wf.sprint) {
+            // A sub-task is not a board item: it takes its sprint from its
+            // parent, and the board call for one is accepted and ignored. There
+            // is no request that could carry this, so nothing is planned and the
+            // issue stops here — reverting the line from the server afterwards
+            // would throw the edit away with nothing but a success to show.
+            if is_subtask(base_raw) {
+                return Err(JiredError::usage(format!(
+                    "{}: a sub-task takes its sprint from its parent and cannot be \
+                     moved into one of its own",
+                    bf.key
+                ))
+                .with_detail("issue", bf.key.clone())
+                .with_detail("parent", json!(bf.parent))
+                .with_detail("sprint", json!(after))
+                .with_hint(match &bf.parent {
+                    Some(parent) => format!("move {parent} instead"),
+                    None => "move the parent issue instead".to_string(),
+                }));
+            }
             match sprint_target(after.map(String::as_str), sprints) {
                 Ok(target) => {
                     let (path, label) = match &target {
@@ -1361,7 +1437,11 @@ fn plan(
                         ),
                         request: json!({"method": "POST", "path": path,
                                         "body": {"issues": ["{key}"]}}),
-                        action: Action::MoveSprint { sprint: target },
+                        action: Action::MoveSprint {
+                            to: target.as_ref().map(|_| label),
+                            sprint: target,
+                            from: before.cloned(),
+                        },
                     });
                 }
                 Err(known) => warnings.push(format!(
@@ -1624,6 +1704,77 @@ fn plan(
     Ok(ops)
 }
 
+/// Whether the issue's type is one of Jira's sub-tasks.
+///
+/// Read off the flag Jira itself goes by rather than off the type's name:
+/// `Sub-task` is only the default spelling, and an instance is free to add types
+/// of its own — the one this was reported against is called `Analytics
+/// sub-task`. A snapshot too old to carry the flag answers "no", which leaves
+/// the change to be caught by [`unapplied`] after the fact instead.
+fn is_subtask(raw: &Value) -> bool {
+    raw.pointer("/fields/issuetype/subtask")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Why an operation the server said it had applied is not in what the server now
+/// holds, or `None` when it is.
+///
+/// A 2xx is not evidence. Jira takes a payload it has no intention of acting on
+/// and says nothing about it: `PUT /issue` with a sub-task's `parent` on Data
+/// Center, `POST …/sprint/{id}/issue` with a sub-task in the list. The push
+/// already re-reads the issue to rebuild the file from it, so asking that same
+/// answer whether the change is in it costs nothing.
+///
+/// Only what can be compared without guessing is checked. A field's payload and
+/// the server's rendering of it are different shapes — `{"name": "High"}` comes
+/// back as an object with an id, a self link and an icon — and a comparison that
+/// had to guess would invent failures, which is this same silence pointing the
+/// other way. `parent` and the sprint are the two whose answer is unambiguous,
+/// and the two Jira is known to swallow.
+fn unapplied(action: &Action, confirmed: &RemoteIssue) -> Option<String> {
+    let same = |a: Option<&str>, b: Option<&str>| match (a, b) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        (None, None) => true,
+        _ => false,
+    };
+    match action {
+        Action::UpdateFields(payload) => {
+            let wanted = payload.get("parent")?.get("key").and_then(Value::as_str);
+            let now = confirmed.fields.parent.as_deref();
+            (wanted != now).then(|| match (wanted, now) {
+                (Some(wanted), Some(now)) => format!("the parent is still {now}, not {wanted}"),
+                (Some(wanted), None) => format!("the parent is still unset, not {wanted}"),
+                (None, Some(now)) => format!("the parent is still {now}"),
+                (None, None) => unreachable!("equal parents are not a difference"),
+            })
+        }
+        // Read through the workspace's field map, so an instance whose `/field`
+        // does not name a Sprint field would report every move as unapplied.
+        // That workspace cannot render `sprint:` at all and is already broken
+        // for sprints; a loud failure that leaves the edit alone is the right
+        // side to be wrong on.
+        Action::MoveSprint { to, from, .. } => {
+            let now = confirmed.fields.sprint.last().map(String::as_str);
+            match to {
+                Some(to) if !same(now, Some(to)) => Some(match now {
+                    Some(now) => format!("the issue is still in {now}, not {to}"),
+                    None => format!("the issue is in no sprint, not {to}"),
+                }),
+                // Out of every sprint: Jira keeps the ones that closed while the
+                // issue was in them, so what proves the move is that the one it
+                // was in is no longer the one it is in.
+                None if same(now, from.as_deref()) && from.is_some() => Some(format!(
+                    "the issue is still in {}",
+                    from.as_deref().unwrap_or_default()
+                )),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Whether the server has moved on from the snapshot this push was planned
 /// against.
 ///
@@ -1734,7 +1885,11 @@ fn execute(
                     kind: op.kind,
                     status: "failed",
                     summary: Some(op.summary.clone()),
-                    request: None,
+                    // Carried on a failure, where a plain push otherwise left
+                    // nothing to say what had been sent: the error names the
+                    // status the server answered with, and this names the call
+                    // it answered.
+                    request: Some(op.request.clone()),
                     error: Some(e.message.clone()),
                 });
                 failure = Some(e);
@@ -1758,6 +1913,42 @@ fn execute(
 
     // Re-read what the server now holds and make that the new base.
     let confirmed = crate::api::block_on(client.issue(key))?;
+
+    // Before the file is rewritten from it, not after: the rewrite is what would
+    // replace the user's edit with the server's answer, and an operation the
+    // server only pretended to apply must not be what triggers it. Base stays
+    // where it was, the edit stays in the file, and `push --resume` still has
+    // something to resume.
+    let mut swallowed = Vec::new();
+    for ((op, op_id), report) in ops.iter().zip(op_ids.iter()).zip(reports.iter_mut()) {
+        let Some(why) = unapplied(&op.action, &confirmed) else {
+            continue;
+        };
+        engine.state.mark_op(*op_id, "failed", Some(&why))?;
+        report.status = "failed";
+        report.request = Some(op.request.clone());
+        report.error = Some(why.clone());
+        swallowed.push(why);
+    }
+    if !swallowed.is_empty() {
+        return Ok(IssueResult {
+            key: key.to_string(),
+            ok: false,
+            new_key: None,
+            error: Some(format!(
+                "the server accepted the change and did not apply it: {}",
+                swallowed.join("; ")
+            )),
+            error_kind: Some("unsupported_server".into()),
+            hint: Some(
+                "the edit is still in the file and nothing was overwritten; \
+                 make the change in Jira and run `jired pull`"
+                    .into(),
+            ),
+            ops: reports,
+        });
+    }
+
     rewrite_after_push(engine, &confirmed, file, markup, base_url)?;
     engine.state.clear_ops(key)?;
 
@@ -1837,7 +2028,7 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                 }
                 client.do_transition(key, &target.id, None).await
             }
-            Action::MoveSprint { sprint } => {
+            Action::MoveSprint { sprint, .. } => {
                 client
                     .move_to_sprint(sprint.as_deref(), &[key.to_string()])
                     .await
@@ -1986,6 +2177,123 @@ mod tests {
             at("2026-08-28T06:42:11.001Z"),
             at("2026-08-28T06:42:10.999Z")
         ));
+    }
+
+    /// Jira's own flag, not the type's name: an instance names its sub-task
+    /// types whatever it likes — the one this was reported against is called
+    /// `Analytics sub-task` — and a snapshot too old to carry the flag has to
+    /// fall through to the check that runs after the write instead.
+    #[test]
+    fn a_sub_task_is_recognized_by_the_flag_and_not_by_its_name() {
+        assert!(is_subtask(
+            &json!({"fields": {"issuetype": {"name": "Analytics sub-task", "subtask": true}}})
+        ));
+        assert!(!is_subtask(
+            &json!({"fields": {"issuetype": {"name": "Task", "subtask": false}}})
+        ));
+        // Named like one, and not one.
+        assert!(!is_subtask(
+            &json!({"fields": {"issuetype": {"name": "Sub-task"}}})
+        ));
+        assert!(!is_subtask(&json!({})));
+    }
+
+    fn confirmed(parent: Option<&str>, sprint: &[&str]) -> RemoteIssue {
+        RemoteIssue {
+            key: "PROJ-142".into(),
+            id: "10023".into(),
+            updated: at("2026-08-28T06:42:10Z"),
+            description: RichText::Empty,
+            fields: crate::api::IssueFields {
+                parent: parent.map(str::to_string),
+                sprint: sprint.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            comments: vec![],
+            worklogs: vec![],
+            worklog_total: 0,
+            attachments: vec![],
+            raw: json!({}),
+        }
+    }
+
+    /// The reported case, from the side the push can see it from: both calls
+    /// answered success and neither changed anything.
+    #[test]
+    fn a_change_the_server_did_not_make_is_not_applied() {
+        let parent = Action::UpdateFields(json!({"parent": {"key": "TSK-301"}}));
+        let unchanged = confirmed(Some("TSK-203"), &["TSK Спринт 6"]);
+        assert!(unapplied(&parent, &unchanged)
+            .expect("the parent did not move")
+            .contains("TSK-203"));
+        assert!(unapplied(&parent, &confirmed(Some("TSK-301"), &[])).is_none());
+
+        let move_sprint = Action::MoveSprint {
+            sprint: Some("9".into()),
+            to: Some("TSK Спринт 7".into()),
+            from: Some("TSK Спринт 6".into()),
+        };
+        assert!(unapplied(&move_sprint, &unchanged).is_some());
+        assert!(
+            unapplied(
+                &move_sprint,
+                &confirmed(None, &["TSK Спринт 6", "TSK Спринт 7"])
+            )
+            .is_none(),
+            "the sprint it rolled over from is still in the list"
+        );
+    }
+
+    /// Clearing a field is a change like any other, and "still set" is how the
+    /// server says it did not make it.
+    #[test]
+    fn clearing_a_parent_is_verified_too() {
+        let clear = Action::UpdateFields(json!({ "parent": Value::Null }));
+        assert!(unapplied(&clear, &confirmed(Some("PROJ-1"), &[])).is_some());
+        assert!(unapplied(&clear, &confirmed(None, &[])).is_none());
+    }
+
+    /// Jira keeps the sprints an issue was in when they closed, so an issue in
+    /// no sprint at all is not what leaving one looks like — what proves the
+    /// move is that the sprint it was in is no longer the one it is in.
+    #[test]
+    fn a_move_to_the_backlog_is_checked_against_where_it_was() {
+        let backlog = |from: Option<&str>| Action::MoveSprint {
+            sprint: None,
+            to: None,
+            from: from.map(str::to_string),
+        };
+        assert!(unapplied(
+            &backlog(Some("Sprint 42")),
+            &confirmed(None, &["Sprint 42"])
+        )
+        .is_some());
+        assert!(unapplied(&backlog(Some("Sprint 42")), &confirmed(None, &[])).is_none());
+        assert!(
+            unapplied(
+                &backlog(Some("Sprint 42")),
+                &confirmed(None, &["Sprint 41"])
+            )
+            .is_none(),
+            "a closed sprint it never left is not the sprint it was moved out of"
+        );
+    }
+
+    /// A field whose payload and whose rendering are different shapes is not
+    /// checked at all: guessing at `{"name": "High"}` against the object with an
+    /// id, a self link and an icon that comes back would invent failures, which
+    /// is the same silence pointing the other way.
+    #[test]
+    fn only_what_can_be_compared_without_guessing_is_checked() {
+        let priority = Action::UpdateFields(json!({"priority": {"name": "High"}}));
+        assert!(unapplied(&priority, &confirmed(None, &[])).is_none());
+        assert!(unapplied(
+            &Action::Transition {
+                to_status: "Done".into()
+            },
+            &confirmed(None, &[])
+        )
+        .is_none());
     }
 
     #[test]

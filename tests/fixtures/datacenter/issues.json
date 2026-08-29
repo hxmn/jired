@@ -5,7 +5,8 @@
     "fields": {
       "summary": "Rotate the LDAP bind credential",
       "issuetype": {
-        "name": "Task"
+        "name": "Task",
+        "subtask": false
       },
       "status": {
         "id": "3",
@@ -150,7 +151,8 @@
     "fields": {
       "summary": "Document the LDAP rollback plan",
       "issuetype": {
-        "name": "Task"
+        "name": "Task",
+        "subtask": false
       },
       "status": {
         "id": "1",
@@ -182,7 +184,8 @@
     "fields": {
       "summary": "Update the connector config",
       "issuetype": {
-        "name": "Sub-task"
+        "name": "Sub-task",
+        "subtask": true
       },
       "status": {
         "id": "1",

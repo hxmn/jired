@@ -46,6 +46,13 @@ pub struct FixtureClient {
     calls: Mutex<Vec<RecordedCall>>,
     /// Scripted failures: `"PUT /rest/api/3/issue/PROJ-1" -> error`.
     faults: BTreeMap<String, FixtureFault>,
+    /// Writes the "server" accepts and does not act on: `"PUT /issue/DC-77"`.
+    ///
+    /// The failure `faults.json` cannot express, and the one that cost a user
+    /// their edit: Jira answers 204 to a payload it has no intention of
+    /// applying — a sub-task's `parent` on Data Center, a sub-task in a board
+    /// move — and nothing in the response says so.
+    ignored: std::collections::BTreeSet<String>,
     next_id: Mutex<u64>,
 }
 
@@ -91,6 +98,9 @@ impl FixtureClient {
         let faults = read_json(dir, "faults.json")
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
+        let ignored = read_json(dir, "ignored.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
 
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -99,6 +109,7 @@ impl FixtureClient {
             issues: Mutex::new(issues),
             calls: Mutex::new(Vec::new()),
             faults,
+            ignored,
             next_id: Mutex::new(90000),
         })
     }
@@ -143,6 +154,14 @@ impl FixtureClient {
             "conflict" => JiredError::conflict(fault.message.clone()),
             _ => JiredError::generic(fault.message.clone()),
         })
+    }
+
+    /// Whether this write is one the "server" acts on, or one it only answers.
+    ///
+    /// The call is still recorded either way — what was sent is exactly what a
+    /// test asserting this behaviour needs to see.
+    fn applies(&self, method: &str, path: &str) -> bool {
+        !self.ignored.contains(&format!("{method} {path}"))
     }
 
     fn markup(&self) -> Markup {
@@ -198,6 +217,9 @@ impl FixtureClient {
 }
 
 /// Which custom field this fixture's issues keep their sprint in.
+///
+/// Recognized by shape, the way `normalize` recognizes it, because `/field`
+/// recordings do not always name it.
 fn sprint_field(issue: &Value) -> Option<String> {
     issue
         .get("fields")?
@@ -424,7 +446,13 @@ impl JiraApi for FixtureClient {
     }
 
     async fn update_fields(&self, key: &str, fields: Value) -> Result<()> {
-        self.record("PUT", &format!("/issue/{key}"), json!({ "fields": fields }))?;
+        let path = format!("/issue/{key}");
+        self.record("PUT", &path, json!({ "fields": fields }))?;
+        // A server that takes the payload and does nothing leaves `updated`
+        // alone too, which is how the reported case was spotted from outside.
+        if !self.applies("PUT", &path) {
+            return Ok(());
+        }
         {
             let mut issues = self.issues.lock().expect("fixture lock");
             if let Some(issue) = issues.get_mut(key) {
@@ -497,6 +525,9 @@ impl JiraApi for FixtureClient {
             None => "/rest/agile/1.0/backlog/issue".to_string(),
         };
         self.record("POST", &path, json!({ "issues": keys }))?;
+        if !self.applies("POST", &path) {
+            return Ok(());
+        }
 
         // Reflect the move the way the server would, so the next fetch sees it.
         let named = sprint.and_then(|id| {
@@ -512,11 +543,18 @@ impl JiraApi for FixtureClient {
         });
         {
             let mut issues = self.issues.lock().expect("fixture lock");
+            // An issue that has never been in a sprint has no such field to
+            // recognize, and a real server would still put one there. Borrowing
+            // the id from an issue that does have one is what lets a move onto
+            // an untouched issue be seen afterwards — without it the "server"
+            // accepted every such move and recorded none of them, which is
+            // precisely the silence this fixture now exists to catch.
+            let fallback = issues.values().find_map(sprint_field);
             for key in keys {
                 let Some(issue) = issues.get_mut(key) else {
                     continue;
                 };
-                let field = sprint_field(issue);
+                let field = sprint_field(issue).or_else(|| fallback.clone());
                 match (&field, &named) {
                     (Some(field), Some(sprint)) => issue["fields"][field] = json!([sprint]),
                     (Some(field), None) => issue["fields"][field] = Value::Null,

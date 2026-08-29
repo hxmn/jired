@@ -98,7 +98,7 @@
                     "object",
                     "null"
                   ],
-                  "description": "Method, path and body preview, present in --dry-run"
+                  "description": "Method, path and body preview. Present for every op in --dry-run, and on a real push for one that failed, so what was sent can be read alongside the error"
                 },
                 "error": {
                   "type": [

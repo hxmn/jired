@@ -194,6 +194,22 @@ update, because the Sprint field is read-only on most instances. The name is
 resolved against the cached sprints, preferring an open one; a name no board
 knows is reported and not guessed at, and an edit to the earlier entries is
 reported as history that cannot be rewritten.
+A sub-task is not a board item — it takes its sprint from its parent — so a
+`sprint:` on one is refused at plan time (exit 2, the hint naming the parent to
+move instead) rather than sent to a board call that answers 204 and does
+nothing. Its `parent:` is refused the same way on Data Center (exit 10), where
+Jira re-parents a sub-task only through the Move operation, which the REST API
+does not offer. Both refusals are made in `plan`, so `--dry-run` shows them
+before anything is sent, and both leave the edit in the file: the issue fails,
+base does not advance, and nothing is overwritten.
+A 2xx is not evidence, so the re-read that rebuilds the file is asked first
+whether the change is in it. `parent` and the sprint are checked — the two whose
+payload and whose rendering can be compared without guessing, and the two Jira
+is known to swallow; a field whose value comes back as an object with an id and
+a self link is not, because a comparison that had to guess would invent
+failures. An op the server did not act on is `failed`, carrying the request that
+was sent, the issue is `ok: false` with kind `unsupported_server`, and the file
+is left exactly as the user wrote it.
 A push that moved an issue — created, transitioned, re-parented or re-sprinted
 it — rebuilds the grouping folders on the way out and reports them as `groups`,
 because `sprints/`, `boards/` and `by-parent/` are views over base and the push

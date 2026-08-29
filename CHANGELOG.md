@@ -8,6 +8,36 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.3.3] — 2026-08-29
+
+### Fixed
+
+- **A push no longer believes the server.** Jira answers success to payloads it
+  has no intention of applying, and `push` read that answer as the work being
+  done: it marked the operation `done`, exited 0, rewrote the file from the
+  server — and the edit that was never sent anywhere was gone, with the report,
+  the exit code and stdout all saying it had worked. The re-read that rebuilds
+  the file is now asked first whether the change is in it. An operation the
+  server did not act on is `failed`, the issue is `ok: false` and the push exits
+  10, base does not advance and the file is left exactly as it was written.
+  Checked are `parent` and the sprint — the two whose payload and whose
+  rendering can be compared without guessing, and the two Jira is known to
+  swallow.
+
+- **A sub-task's sprint and parent are refused before they are sent.** A
+  sub-task is not a board item: it takes its sprint from its parent, and the
+  board call for one is accepted and ignored. That is now exit 2 at plan time,
+  the hint naming the parent to move instead. Its `parent:` is the same on Data
+  Center, where Jira re-parents a sub-task only through the Move operation,
+  which the REST API does not offer: exit 10. Both are decided in the plan, so
+  `push --dry-run` shows them — a clean green plan was what made the silence
+  worth trusting — and both leave the edit in the file.
+
+- **A failed operation says what was sent.** `push --json` set `request` to
+  `null` on anything but a dry run, so a failure carried the server's message
+  and no way to see the call it answered. A failed op now carries its request;
+  the error already names the HTTP status.
+
 ## [0.3.2] — 2026-08-28
 
 ### Fixed

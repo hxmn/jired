@@ -2412,9 +2412,10 @@ fn creating_an_issue_sends_every_field_the_file_carries() {
     );
     assert!(created.contains("priority: High"), "{created}");
     assert!(created.contains("Auth"), "{created}");
-    // The sprint is the `move_sprint` op above rather than anything in this
-    // payload: the fixture records the move without inventing the custom field
-    // a real instance keeps its sprint in.
+    // The sprint came from the `move_sprint` op rather than from the create
+    // payload, and the file proves the move actually landed — an op reported
+    // done that the server did not act on now fails the push.
+    assert!(created.contains("sprint: Sprint 43"), "{created}");
 }
 
 /// A field jired cannot send must not be reported as a clean success. `epic`
@@ -3842,6 +3843,156 @@ fn a_sprint_the_workspace_does_not_know_is_reported_rather_than_guessed() {
     assert!(
         report["results"].as_array().unwrap().is_empty(),
         "nothing was sent"
+    );
+}
+
+/// A sub-task is not a board item: it takes its sprint from its parent, and the
+/// board call for one is accepted and ignored. Reported as a `push` that failed
+/// with the edit still in the file, because the alternative — what actually
+/// happened — was `"status": "done"`, exit 0, and the line quietly rewritten
+/// back to the parent's sprint on the way out.
+#[test]
+fn a_sub_task_cannot_be_moved_into_a_sprint_of_its_own() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    const SUB_TASK: &str = "PROJ-0143. Add integration test.md";
+    let text = ws.read(SUB_TASK);
+    assert!(!text.contains("sprint:"), "{text}");
+    ws.write(
+        SUB_TASK,
+        &text.replace("type: Sub-task", "type: Sub-task\nsprint: Sprint 43"),
+    );
+
+    // The dry run is where this has to show: a clean green plan is what made
+    // the push worth trusting.
+    for args in [&["push", "--dry-run"][..], &["push", "--yes"][..]] {
+        let report = ws.json_code(args, 2);
+        let result = &report["results"][0];
+        assert_eq!(result["key"], "PROJ-143", "{report}");
+        assert_eq!(result["ok"], false, "{report}");
+        assert!(
+            result["error"].as_str().unwrap().contains("its parent"),
+            "{report}"
+        );
+        assert!(
+            result["hint"].as_str().unwrap().contains("PROJ-142"),
+            "the hint names the issue to move instead: {report}"
+        );
+        assert!(result["ops"].as_array().unwrap().is_empty(), "{report}");
+    }
+
+    // Nothing was sent and nothing was overwritten: the edit is where the user
+    // left it, and `status` still says so.
+    assert!(ws.read(SUB_TASK).contains("sprint: Sprint 43"));
+    assert_eq!(ws.json(&["status"])["dirty"][0]["key"], "PROJ-143");
+}
+
+/// Data Center re-parents a sub-task through the Move operation, which it
+/// exposes nowhere in the API: `PUT /issue` takes `parent`, answers success and
+/// leaves it where it was.
+#[test]
+fn a_sub_tasks_parent_is_refused_on_data_center() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    const SUB_TASK: &str = "DC-0079. Update the connector config.md";
+    let text = ws.read(SUB_TASK);
+    assert!(text.contains("parent: DC-77"), "{text}");
+    ws.write(SUB_TASK, &text.replace("parent: DC-77", "parent: DC-78"));
+
+    let report = ws.json_code(&["push", "--dry-run"], 10);
+    let result = &report["results"][0];
+    assert_eq!(result["ok"], false, "{report}");
+    assert!(
+        result["error"].as_str().unwrap().contains("Move operation"),
+        "{report}"
+    );
+    assert!(result["ops"].as_array().unwrap().is_empty(), "{report}");
+
+    ws.json_code(&["push", "--yes"], 10);
+    assert!(ws.read(SUB_TASK).contains("parent: DC-78"));
+}
+
+/// A 2xx is not evidence. The reported case in one push: a `parent` and a sprint
+/// the server accepted, applied neither of, and reported `"status": "done"` for
+/// — after which the file was rewritten from the server and both edits were
+/// gone, under exit 0.
+#[test]
+fn a_change_the_server_accepts_and_ignores_fails_the_push() {
+    let ws = Ws::new();
+    ws.write_fixture(
+        "ignored.json",
+        serde_json::json!([
+            "PUT /issue/PROJ-142",
+            "POST /rest/agile/1.0/sprint/43/issue",
+        ]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("sprint: Sprint 42", "sprint: Sprint 43")
+        .replace("type: Story", "type: Story\nparent: PROJ-150");
+    ws.write(ISSUE_FILE, &text);
+
+    let report = ws.json_code(&["push", "--yes"], 10);
+    assert_eq!(report["summary"]["ok"], 0, "{report}");
+    assert_eq!(report["summary"]["failed"], 1, "{report}");
+
+    let result = &report["results"][0];
+    assert_eq!(result["ok"], false, "{report}");
+    for op in result["ops"].as_array().unwrap() {
+        assert_eq!(op["status"], "failed", "{report}");
+        assert!(op["error"].is_string(), "{report}");
+        // What was sent, which a real push used to drop on the floor.
+        assert!(op["request"]["path"].is_string(), "{report}");
+    }
+    let errors = result["ops"].to_string();
+    assert!(errors.contains("the parent is still unset"), "{errors}");
+    assert!(errors.contains("still in Sprint 42"), "{errors}");
+
+    // The point of all of it: the edit survived and base did not advance.
+    let after = ws.read(ISSUE_FILE);
+    assert!(after.contains("sprint: Sprint 43"), "{after}");
+    assert!(after.contains("parent: PROJ-150"), "{after}");
+    assert_eq!(ws.json(&["status"])["dirty"][0]["key"], "PROJ-142");
+}
+
+/// The same silence can meet a follow-up to a create. There is nothing left to
+/// protect there — the file is being rebuilt around a key it did not have — so
+/// it is reported rather than refused, which is all a create that did happen can
+/// honestly do.
+#[test]
+fn a_swallowed_follow_up_to_a_create_is_reported_not_hidden() {
+    let ws = Ws::new();
+    ws.write_fixture(
+        "ignored.json",
+        serde_json::json!(["POST /rest/agile/1.0/sprint/43/issue"]),
+    );
+    ws.init();
+    // The board move needs the sprint cache to resolve the name to an id.
+    ws.json(&["pull"]);
+    ws.json(&[
+        "create",
+        "--summary",
+        "Audit the SSO config",
+        "--sprint",
+        "Sprint 43",
+    ]);
+
+    let report = ws.json(&["push", "--yes"]);
+    let ops = report["results"][0]["ops"].as_array().unwrap();
+    assert_eq!(ops[0]["kind"], "create_issue");
+    assert_eq!(ops[0]["status"], "done", "{report}");
+    assert_eq!(ops[1]["kind"], "move_sprint");
+    assert_eq!(ops[1]["status"], "failed", "{report}");
+    assert!(
+        ops[1]["error"].as_str().unwrap().contains("Sprint 43"),
+        "{report}"
     );
 }
 

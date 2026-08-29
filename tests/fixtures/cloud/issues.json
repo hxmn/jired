@@ -5,7 +5,8 @@
     "fields": {
       "summary": "Fix login flow",
       "issuetype": {
-        "name": "Story"
+        "name": "Story",
+        "subtask": false
       },
       "status": {
         "id": "3",
@@ -250,7 +251,8 @@
     "fields": {
       "summary": "Add integration test",
       "issuetype": {
-        "name": "Sub-task"
+        "name": "Sub-task",
+        "subtask": true
       },
       "status": {
         "id": "1",
@@ -299,7 +301,8 @@
     "fields": {
       "summary": "Rotate IdP certificate",
       "issuetype": {
-        "name": "Task"
+        "name": "Task",
+        "subtask": false
       },
       "status": {
         "id": "1",

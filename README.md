@@ -371,6 +371,13 @@ the filename you were just editing instead of retyping the key.
 | `schema [NAME]` | the JSON Schema for a command's `--json` output |
 | `version [--changelog]` | which binary this is, and what changed in it |
 
+A 2xx from Jira is not evidence that Jira did anything: some payloads it accepts
+and quietly ignores. So `push` re-reads each issue and checks the change is in it
+before rewriting the file from the server. An op the server did not act on is
+`failed`, carrying the request that was sent; the issue is `ok: false`, the push
+exits 10, and your edit is still in the file — nothing is overwritten on the
+strength of a success that was not one.
+
 ### The issue picker
 
 `jired edit`, `jired comment` and `jired open` with no issue named ask which one,
@@ -468,6 +475,14 @@ board knows is an error rather than a push that quietly skips it. An issue
 already in the sprint is left alone and said so, rather than staged as a change
 that does nothing.
 
+A sub-task is the one issue none of this reaches: it is not a board item, and
+takes its sprint from whatever its parent is in. `push` refuses a `sprint:` on
+one — exit 2, naming the parent to move instead — rather than making a board
+call Jira answers 204 to and ignores. Its `parent:` is refused the same way on
+Data Center (exit 10), where a sub-task moves between parents only through
+Jira's Move operation, which the API does not offer. Both show in `push
+--dry-run`, and both leave your edit where you wrote it.
+
 The frontmatter is still the interface, and `sprint:` is a history — an issue
 that rolls over stays in the sprint it came from — so a move appends to the list
 and only its last entry is where the issue is now. `sprint remove` empties it,
@@ -546,7 +561,7 @@ how to fix. `make uninstall` takes both files back out.
 | 7 | required value missing in non-interactive mode |
 | 8 | workspace locked by another jired process |
 | 9 | local state database corrupt |
-| 10 | unsupported Jira server |
+| 10 | unsupported Jira server, or a change it accepted and did not apply |
 
 ## When something goes wrong
 
@@ -564,6 +579,7 @@ out of the way.
 | 8 | another jired process holds the workspace lock (the message names its pid and start time) | wait — the lock is released when that process exits, including if it is killed |
 | 9 | a local database will not open or holds something unreadable | see "the databases" below |
 | 10 | Jira Data Center older than 9.0 (Cloud is always supported) | nothing jired can do; the older releases lack the PAT auth and v2 endpoints it depends on |
+| 10 | `push` sent a change the server answered success to and did not make | the op says which, with the request it sent; your edit is still in the file — make the change in Jira and `jired pull` |
 
 ### TLS
 

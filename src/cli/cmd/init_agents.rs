@@ -552,6 +552,15 @@ pub fn render() -> String {
          and with none given it searches. `comment`, `transition` and `assign` are \
          the scriptable single-field equivalents.\n\n",
     );
+    s.push_str(
+        "An operation Jira accepted is not an operation Jira performed — it \
+         answers success to some payloads it has no intention of applying — so \
+         `push` re-reads the issue and checks the change is in it before it \
+         rewrites the file. One that is not is `\"status\": \"failed\"` with the \
+         request that was sent, the issue is `\"ok\": false`, and base does not \
+         advance: nothing is overwritten and the edit is still in the file for \
+         the next `push`.\n\n",
+    );
 
     s.push_str("## Sprints\n\n");
     s.push_str(
@@ -566,6 +575,14 @@ pub fn render() -> String {
          whose only difference is sprint history is not reported as changed; \
          where there is a real change too, `diff` keeps the sprint row and marks \
          it `\"sendable\": false`, out of the `stat` counts.\n\n",
+    );
+    s.push_str(
+        "A sub-task is not a board item: it takes its sprint from its parent, and \
+         a `sprint:` on one is exit 2 naming the parent to move instead. Its \
+         `parent:` is the same on Data Center, where Jira changes it only through \
+         the Move operation it offers nowhere in the API: exit 10. Both are \
+         refused at plan time, so `push --dry-run` shows them, and nothing is \
+         sent and nothing is overwritten — the edit stays in the file.\n\n",
     );
     s.push_str(
         "A push that moves an issue between sprints, columns or parents rebuilds \
@@ -688,7 +705,10 @@ pub fn render() -> String {
         (7, "required value missing in non-interactive mode"),
         (8, "workspace locked by another jired process"),
         (9, "local state database corrupt"),
-        (10, "unsupported Jira server"),
+        (
+            10,
+            "unsupported Jira server, including a change it accepted and did not apply",
+        ),
     ] {
         s.push_str(&format!("| {code} | {meaning} |\n"));
     }
