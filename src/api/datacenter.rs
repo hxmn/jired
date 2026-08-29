@@ -55,6 +55,15 @@ pub async fn move_subtask_parent(
     parent: &str,
 ) -> Result<()> {
     let mut page = http.get_page(&format!("{WIZARD_ENTRY}{issue_id}")).await?;
+    // The first reply has to be the wizard. Only once a step has been posted
+    // does a page without a form mean the wizard is over — before that it means
+    // jired never reached one, and 0.4.0 read the difference the wrong way
+    // round: an unauthenticated request lands on the session-timeout page,
+    // Jira serves it as HTTP 200, and "no form here" was taken for "finished".
+    if Form::find(&page.html, WIZARD).is_none() {
+        return Err(not_the_wizard(key, &page.url));
+    }
+
     // The new parent goes in on the step that asks for it; the steps after it
     // are confirmations, which carry the answer along in their hidden fields.
     let mut answer = Some(parent);
@@ -82,6 +91,43 @@ pub async fn move_subtask_parent(
             .with_detail("parent", parent.to_string())
             .with_detail("steps", MAX_STEPS)
             .with_hint("move the sub-task in Jira and run `jired pull`"),
+    )
+}
+
+/// The wizard was asked for and something else answered.
+///
+/// The page jired landed on is the whole diagnosis, so it goes in the message
+/// rather than into a debug log nobody has running when it happens: Jira
+/// redirects an unauthenticated web request to its session-timeout page and
+/// answers 200, so the status line says nothing and the URL says everything.
+fn not_the_wizard(key: &str, landed: &str) -> JiredError {
+    let signed_out = ["sessiontimeout", "login.jsp", "/login?", "os_destination"]
+        .iter()
+        .any(|marker| landed.to_ascii_lowercase().contains(marker));
+
+    if signed_out {
+        return JiredError::auth(format!(
+            "{key}: the credential does not authenticate Jira's web pages — the \
+             Move wizard answered with {landed}"
+        ))
+        .with_detail("issue", key.to_string())
+        .with_detail("landed_on", landed.to_string())
+        .with_hint(
+            "a personal access token authenticates the REST API only; \
+             re-authenticate with `jired init --force --auth basic` if the \
+             instance allows it, or move the sub-task in Jira and run `jired pull`",
+        );
+    }
+
+    JiredError::unsupported_server(format!(
+        "{key}: Jira did not serve the Move wizard — the request for it answered \
+         with {landed}"
+    ))
+    .with_detail("issue", key.to_string())
+    .with_detail("landed_on", landed.to_string())
+    .with_hint(
+        "the account may lack the Move Issues permission, or this Jira spells \
+         the wizard differently; move the sub-task in Jira and run `jired pull`",
     )
 }
 
@@ -455,6 +501,27 @@ mod tests {
         </form>"#;
         let form = Form::find(html, WIZARD).unwrap();
         assert_eq!(form.fields, vec![("sendMail".into(), "true".into())]);
+    }
+
+    /// The reported failure: a PAT reaches Jira, Jira bounces the web action to
+    /// its session-timeout page, and serves that as HTTP 200. What names the
+    /// cause is where the request landed, so that is what the error carries.
+    #[test]
+    fn a_session_timeout_page_is_named_as_the_credential_it_is() {
+        let e = not_the_wizard(
+            "TSK-148",
+            "https://jira.example/secure/SessionTimeoutMessage.jspa",
+        );
+        assert_eq!(e.kind.as_str(), "auth");
+        assert!(e.message.contains("SessionTimeoutMessage.jspa"), "{e}");
+        assert!(e.message.contains("web pages"), "{e}");
+        assert!(e.hint.as_deref().unwrap().contains("--auth basic"), "{e}");
+
+        // Anything else that is not the wizard is a different problem, and
+        // guessing "sign in again" at it would send the reader the wrong way.
+        let other = not_the_wizard("TSK-148", "https://jira.example/browse/TSK-148");
+        assert_eq!(other.kind.as_str(), "unsupported_server");
+        assert!(other.message.contains("/browse/TSK-148"), "{other}");
     }
 
     #[test]

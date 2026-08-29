@@ -211,10 +211,18 @@ posted back with `parentIssue` filled in and every field it declared (the
 confirm step. Reading the form rather than assuming it is what survives a
 version change; the answer is verified by re-reading the issue, because a page
 that renders is not a move that happened. Cloud sends the field update, which
-is the route Atlassian added there and never on Data Center. Two moves have no
-wizard page and are refused at plan time (exit 2): a sub-task with no parent at
+is the route Atlassian added there and never on Data Center.
+Three things are refused at plan time (exit 2), where `--dry-run` shows them
+rather than a green plan that fails on the way out. A sub-task with no parent at
 all, which is a conversion rather than a move, and a parent in another project,
-which would have to change the sub-task's key.
+which would have to change the sub-task's key — neither has a wizard page. And a
+credential that cannot open a web session: Seraph authenticates `/secure/*.jspa`
+from basic auth or a session cookie, never from a bearer token, so a personal
+access token — `init`'s own recommendation on Data Center — is redirected to
+`SessionTimeoutMessage.jspa`, which Jira serves as HTTP 200. `AuthKind::
+opens_web_session` is the one place that judgement is made. Where the wizard is
+still not what answers, the error names the URL the request landed on: a status
+line that says 200 explains nothing, and the landing URL explains all of it.
 A 2xx is not evidence, so the re-read that rebuilds the file is asked first
 whether the change is in it. `parent` and the sprint are checked — the two whose
 payload and whose rendering can be compared without guessing, and the two Jira
@@ -753,7 +761,11 @@ own parent is exit 2 — the shape a mistyped `--to` usually takes.
 
 What `push` does with the staged line differs by deployment and neither this
 command nor the file carries that difference; see `push` above for the Move
-wizard Data Center needs and the verification that follows it.
+wizard Data Center needs and the verification that follows it. Where the
+workspace's credential cannot open a web session, staging a *sub-task's* parent
+warns that `push` will refuse it — a warning and not a refusal, because the line
+is what the file should say once the move is made in Jira, and an ordinary
+issue's `parent` is a field update the same credential sends without trouble.
 JSON: `{"schema":"jired/parent/1","parent":"PROJ-150","issues":[…],"pushed":false}`.
 
 ### `jired set --field F --value V ISSUES… [--push] [--dry-run]`

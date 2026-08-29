@@ -517,11 +517,29 @@ upgrade can move it.
 Which is why the result is never taken on the wizard's word. `push` re-reads
 the issue afterwards, and a parent that did not actually move is a failed
 operation — exit 10, your edit still in the file, nothing overwritten — rather
-than a green push and a line quietly rewritten back. The two moves Jira has no
-page for are refused before anything is sent, at exit 2: a sub-task cannot be
-left without a parent (that is a conversion, in Jira's UI), and it cannot be
-moved to a parent in another project, because its key would have to change with
-it.
+than a green push and a line quietly rewritten back.
+
+**A page needs a credential Jira lets in the front door.** Data Center
+authenticates its web pages through Seraph, which knows about basic auth and
+about a session cookie — and not about a bearer token. A personal access token,
+which is what `jired init` recommends on Data Center and what everything else
+here uses happily, is redirected to `SessionTimeoutMessage.jspa` the moment it
+asks for the Move wizard, and Jira serves that page with HTTP 200. So this one
+operation, alone in jired, needs `auth.kind = basic`:
+
+```sh
+jired init --force --auth basic     # if the instance allows it
+```
+
+Under a token that cannot open a web session the move is refused in the plan —
+exit 2, before anything is sent, and visible in `push --dry-run` — and `jired
+parent` says so while staging. The staged line is still worth having: it is
+what the file should say once you have moved the sub-task in Jira's own UI.
+
+Two more moves have no wizard page at all and are refused the same way: a
+sub-task cannot be left without a parent (that is a conversion, in Jira's UI),
+and it cannot be moved to a parent in another project, because its key would
+have to change with it.
 
 ### Grouping folders
 

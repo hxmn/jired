@@ -121,6 +121,24 @@ impl AuthKind {
         }
     }
 
+    /// Whether this credential authenticates Jira's servlet pages, not just
+    /// its REST API.
+    ///
+    /// Data Center's `/secure/*.jspa` web actions go through Seraph, which
+    /// knows about basic auth and about an existing session cookie. A bearer
+    /// token is not one of them: the personal-access-token authenticator is
+    /// wired into the REST filters alone, so a PAT that reads and writes issues
+    /// perfectly well is bounced to `SessionTimeoutMessage.jspa` — with HTTP
+    /// 200 — the moment it asks for a web action. jired needs one operation
+    /// there, the Move wizard behind a sub-task's parent, and this is what
+    /// decides whether that operation can be attempted at all.
+    pub fn opens_web_session(self) -> bool {
+        match self {
+            AuthKind::Basic | AuthKind::Cookie => true,
+            AuthKind::Pat | AuthKind::OAuth2 | AuthKind::ApiToken => false,
+        }
+    }
+
     pub fn parse(s: &str) -> Result<Self> {
         match s
             .trim()

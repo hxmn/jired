@@ -8,6 +8,34 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.5.1] — 2026-08-29
+
+### Fixed
+
+- **The sub-task move is refused under a credential that cannot reach it.**
+  0.4.0 shipped the Move wizard without noticing what authenticates one. Data
+  Center's web pages go through Seraph, which knows about basic auth and about
+  a session cookie and not about a bearer token, so a personal access token —
+  `init`'s own recommendation there, and fine for everything else jired does —
+  is redirected to `SessionTimeoutMessage.jspa` the moment it asks for the
+  wizard. Jira serves that page as HTTP 200, so nothing in the reply says the
+  credential was refused: 0.4.0 read the page as the form, posted against it,
+  and only the re-read afterwards caught that the parent had not moved.
+
+  The credential is known before anything is sent, so the refusal is now made
+  in the plan — exit 2, visible in `push --dry-run`, naming `auth.kind = basic`
+  as the way out — instead of after every other operation in the push has
+  already gone. `jired parent` warns while staging, for sub-tasks only; the
+  staged line is still what the file should say once the move is made in Jira.
+
+- **A wizard that never appeared says where the request landed.** The first
+  reply now has to *be* the wizard: 0.4.0 treated a page with no form as the
+  wizard having finished, which is true after a step has been posted and false
+  before one has. When something else answers, the error carries the URL the
+  request came to rest at — a status line reading 200 explains nothing, and
+  `…/SessionTimeoutMessage.jspa` explains all of it. Reported with the debug log
+  that made the cause findable at all; without it the failure named no reason.
+
 ## [0.5.0] — 2026-08-29
 
 ### Added

@@ -589,9 +589,15 @@ pub fn render() -> String {
          for it — `PUT /issue` accepts the payload and ignores it — so `push` \
          drives the same Move wizard the UI does, shown in `--dry-run` as \
          `move_parent`, and then re-reads the issue: a parent that did not \
-         actually move fails the push with the edit still in the file. Two moves \
-         Jira has no page for are exit 2 at plan time: leaving a sub-task with \
-         no parent, and a parent in another project.\n\n",
+         actually move fails the push with the edit still in the file. Three \
+         things are exit 2 at plan time, so `--dry-run` shows them: leaving a \
+         sub-task with no parent, a parent in another project, and a credential \
+         that cannot open a web session. That last one is the common case on \
+         Data Center — the wizard is a Jira page, and a personal access token \
+         authenticates the REST API only, so this operation needs \
+         `auth.kind = basic`. `jired parent` warns about it while staging; the \
+         staged line is still correct, and moving the sub-task in Jira's UI \
+         makes it true.\n\n",
     );
     s.push_str(
         "A push that moves an issue between sprints, columns or parents rebuilds \

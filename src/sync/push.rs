@@ -1350,7 +1350,9 @@ fn plan(
     let mut move_parent = None;
     if is_subtask(base_raw) && engine.account.deployment == crate::api::Deployment::DataCenter {
         if let Some(payload) = fields.remove("parent") {
-            move_parent = Some(subtask_parent(&bf.key, &payload)?);
+            let to = subtask_parent(&bf.key, &payload)?;
+            web_session(&bf.key, engine.account.auth_kind)?;
+            move_parent = Some(to);
         }
     }
 
@@ -1749,6 +1751,36 @@ fn subtask_parent(key: &str, payload: &Value) -> Result<String> {
         .with_hint("move the parent issue's project in Jira, which moves its sub-tasks with it"));
     }
     Ok(to.to_string())
+}
+
+/// Refuse the move when the credential cannot open a web session.
+///
+/// Data Center's Move wizard is a servlet page, and Seraph authenticates those
+/// from basic auth or a session cookie — never from a bearer token. A personal
+/// access token that reads and writes issues all day is redirected to
+/// `SessionTimeoutMessage.jspa` the moment it asks for one, and Jira serves
+/// that page as HTTP 200: nothing in the reply says the credential was
+/// refused. 0.4.0 walked into it and only the re-read afterwards caught it,
+/// which is a push that fails after doing everything else in the plan.
+///
+/// So it is decided here, where a `--dry-run` can show it. Exit 2 rather than
+/// 10: this is a credential the user chose and can change, not a server that
+/// cannot do the thing.
+fn web_session(key: &str, auth: crate::api::AuthKind) -> Result<()> {
+    if auth.opens_web_session() {
+        return Ok(());
+    }
+    Err(JiredError::usage(format!(
+        "{key}: a sub-task's parent is changed through a Jira web page, which \
+         a {} credential cannot open a session for",
+        auth.as_str()
+    ))
+    .with_detail("issue", key.to_string())
+    .with_detail("auth_kind", auth.as_str())
+    .with_hint(
+        "re-authenticate with `jired init --force --auth basic` if the instance \
+         allows it, or move the sub-task in Jira and run `jired pull`",
+    ))
 }
 
 /// Whether the issue's type is one of Jira's sub-tasks.

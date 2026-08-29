@@ -86,6 +86,10 @@ struct Ws {
     dir: TempDir,
     fixtures: PathBuf,
     deployment: Deployment,
+    /// How the workspace authenticates. Data Center defaults to a personal
+    /// access token, which is what `init` recommends there — and which reaches
+    /// the REST API only, so the one operation that needs a web page says so.
+    auth: &'static str,
 }
 
 impl Ws {
@@ -114,7 +118,15 @@ impl Ws {
             dir,
             fixtures,
             deployment,
+            auth: "pat",
         }
+    }
+
+    /// The same workspace signed in another way. Only Data Center has a choice
+    /// worth making: basic auth is what authenticates its web pages.
+    fn with_auth(mut self, auth: &'static str) -> Self {
+        self.auth = auth;
+        self
     }
 
     fn new() -> Self {
@@ -145,11 +157,15 @@ impl Ws {
                 cmd.env("JIRED_URL", "https://fixture.invalid")
                     .env("JIRED_EMAIL", "ilya@example.com");
             }
-            // Data Center uses a bearer PAT and no email at all.
+            // Data Center uses a bearer PAT and no email at all — unless the
+            // test asked for basic auth, which needs a username to go with it.
             Deployment::DataCenter => {
                 cmd.env("JIRED_URL", "https://jira.corp.example/jira")
-                    .env("JIRED_AUTH", "pat")
-                    .env_remove("JIRED_EMAIL");
+                    .env("JIRED_AUTH", self.auth);
+                match self.auth {
+                    "basic" => cmd.env("JIRED_EMAIL", "ilya"),
+                    _ => cmd.env_remove("JIRED_EMAIL"),
+                };
             }
         }
         cmd.args(args).arg("--no-input");
@@ -3895,9 +3911,12 @@ const DC_SUB_TASK: &str = "DC-0079. Update the connector config.md";
 /// action rather than a REST endpoint — `PUT /issue` takes `parent`, answers
 /// success and leaves it where it was. The plan has to say which of the two it
 /// is sending, and the push has to send it.
+///
+/// Basic auth throughout: the wizard is a Jira *page*, and only a credential
+/// Seraph authenticates pages with reaches one.
 #[test]
 fn a_sub_task_moves_to_another_parent_on_data_center() {
-    let ws = Ws::of(Deployment::DataCenter);
+    let ws = Ws::of(Deployment::DataCenter).with_auth("basic");
     ws.init();
     ws.json(&["pull"]);
 
@@ -3962,7 +3981,7 @@ fn a_sub_task_moves_to_another_parent_on_data_center() {
 /// swallowed field update gets.
 #[test]
 fn a_re_parenting_the_server_does_not_make_fails_the_push() {
-    let ws = Ws::of(Deployment::DataCenter);
+    let ws = Ws::of(Deployment::DataCenter).with_auth("basic");
     ws.write_fixture(
         "ignored.json",
         serde_json::json!(["POST /secure/MoveSubTaskParent.jspa"]),
@@ -3992,7 +4011,7 @@ fn a_re_parenting_the_server_does_not_make_fails_the_push() {
 /// screen, rather than sent and answered with a page nobody can read.
 #[test]
 fn a_sub_task_cannot_lose_its_parent_or_change_project() {
-    let ws = Ws::of(Deployment::DataCenter);
+    let ws = Ws::of(Deployment::DataCenter).with_auth("basic");
     ws.init();
     ws.json(&["pull"]);
     let original = ws.read(DC_SUB_TASK);
@@ -4028,7 +4047,7 @@ fn a_sub_task_cannot_lose_its_parent_or_change_project() {
 /// every other write command.
 #[test]
 fn parent_stages_a_move_and_pushes_it() {
-    let ws = Ws::of(Deployment::DataCenter);
+    let ws = Ws::of(Deployment::DataCenter).with_auth("basic");
     ws.init();
     ws.json(&["pull"]);
 
@@ -4061,7 +4080,7 @@ fn parent_stages_a_move_and_pushes_it() {
 /// is. Caught before the file is written rather than by the server.
 #[test]
 fn parent_refuses_an_issue_as_its_own_parent() {
-    let ws = Ws::of(Deployment::DataCenter);
+    let ws = Ws::of(Deployment::DataCenter).with_auth("basic");
     ws.init();
     ws.json(&["pull"]);
 
@@ -4071,6 +4090,78 @@ fn parent_refuses_an_issue_as_its_own_parent() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(ws.read(DC_SUB_TASK).contains("parent: DC-77"));
+}
+
+/// The Move wizard is a Jira page, and a personal access token authenticates
+/// the REST API and nothing else: the request is bounced to the session-timeout
+/// page, which Jira serves as HTTP 200. 0.4.0 planned the move anyway and found
+/// out afterwards. The credential is known before anything is sent, so the
+/// refusal belongs in the plan — `--dry-run` has to show it, which is what
+/// makes a green plan worth trusting.
+#[test]
+fn a_move_needing_a_web_page_is_refused_under_a_token_that_cannot_open_one() {
+    let ws = Ws::of(Deployment::DataCenter); // a PAT, which is init's default here
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(DC_SUB_TASK);
+    ws.write(DC_SUB_TASK, &text.replace("parent: DC-77", "parent: DC-78"));
+
+    for args in [&["push", "--dry-run"][..], &["push", "--yes"][..]] {
+        let report = ws.json_code(args, 2);
+        let result = &report["results"][0];
+        assert_eq!(result["ok"], false, "{report}");
+        assert!(
+            result["error"].as_str().unwrap().contains("web page"),
+            "{report}"
+        );
+        assert!(
+            result["hint"].as_str().unwrap().contains("--auth basic"),
+            "the way out is named: {report}"
+        );
+        // Nothing was planned, so nothing was sent — least of all the `PUT`
+        // that Jira would have accepted and ignored.
+        assert!(result["ops"].as_array().unwrap().is_empty(), "{report}");
+    }
+
+    assert!(ws.read(DC_SUB_TASK).contains("parent: DC-78"));
+    assert_eq!(ws.json(&["status"])["dirty"][0]["key"], "DC-79");
+}
+
+/// And `jired parent` says it while staging, rather than letting the push be
+/// where it comes out. A warning, not a refusal: the line is what the file
+/// should say once the sub-task is moved in Jira.
+#[test]
+fn parent_warns_when_the_credential_cannot_reach_the_wizard() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws
+        .cmd(&["parent", "DC-79", "--to", "DC-78"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("DC-79"), "{stderr}");
+    assert!(stderr.contains("web page"), "{stderr}");
+    // The way out goes where every other hint goes.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--auth basic"), "{stdout}");
+    assert!(ws.read(DC_SUB_TASK).contains("parent: DC-78"));
+
+    // A standard issue's parent is an ordinary field update, which the same
+    // token sends: warning about that one would only teach people to ignore it.
+    let out = ws
+        .cmd(&["parent", "DC-78", "--to", "DC-77"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("web page"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// A 2xx is not evidence. The reported case in one push: a `parent` and a sprint

@@ -65,6 +65,8 @@ pub fn run(g: &GlobalArgs, args: &ParentArgs, out: Out) -> Result<ExitCode> {
         })?
     };
 
+    warn_about_the_credential(&ctx, &staged, out)?;
+
     let outcome = stage::finish(
         &mut ctx,
         staged,
@@ -80,4 +82,59 @@ pub fn run(g: &GlobalArgs, args: &ParentArgs, out: Out) -> Result<ExitCode> {
     )?;
     out.emit("parent", &outcome.doc);
     Ok(outcome.exit)
+}
+
+/// Say now that `push` will refuse this, rather than letting it be discovered
+/// on the way out.
+///
+/// Data Center changes a sub-task's parent through a Jira web page, and a
+/// personal access token authenticates the REST API and nothing else. The edit
+/// itself is fine — it is what the file should say, and moving the sub-task in
+/// the UI makes it true — so this is a warning and not a refusal. It is also
+/// only about sub-tasks: an ordinary issue's `parent` is a field update, which
+/// the same token sends perfectly well, and warning about those would be
+/// noise that teaches people to ignore the warning.
+fn warn_about_the_credential(ctx: &Context, staged: &[stage::Staged], out: Out) -> Result<()> {
+    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
+    let account = session.require_account()?;
+    if account.deployment != crate::api::Deployment::DataCenter
+        || account.auth_kind.opens_web_session()
+    {
+        return Ok(());
+    }
+
+    let state = crate::store::state::StateStore::open(&ctx.workspace)?;
+    let sub_tasks: Vec<&str> = staged
+        .iter()
+        .filter(|s| s.changed)
+        .filter(|s| {
+            state
+                .issue(&s.key)
+                .ok()
+                .flatten()
+                .and_then(|row| row.base)
+                .is_some_and(|base| {
+                    base.raw
+                        .pointer("/fields/issuetype/subtask")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                })
+        })
+        .map(|s| s.key.as_str())
+        .collect();
+    if sub_tasks.is_empty() {
+        return Ok(());
+    }
+
+    out.warn(format!(
+        "{}: a sub-task's parent is changed through a Jira web page, which a {} \
+         credential cannot open a session for — `push` will refuse it",
+        sub_tasks.join(", "),
+        account.auth_kind.as_str()
+    ));
+    out.hint(
+        "re-authenticate with `jired init --force --auth basic` if the instance \
+         allows it, or move the sub-task in Jira and run `jired pull`",
+    );
+    Ok(())
 }
