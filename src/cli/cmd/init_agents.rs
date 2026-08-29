@@ -844,6 +844,10 @@ mod tests {
             ("set", "stages any editable field"),
             ("attach", "stages a file for upload"),
             ("open", "launches a browser"),
+            (
+                "fetch-spec",
+                "writes specification files into a directory the caller names",
+            ),
             ("sprint", "stages a sprint move"),
         ];
 

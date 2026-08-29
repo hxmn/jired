@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ns2:application xmlns:ns2="http://wadl.dev.java.net/2009/02"><ns2:doc
+        jersey:generatedBy="Jersey: 1.19.5-atlassian-17"
+        xmlns:jersey="http://jersey.java.net/"/><ns2:doc
+        title="Jira 9.12.4"
+            xml:lang="en"><![CDATA[
+        This documents the current REST API provided by Jira.
+    ]]></ns2:doc><ns2:grammars><ns2:include
+            href="xsd0.xsd"><ns2:doc/></ns2:include></ns2:grammars><ns2:resources
+            base="https://jira.corp.example/jira/rest/"><ns2:resource
+                path="api/2/serverInfo"><ns2:method
+                    id="getServerInfo" name="GET"><ns2:request><ns2:param
+                        name="doHealthCheck" style="query"
+                        type="xs:boolean"/></ns2:request><ns2:response><ns2:representation
+                        mediaType="application/json"/></ns2:response></ns2:method></ns2:resource><ns2:resource
+                path="api/2/myself"><ns2:method
+                    id="getUser" name="GET"><ns2:response><ns2:representation
+                        mediaType="application/json"/></ns2:response></ns2:method></ns2:resource><ns2:resource
+                path="api/2/field"><ns2:method
+                    id="getFields" name="GET"><ns2:response><ns2:representation
+                        mediaType="application/json"/></ns2:response></ns2:method></ns2:resource><ns2:resource
+                path="api/2/search"><ns2:method
+                    id="search" name="GET"><ns2:request><ns2:param
+                        name="jql" style="query" type="xs:string"/><ns2:param
+                        name="startAt" style="query" type="xs:int"/><ns2:param
+                        name="maxResults" style="query"
+                        type="xs:int"/></ns2:request><ns2:response><ns2:representation
+                        mediaType="application/json"/></ns2:response></ns2:method></ns2:resource><ns2:resource
+                path="api/2/issue"><ns2:method
+                    id="createIssue" name="POST"><ns2:request><ns2:representation
+                        mediaType="application/json"/></ns2:request><ns2:response><ns2:representation
+                        mediaType="application/json"/></ns2:response></ns2:method><ns2:resource
+                    path="{issueIdOrKey}"><ns2:param name="issueIdOrKey"
+                        style="template" type="xs:string"/><ns2:method
+                        id="getIssue" name="GET"><ns2:response><ns2:representation
+                            mediaType="application/json"/></ns2:response></ns2:method><ns2:method
+                        id="editIssue" name="PUT"><ns2:request><ns2:representation
+                            mediaType="application/json"/></ns2:request></ns2:method><ns2:resource
+                        path="transitions"><ns2:method
+                            id="getTransitions" name="GET"><ns2:response><ns2:representation
+                                mediaType="application/json"/></ns2:response></ns2:method></ns2:resource><ns2:resource
+                        path="worklog"><ns2:method
+                            id="addWorklog" name="POST"><ns2:request><ns2:representation
+                                mediaType="application/json"/></ns2:request><ns2:response><ns2:representation
+                                mediaType="application/json"/></ns2:response></ns2:method></ns2:resource></ns2:resource></ns2:resource></ns2:resources></ns2:application>

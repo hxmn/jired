@@ -254,6 +254,8 @@ pub enum Command {
     Config(cmd::config::ConfigCmd),
     /// Show the authenticated account
     Whoami(cmd::whoami::WhoamiArgs),
+    /// Write the server's own description of its REST API to a directory
+    FetchSpec(cmd::fetch_spec::FetchSpecArgs),
     /// List projects
     Projects(cmd::list::ProjectsArgs),
     /// List boards
@@ -351,6 +353,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Doctor(a) => cmd::doctor::run(g, a, out),
         Command::Config(a) => cmd::config::run(g, a, out),
         Command::Whoami(a) => cmd::whoami::run(g, a, out),
+        Command::FetchSpec(a) => cmd::fetch_spec::run(g, a, out),
         Command::Projects(a) => cmd::list::run_projects(g, a, out),
         Command::Boards(a) => cmd::list::run_boards(g, a, out),
         Command::Sprints(a) => cmd::list::run_sprints(g, a, out),

@@ -8,7 +8,7 @@
 //!
 //! Set `JIRED_FIXTURES=<dir>` to activate it for any command.
 
-use crate::api::client::{JiraApi, SearchPage, SearchQuery};
+use crate::api::client::{ApiSpec, JiraApi, SearchPage, SearchQuery, SpecModule};
 use crate::api::model::*;
 use crate::api::normalize::{self, FieldMap};
 use crate::api::{Deployment, Markup};
@@ -268,6 +268,28 @@ impl JiraApi for FixtureClient {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         })
+    }
+
+    fn spec_modules(&self) -> Vec<SpecModule> {
+        crate::api::spec_modules(self.deployment)
+    }
+
+    /// A recording describes whichever modules were captured beside it, as
+    /// `spec-<module>.<ext>`. One that was not replays the answer a server that
+    /// does not serve it gives, so both halves of the command are exercised
+    /// from the same fixture.
+    async fn api_spec(&self, module: &SpecModule) -> Result<Option<ApiSpec>> {
+        let file = self
+            .dir
+            .join(format!("spec-{}.{}", module.name, module.extension));
+        let Ok(bytes) = std::fs::read(&file) else {
+            return Ok(None);
+        };
+        Ok(Some(ApiSpec {
+            module: module.clone(),
+            media_type: "application/vnd.sun.wadl+xml".to_string(),
+            bytes,
+        }))
     }
 
     async fn myself(&self) -> Result<Myself> {

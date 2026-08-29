@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ns2:application xmlns:ns2="http://wadl.dev.java.net/2009/02"><ns2:doc
+        jersey:generatedBy="Jersey: 1.19.5-atlassian-17"
+        xmlns:jersey="http://jersey.java.net/"/><ns2:doc
+        title="Jira Agile 9.12.4"
+            xml:lang="en"><![CDATA[
+        The Jira Software REST API.
+    ]]></ns2:doc><ns2:grammars/><ns2:resources
+            base="https://jira.corp.example/jira/rest/"><ns2:resource
+                path="agile/1.0/board"><ns2:method
+                    id="getAllBoards" name="GET"><ns2:request><ns2:param
+                        name="projectKeyOrId" style="query"
+                        type="xs:string"/><ns2:param name="maxResults"
+                        style="query" type="xs:int"/></ns2:request><ns2:response><ns2:representation
+                        mediaType="application/json"/></ns2:response></ns2:method><ns2:resource
+                    path="{boardId}"><ns2:param name="boardId"
+                        style="template" type="xs:long"/><ns2:resource
+                        path="configuration"><ns2:method
+                            id="getConfiguration" name="GET"><ns2:response><ns2:representation
+                                mediaType="application/json"/></ns2:response></ns2:method></ns2:resource><ns2:resource
+                        path="sprint"><ns2:method id="getAllSprints"
+                            name="GET"><ns2:response><ns2:representation
+                                mediaType="application/json"/></ns2:response></ns2:method></ns2:resource><ns2:resource
+                        path="project"><ns2:method id="getProjects"
+                            name="GET"><ns2:response><ns2:representation
+                                mediaType="application/json"/></ns2:response></ns2:method></ns2:resource></ns2:resource></ns2:resource><ns2:resource
+                path="agile/1.0/sprint"><ns2:method id="createSprint"
+                    name="POST"><ns2:request><ns2:representation
+                        mediaType="application/json"/></ns2:request><ns2:response><ns2:representation
+                        mediaType="application/json"/></ns2:response></ns2:method><ns2:resource
+                    path="{sprintId}/issue"><ns2:param name="sprintId"
+                        style="template" type="xs:long"/><ns2:method
+                        id="moveIssuesToSprint" name="POST"><ns2:request><ns2:representation
+                            mediaType="application/json"/></ns2:request></ns2:method></ns2:resource></ns2:resource><ns2:resource
+                path="agile/1.0/backlog/issue"><ns2:method
+                    id="moveIssuesToBacklog" name="POST"><ns2:request><ns2:representation
+                        mediaType="application/json"/></ns2:request></ns2:method></ns2:resource></ns2:resources></ns2:application>

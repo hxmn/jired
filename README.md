@@ -363,6 +363,7 @@ the filename you were just editing instead of retyping the key.
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
 | `open [ISSUE]` | open it in a browser, or `--print` the URL; without an issue, pick one from the list |
 | `whoami` | which account, which server, and where the credential is kept |
+| `fetch-spec [-o DIR]` | write the server's own description of its REST API into a directory, one file per module, named for the server and its version — see [The server's own API reference](#the-servers-own-api-reference) |
 | `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and is needed only when the project's boards would answer differently; `boards` says which project each board is filed under |
 | `sprint create [NAME]` / `sprint add ISSUES… --sprint S` / `sprint remove ISSUES…` | make a sprint, and move issues in and out of one — see [Sprints](#sprints) |
 | `doctor` | check the workspace over and repair it — see below |
@@ -559,6 +560,40 @@ jired create -s 'Ship SSO' --template bug --set priority=Highest \
 
 `--set` takes any editable frontmatter name or a `customfield_*` id, the same
 vocabulary [`jired set`](#commands) uses.
+
+### The server's own API reference
+
+```sh
+jired fetch-spec --output ./specs
+```
+
+Data Center instances describe the REST API they serve, and `fetch-spec` writes
+that description out:
+
+```
+Corp Jira 9.12.4 at https://jira.corp.example/jira
+  jira.corp.example-datacenter-9.12.4-api-2.wadl      1.2 MiB
+  jira.corp.example-datacenter-9.12.4-agile-1.0.wadl  86.4 KiB
+  auth-1 — this server does not serve one
+2 files into /home/you/specs
+```
+
+One file per REST module the server describes, each named for the server and the
+version that answered — because a bare `application.wadl` in a directory is a
+file nobody can place six months later, and no two Jiras answer the same. What
+comes back is [WADL](https://en.wikipedia.org/wiki/Web_Application_Description_Language):
+paths, methods and parameters, not response bodies.
+
+This is worth having because Atlassian does not publish it. There is no official
+OpenAPI document for Data Center; the platform WADL is published per release on
+`docs.atlassian.com`, and for the Agile API — `boards`, `sprints`, every sprint
+move — there is nothing at all. Your instance serves both, for the version you
+actually run.
+
+Jira Cloud is refused: an Atlassian-hosted site serves no description of itself,
+and the [OpenAPI document](https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json)
+that covers Cloud comes from Atlassian rather than from your site — jired names
+that URL rather than fetching it under your site credential.
 
 ### Shell completions
 

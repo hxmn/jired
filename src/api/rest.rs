@@ -5,7 +5,7 @@
 //! Keeping one implementation parameterized by those facts means a fix lands on
 //! both products at once.
 
-use crate::api::client::{FieldSet, JiraApi, SearchPage, SearchQuery};
+use crate::api::client::{ApiSpec, FieldSet, JiraApi, SearchPage, SearchQuery, SpecModule};
 use crate::api::http::HttpClient;
 use crate::api::model::*;
 use crate::api::normalize::{self, FieldMap};
@@ -177,6 +177,19 @@ impl JiraApi for Rest {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         })
+    }
+
+    fn spec_modules(&self) -> Vec<SpecModule> {
+        crate::api::spec_modules(self.deployment)
+    }
+
+    async fn api_spec(&self, module: &SpecModule) -> Result<Option<ApiSpec>> {
+        let doc = self.http.get_document(&module.path, &module.accept).await?;
+        Ok(doc.map(|doc| ApiSpec {
+            module: module.clone(),
+            media_type: doc.media_type,
+            bytes: doc.bytes,
+        }))
     }
 
     async fn myself(&self) -> Result<Myself> {

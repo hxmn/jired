@@ -4,12 +4,30 @@
 //! account ids. The request/response plumbing itself is shared with Data Center
 //! in [`crate::api::rest`]; only the facts that differ live here.
 
+use crate::api::client::SpecModule;
 use crate::api::http::HttpClient;
 use crate::api::rest::Rest;
 use serde_json::{json, Value};
 
 pub fn client(http: HttpClient) -> Rest {
     Rest::new(http)
+}
+
+/// Where Atlassian publishes the Cloud OpenAPI document.
+///
+/// Named here so the error a Cloud user gets can point at it, not fetched: it
+/// lives on `developer.atlassian.com`, and the credential this client carries
+/// belongs to the Jira site alone.
+pub const PUBLISHED_OPENAPI: &str =
+    "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json";
+
+/// A Cloud site describes none of its REST modules.
+///
+/// Jira Cloud does not serve a WADL — asking for one is a 404 — and the OpenAPI
+/// document that covers it is published by Atlassian rather than by the site,
+/// so there is nothing here to fetch from the server itself.
+pub fn spec_modules() -> Vec<SpecModule> {
+    Vec::new()
 }
 
 /// Assignee/reporter payload for Cloud: `accountId`, never a username.

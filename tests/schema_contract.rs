@@ -133,36 +133,85 @@ fn schema_ids_match_their_filenames() {
     }
 }
 
-/// Drive a workspace through the commands and check each document.
-#[test]
-fn command_output_matches_its_published_schema() {
-    let dir = TempDir::new().unwrap();
-    let fixtures = dir.path().join(".fixtures");
-    std::fs::create_dir_all(&fixtures).unwrap();
-    for entry in std::fs::read_dir(repo().join("tests/fixtures/cloud"))
-        .unwrap()
-        .flatten()
-    {
-        std::fs::copy(entry.path(), fixtures.join(entry.file_name())).unwrap();
+/// A workspace wired to one deployment's recorded fixtures, and a runner for it.
+struct Fixture {
+    dir: TempDir,
+    fixtures: PathBuf,
+    cloud: bool,
+}
+
+impl Fixture {
+    fn of(deployment: &str) -> Self {
+        let dir = TempDir::new().unwrap();
+        let fixtures = dir.path().join(".fixtures");
+        std::fs::create_dir_all(&fixtures).unwrap();
+        for entry in std::fs::read_dir(repo().join("tests/fixtures").join(deployment))
+            .unwrap()
+            .flatten()
+        {
+            std::fs::copy(entry.path(), fixtures.join(entry.file_name())).unwrap();
+        }
+        Self {
+            dir,
+            fixtures,
+            cloud: deployment == "cloud",
+        }
     }
 
-    let run = |args: &[&str]| -> Option<Value> {
-        let out = Command::cargo_bin("jired")
-            .unwrap()
-            .current_dir(dir.path())
-            .env("JIRED_FIXTURES", &fixtures)
+    fn run(&self, args: &[&str]) -> Option<Value> {
+        let mut cmd = Command::cargo_bin("jired").unwrap();
+        cmd.current_dir(self.dir.path())
+            .env("JIRED_FIXTURES", &self.fixtures)
             .env("JIRED_NO_KEYRING", "1")
             .env("JIRED_SECRET_KEY", "passphrase")
-            .env("JIRED_URL", "https://fixture.invalid")
-            .env("JIRED_EMAIL", "ilya@example.invalid")
-            .env("JIRED_TOKEN", "token")
-            .env("JIRED_PROJECT", "PROJ")
+            .env("JIRED_TOKEN", "token");
+        if self.cloud {
+            cmd.env("JIRED_URL", "https://fixture.invalid")
+                .env("JIRED_EMAIL", "ilya@example.invalid")
+                .env("JIRED_PROJECT", "PROJ");
+        } else {
+            cmd.env("JIRED_URL", "https://jira.corp.example/jira")
+                .env("JIRED_AUTH", "pat")
+                .env("JIRED_PROJECT", "DC");
+        }
+        let out = cmd
             .args(args)
             .args(["--json", "--no-input", "--yes"])
             .output()
             .unwrap();
         serde_json::from_slice(&out.stdout).ok()
-    };
+    }
+}
+
+/// Check one command's document against the schema it tagged itself with.
+fn check(doc: &Value, args: &[&str]) {
+    let tag = doc["schema"]
+        .as_str()
+        .unwrap_or_else(|| panic!("`jired {}` output has no schema tag", args.join(" ")));
+    let name = tag
+        .strip_prefix("jired/")
+        .and_then(|t| t.strip_suffix("/1"))
+        .unwrap_or_else(|| panic!("malformed schema tag {tag}"));
+
+    let schema: Value = serde_json::from_str(
+        &std::fs::read_to_string(repo().join(format!("schemas/{name}.json")))
+            .unwrap_or_else(|_| panic!("no schema published for {tag}")),
+    )
+    .unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<String> = validator.iter_errors(doc).map(|e| e.to_string()).collect();
+    assert!(
+        errors.is_empty(),
+        "`jired {}` violated {tag}: {errors:?}\n{doc:#}",
+        args.join(" ")
+    );
+}
+
+/// Drive a workspace through the commands and check each document.
+#[test]
+fn command_output_matches_its_published_schema() {
+    let ws = Fixture::of("cloud");
+    let run = |args: &[&str]| ws.run(args);
 
     let scenarios: Vec<Vec<&str>> = vec![
         vec!["init", "--no-pull"],
@@ -203,27 +252,29 @@ fn command_output_matches_its_published_schema() {
         let Some(doc) = run(&args) else {
             panic!("`jired {}` produced no JSON", args.join(" "));
         };
-        let tag = doc["schema"]
-            .as_str()
-            .unwrap_or_else(|| panic!("`jired {}` output has no schema tag", args.join(" ")));
-        let name = tag
-            .strip_prefix("jired/")
-            .and_then(|t| t.strip_suffix("/1"))
-            .unwrap_or_else(|| panic!("malformed schema tag {tag}"));
-
-        let schema: Value = serde_json::from_str(
-            &std::fs::read_to_string(repo().join(format!("schemas/{name}.json")))
-                .unwrap_or_else(|_| panic!("no schema published for {tag}")),
-        )
-        .unwrap();
-        let validator = jsonschema::validator_for(&schema).unwrap();
-        let errors: Vec<String> = validator.iter_errors(&doc).map(|e| e.to_string()).collect();
-        assert!(
-            errors.is_empty(),
-            "`jired {}` violated {tag}: {errors:?}\n{doc:#}",
-            args.join(" ")
-        );
+        check(&doc, &args);
         checked += 1;
     }
     assert!(checked >= 20, "only {checked} documents were checked");
+}
+
+/// The documents only a Data Center server produces.
+///
+/// `fetch-spec` is one of them: Cloud describes none of its REST modules, so
+/// running it against the Cloud fixtures would exercise the refusal and leave
+/// the document itself unchecked.
+#[test]
+fn data_center_output_matches_its_published_schema() {
+    let ws = Fixture::of("datacenter");
+    let out = ws.dir.path().join("specs");
+
+    for args in [
+        vec!["init", "--no-pull"],
+        vec!["fetch-spec", "--output", out.to_str().unwrap()],
+    ] {
+        let Some(doc) = ws.run(&args) else {
+            panic!("`jired {}` produced no JSON", args.join(" "));
+        };
+        check(&doc, &args);
+    }
 }

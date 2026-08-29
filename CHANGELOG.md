@@ -8,6 +8,44 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.5.0] — 2026-08-29
+
+### Added
+
+- **`jired fetch-spec` writes the server's own description of its REST API.**
+  Atlassian publishes no OpenAPI document for Jira Data Center — the request for
+  one has been open for years — and for the Agile API, where `boards`, `sprints`
+  and every sprint move live, it publishes nothing at all. The instance itself
+  serves both, for the version you actually run, and this fetches them.
+
+  ```sh
+  jired fetch-spec --output ./specs
+  ```
+
+  ```
+  Corp Jira 9.12.4 at https://jira.corp.example/jira
+    jira.corp.example-datacenter-9.12.4-api-2.wadl      1.2 MiB
+    jira.corp.example-datacenter-9.12.4-agile-1.0.wadl  86.4 KiB
+    auth-1 — this server does not serve one
+  2 files into /home/you/specs
+  ```
+
+  One file per REST module the server describes, named for the server and the
+  version that answered: a bare `application.wadl` in a directory is a file
+  nobody can place later, and no two Jiras answer the same. A module a given
+  Jira does not mount is reported rather than failing the run, and so is a module
+  the credential may not read — a token without permission for the Agile plugin
+  still gets the platform API. A 200 that is not a description is skipped with a
+  warning instead of written, because an instance behind an SSO proxy answers its
+  login page for every path, and an HTML login page saved as a `.wadl` lies for
+  as long as it sits there. `--json` reports it as `jired/fetch-spec/1`.
+
+  Jira Cloud has nothing to fetch and says so with exit 10: an Atlassian-hosted
+  site serves no description of itself, and the OpenAPI document that covers
+  Cloud is published by Atlassian rather than by the site. The hint names that
+  URL rather than jired fetching it — the credential belongs to your Jira site
+  and has no business travelling to `developer.atlassian.com`.
+
 ## [0.4.0] — 2026-08-29
 
 ### Breaking

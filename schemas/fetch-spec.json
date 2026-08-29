@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/fetch-spec/1",
+  "title": "jired fetch-spec result",
+  "description": "API descriptions fetched from the server and written to disk",
+  "type": "object",
+  "required": [
+    "schema",
+    "base_url",
+    "deployment",
+    "output_dir",
+    "specs",
+    "skipped"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/fetch-spec/1"
+    },
+    "base_url": {
+      "type": "string"
+    },
+    "deployment": {
+      "type": "string"
+    },
+    "version": {
+      "type": ["string", "null"],
+      "description": "The server version the descriptions came from"
+    },
+    "title": {
+      "type": ["string", "null"]
+    },
+    "output_dir": {
+      "type": "string",
+      "description": "Directory the files were written into"
+    },
+    "specs": {
+      "type": "array",
+      "description": "One entry per file written",
+      "items": {
+        "type": "object",
+        "required": ["module", "path", "file", "media_type", "bytes"],
+        "properties": {
+          "module": {
+            "type": "string",
+            "description": "The REST module described, e.g. api-2"
+          },
+          "path": {
+            "type": "string",
+            "description": "The endpoint the description was read from"
+          },
+          "file": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "description": "Modules this server described nothing for",
+      "items": {
+        "type": "object",
+        "required": ["module", "path", "reason"],
+        "properties": {
+          "module": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

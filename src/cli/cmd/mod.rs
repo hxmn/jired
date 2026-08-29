@@ -11,6 +11,7 @@ pub mod diff;
 pub mod doctor;
 pub mod edit;
 pub mod fetch;
+pub mod fetch_spec;
 pub mod fields;
 pub mod init;
 pub mod init_agents;

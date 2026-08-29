@@ -596,6 +596,53 @@ right. So does a board whose filter spans several projects — one project is an
 answer, several is genuinely not one, and naming the first would be a guess a
 script would then act on.
 
+### `jired fetch-spec [-o/--output DIR]`
+Writes the server's own description of the REST API it serves into `DIR`
+(default `.`), one file per described module, named for the server and the
+version that answered — `jira.corp.example-datacenter-9.12.4-api-2.wadl`. The
+name is the point: a bare `application.wadl` in a directory is a file nobody can
+place six months later, and two Jiras — or two versions of one — do not answer
+the same. The version and the host keep their dots; everything else in a name is
+flattened to a dash, so a server that reports something odd as its version still
+cannot produce a path.
+
+There is no single document to fetch. Jira mounts its REST modules on Jersey,
+which serves a WADL beside each one, so the platform API (`/rest/api/2`), the
+Agile API (`/rest/agile/1.0`) and the session endpoints (`/rest/auth/1`) are
+three separate requests, and a module a given Jira does not mount is reported
+under `skipped` rather than failing the run. Asking takes an XML `Accept`: the
+`application/json` every other jired request sends comes back a 406, so the
+module carries the header it needs and the transport stays deployment-agnostic.
+
+The Agile half is why this is a command and not a link in the docs. Atlassian
+publishes the platform WADL per release on `docs.atlassian.com` and has never
+published anything for the Agile API — which is where `boards`, `sprints` and
+every sprint move live. The instance itself serves both.
+
+Cloud is refused with exit 10. An Atlassian-hosted site serves no WADL at all,
+and the OpenAPI document that covers it is published by Atlassian rather than by
+the site, so the hint names that URL instead of jired fetching it: the credential
+this client carries belongs to the Jira site and has no business travelling to
+`developer.atlassian.com`.
+
+A 200 that is not a description is skipped with a warning rather than written.
+An instance behind an SSO proxy answers its login page for every path including
+this one, and an HTML login page saved as a `.wadl` is a file that lies for as
+long as it sits there. Likewise one module refusing does not fail the run — a
+token without permission for the Agile plugin still gets the platform API — and
+the run fails only when nothing was written, and then with what the server
+actually said rather than a summary that hides it.
+
+Not in the read-only set `init-agents` grants: it writes files to a path the
+caller names, which is exactly what that list exists to keep out. Note the name
+shares a prefix with the granted `jired fetch`, and the two permission systems
+draw that line differently — Codex matches argv tokens, so `["jired", "fetch"]`
+does not cover `fetch-spec`, while a Claude Code `Bash(jired fetch:*)` entry
+matches on text and may. What it could do with that is write a WADL under a name
+it does not choose into a directory it does; worth knowing rather than worth a
+different spelling.
+JSON: `{"schema":"jired/fetch-spec/1","base_url":…,"deployment":"datacenter","version":"9.12.4","title":…,"output_dir":…,"specs":[{"module","path","file","media_type","bytes"}],"skipped":[{"module","path","reason"}]}`.
+
 ### `jired sprint create [NAME] [--board B] [--start TS] [--end TS] [--goal TEXT] [-i] [-n]`
 The one write that does not go through `push`: a sprint has no file to stage it
 in, so this posts `/rest/agile/1.0/sprint` there and then, and `-n/--dry-run`

@@ -6685,3 +6685,66 @@ fn a_sprint_just_created_can_be_pushed_into_without_a_fetch() {
     let push = ws.json(&["push"]);
     assert_eq!(push["results"][0]["ops"][0]["status"], "done");
 }
+
+/// `fetch-spec` writes what the server says about its own API, under a name
+/// that says which server and which version said it.
+#[test]
+fn fetch_spec_writes_one_file_per_described_rest_module() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+
+    let out = ws.path().join("specs");
+    let report = ws.json(&["fetch-spec", "--output", out.to_str().unwrap()]);
+
+    assert_eq!(report["version"], "9.12.4");
+    assert_eq!(report["deployment"], "datacenter");
+
+    let names: Vec<&str> = report["specs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["module"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["api-2", "agile-1.0"]);
+
+    // The board and sprint commands live on the Agile API, which Atlassian
+    // publishes no reference for at all: fetching only the platform WADL would
+    // leave exactly the half that is hardest to look up.
+    let agile = &report["specs"][1];
+    assert_eq!(agile["path"], "/rest/agile/1.0/application.wadl");
+
+    let file = out.join("jira.corp.example-datacenter-9.12.4-api-2.wadl");
+    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| {
+        panic!("{} was not written: {e}", file.display());
+    });
+    assert!(text.starts_with("<?xml"), "not a WADL:\n{text}");
+    assert!(text.contains(r#"path="api/2/search""#), "{text}");
+    assert_eq!(report["specs"][0]["file"], file.display().to_string());
+    assert_eq!(report["specs"][0]["bytes"], text.len());
+
+    // A module this Jira does not describe is reported, not invented.
+    assert_eq!(report["skipped"][0]["module"], "auth-1");
+    assert!(!out
+        .join("jira.corp.example-datacenter-9.12.4-auth-1.wadl")
+        .exists());
+}
+
+/// Cloud serves no WADL, and the answer worth giving is where the document it
+/// does have lives — not a bare refusal.
+#[test]
+fn fetch_spec_on_cloud_points_at_the_published_openapi() {
+    let ws = Ws::new();
+    ws.init();
+
+    let err = ws.json_err(&["fetch-spec", "--output", "specs"], 10);
+    assert_eq!(err["kind"], "unsupported_server");
+    assert!(
+        err["hint"]
+            .as_str()
+            .unwrap()
+            .contains("developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json"),
+        "{err}"
+    );
+    // Nothing was created for a fetch that could not happen.
+    assert!(!ws.path().join("specs").exists());
+}

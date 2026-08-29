@@ -52,12 +52,52 @@ impl SearchPage {
     }
 }
 
+/// One REST module a server publishes a machine-readable description of.
+///
+/// There is no single document describing a Jira: Data Center runs on Jersey,
+/// which serves a WADL beside each mounted REST module, so the platform API and
+/// the Agile API are two separate fetches. Everything the fetch needs travels
+/// with the module so the transport stays deployment-agnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecModule {
+    /// Slug naming the module — `api-2` — which the written file is named for.
+    pub name: String,
+    /// Where the description is served, relative to the base URL.
+    pub path: String,
+    /// What to ask for. Jersey negotiates its WADL as XML and refuses the
+    /// `application/json` every other jired request sends.
+    pub accept: String,
+    /// Suffix for the file the description is written to.
+    pub extension: String,
+}
+
+/// A module's description, exactly as the server sent it.
+#[derive(Debug, Clone)]
+pub struct ApiSpec {
+    pub module: SpecModule,
+    /// What the server said it sent, so a login page can be told from a spec.
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+}
+
 #[async_trait]
 pub trait JiraApi: Send + Sync {
     fn deployment(&self) -> Deployment;
     fn base_url(&self) -> &str;
 
     async fn server_info(&self) -> Result<ServerInfo>;
+
+    /// The REST modules this server describes about itself.
+    ///
+    /// Empty when it describes none, which is the whole answer for Cloud: an
+    /// Atlassian-hosted site serves no WADL, and the OpenAPI document that
+    /// covers it is published by Atlassian rather than by the site.
+    fn spec_modules(&self) -> Vec<SpecModule>;
+
+    /// Fetch one module's description. `None` when this server does not serve
+    /// it — a module the Jira version never mounted, or dropped.
+    async fn api_spec(&self, module: &SpecModule) -> Result<Option<ApiSpec>>;
+
     async fn myself(&self) -> Result<Myself>;
     async fn projects(&self) -> Result<Vec<Project>>;
     async fn fields(&self) -> Result<Vec<FieldMeta>>;

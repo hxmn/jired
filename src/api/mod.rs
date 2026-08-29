@@ -17,7 +17,7 @@ pub mod rest;
 pub mod scrub;
 pub mod tls;
 
-pub use client::{FieldSet, JiraApi, SearchPage, SearchQuery};
+pub use client::{ApiSpec, FieldSet, JiraApi, SearchPage, SearchQuery, SpecModule};
 pub use http::TlsOptions;
 pub use model::*;
 
@@ -276,6 +276,17 @@ pub fn make_client(conn: Connection) -> Result<Box<dyn JiraApi>> {
         Deployment::Cloud => Box::new(cloud::client(http)),
         Deployment::DataCenter => Box::new(datacenter::client(http)),
     })
+}
+
+/// The REST modules a deployment describes about itself.
+///
+/// Shared by the live client and the fixture one so a recording answers for
+/// exactly the modules a real server of that kind would be asked about.
+pub fn spec_modules(deployment: Deployment) -> Vec<SpecModule> {
+    match deployment {
+        Deployment::Cloud => cloud::spec_modules(),
+        Deployment::DataCenter => datacenter::spec_modules(),
+    }
 }
 
 /// Build the assignee/reporter payload for a deployment: Cloud wants an

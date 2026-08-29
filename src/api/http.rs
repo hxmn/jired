@@ -89,6 +89,14 @@ pub struct WebPage {
     pub html: String,
 }
 
+/// A response taken verbatim, in whatever format the server chose to send it.
+#[derive(Debug, Clone)]
+pub struct Document {
+    /// The `Content-Type` header, empty when the server sent none.
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+}
+
 pub struct HttpClient {
     client: reqwest::Client,
     base_url: String,
@@ -330,6 +338,52 @@ impl HttpClient {
             url,
             html: resp.text().await.unwrap_or_default(),
         })
+    }
+
+    /// GET a document that is not JSON, asking for it in the caller's terms.
+    ///
+    /// `None` means the server answered 404: a REST module a given Jira version
+    /// does not mount still answers for itself, and "there is nothing here" is
+    /// that answer rather than a failure worth reporting. No retry loop — this
+    /// is a one-shot fetch, not part of a sync that has to survive a flaky link.
+    pub async fn get_document(&self, path: &str, accept: &str) -> Result<Option<Document>> {
+        self.limiter.acquire().await;
+        let url = self.url(path);
+        let started = Instant::now();
+        tracing::debug!("GET {path}");
+        // A per-request `Accept` wins over the client's default: reqwest fills
+        // in default headers only where the request left the key vacant.
+        let resp = self
+            .client
+            .get(&url)
+            .header(ACCEPT, accept)
+            .send()
+            .await
+            .map_err(|e| network_error(&e, &Method::GET, path))?;
+        let status = resp.status();
+        tracing::debug!(
+            "GET {path} → {} in {}ms",
+            status.as_u16(),
+            started.elapsed().as_millis()
+        );
+        if status == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(self.status_error(status, &Method::GET, path, resp).await);
+        }
+        let media_type = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| JiredError::network(format!("reading {path}: {e}")))?
+            .to_vec();
+        Ok(Some(Document { media_type, bytes }))
     }
 
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {

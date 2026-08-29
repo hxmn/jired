@@ -44,6 +44,10 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("fetch", include_str!("../../../schemas/fetch.json")),
     ("fields", include_str!("../../../schemas/fields.json")),
     (
+        "fetch-spec",
+        include_str!("../../../schemas/fetch-spec.json"),
+    ),
+    (
         "frontmatter",
         include_str!("../../../schemas/frontmatter.json"),
     ),
