@@ -68,6 +68,21 @@ impl Rest {
         }
     }
 
+    /// The numeric id behind an issue key.
+    ///
+    /// Asked for the cheapest field there is: what is wanted is beside it, in
+    /// every payload, whatever was requested.
+    async fn issue_id(&self, key: &str) -> Result<String> {
+        let v = self
+            .http
+            .get_json(&format!("{}/issue/{key}?fields=summary", self.api()))
+            .await?;
+        v.get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| JiredError::generic(format!("{key}: the server reported no issue id")))
+    }
+
     pub fn new(http: HttpClient) -> Self {
         let deployment = http.deployment();
         Self {
@@ -621,6 +636,23 @@ impl JiraApi for Rest {
             .post_json(&path, json!({ "issues": keys }))
             .await
             .map(|_| ())
+    }
+
+    async fn move_subtask_parent(&self, key: &str, parent: &str) -> Result<()> {
+        match self.deployment {
+            // Cloud grew a REST route for this and Data Center never did, so
+            // Cloud's is the ordinary field edit every other field takes.
+            Deployment::Cloud => {
+                self.update_fields(key, json!({ "parent": { "key": parent } }))
+                    .await
+            }
+            // The wizard is addressed by the issue's id, not its key: it is a
+            // web action, and web actions predate the key ever being accepted.
+            Deployment::DataCenter => {
+                let id = self.issue_id(key).await?;
+                crate::api::datacenter::move_subtask_parent(&self.http, key, &id, parent).await
+            }
+        }
     }
 
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {

@@ -99,6 +99,15 @@ pub trait JiraApi: Send + Sync {
     /// board API is the way that works on both deployments.
     async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()>;
 
+    /// Put a sub-task under a different parent.
+    ///
+    /// Its own call because the two deployments do not share one. Cloud takes
+    /// `parent` as an ordinary field edit; Data Center accepts that payload,
+    /// answers 204 and ignores it, and offers the operation only as the web
+    /// action behind the Move dialog. Both ends of that difference are hidden
+    /// here, which is what lets `push` plan one operation for both.
+    async fn move_subtask_parent(&self, key: &str, parent: &str) -> Result<()>;
+
     /// Every worklog on an issue, for the case the issue payload paged them.
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>>;
     async fn add_worklog(&self, key: &str, worklog: &WorklogInput) -> Result<RemoteWorklog>;

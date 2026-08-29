@@ -283,6 +283,13 @@ enum Action {
         /// looks like.
         from: Option<String>,
     },
+    /// Put a sub-task under a different parent. Its own operation because Data
+    /// Center has no field update that does it; see
+    /// [`crate::api::datacenter::move_subtask_parent`].
+    MoveParent {
+        /// The parent it must be under when the issue is read back.
+        to: String,
+    },
     /// Transition a *different* issue: ticking a subtask's box under `## Children`.
     TransitionOther {
         key: String,
@@ -1334,27 +1341,17 @@ fn plan(
             }
         }
     }
-    // Jira re-parents a sub-task through the Move operation, and Data Center
-    // exposes that nowhere in the REST API. `PUT /issue` takes the payload,
-    // answers success and leaves the parent exactly where it was — so this has
-    // to be refused rather than sent, and refused here rather than after the
-    // fact, so `--dry-run` says so before the user trusts a green plan.
-    if fields.contains_key("parent")
-        && is_subtask(base_raw)
-        && engine.account.deployment == crate::api::Deployment::DataCenter
-    {
-        return Err(JiredError::unsupported_server(format!(
-            "{}: a sub-task's parent can only be changed by Jira's Move operation, \
-             which Data Center does not offer over the API",
-            bf.key
-        ))
-        .with_detail("issue", bf.key.clone())
-        .with_detail("from", json!(bf.parent))
-        .with_detail("to", json!(wf.parent))
-        .with_hint(
-            "move the sub-task in Jira and pull, or put `parent:` back to what the \
-             server holds",
-        ));
+    // Jira re-parents a sub-task through its Move operation, and on Data Center
+    // that is a web action rather than a REST endpoint: `PUT /issue` takes the
+    // payload, answers success and leaves the parent exactly where it was. The
+    // change leaves the field payload here and becomes a call of its own, so
+    // what goes out is the operation that works rather than the one that is
+    // quietly discarded.
+    let mut move_parent = None;
+    if is_subtask(base_raw) && engine.account.deployment == crate::api::Deployment::DataCenter {
+        if let Some(payload) = fields.remove("parent") {
+            move_parent = Some(subtask_parent(&bf.key, &payload)?);
+        }
     }
 
     plan_custom_fields(
@@ -1375,6 +1372,23 @@ fn plan(
             summary: field_names(&payload),
             request: json!({"method": "PUT", "path": "/issue/{key}", "body": {"fields": payload}}),
             action: Action::UpdateFields(payload),
+        });
+    }
+
+    // After the field update rather than before it: the wizard walks away from
+    // the REST API and is the one operation here that can leave a step
+    // half-finished, so everything an ordinary call can do is already done when
+    // it starts.
+    if let Some(to) = move_parent {
+        ops.push(Op {
+            kind: "move_parent",
+            summary: match &bf.parent {
+                Some(from) => format!("{from} → {to}"),
+                None => to.clone(),
+            },
+            request: json!({"method": "POST", "path": "/secure/MoveSubTaskParent.jspa",
+                            "body": {"id": "{id}", "parentIssue": to}}),
+            action: Action::MoveParent { to },
         });
     }
 
@@ -1704,6 +1718,39 @@ fn plan(
     Ok(ops)
 }
 
+/// The key a sub-task's new `parent:` names, or why it cannot be one.
+///
+/// Two things Jira's Move wizard will not do, refused here rather than in the
+/// HTML it would answer with. A sub-task has to have a parent — the operation
+/// that leaves it without one is a conversion to a standard issue, which is a
+/// different wizard — and it cannot cross projects, because its key would have
+/// to change with it ([JRASERVER-15259]).
+///
+/// [JRASERVER-15259]: https://jira.atlassian.com/browse/JRASERVER-15259
+fn subtask_parent(key: &str, payload: &Value) -> Result<String> {
+    let to = payload.get("key").and_then(Value::as_str).unwrap_or("");
+    if to.is_empty() {
+        return Err(JiredError::usage(format!(
+            "{key}: a sub-task cannot be left without a parent"
+        ))
+        .with_detail("issue", key.to_string())
+        .with_hint(
+            "put `parent:` back, or convert the sub-task to a standard issue in \
+             Jira and pull",
+        ));
+    }
+    let project = |k: &str| k.rsplit_once('-').map(|(p, _)| p.to_uppercase());
+    if project(to) != project(key) {
+        return Err(JiredError::usage(format!(
+            "{key}: a sub-task cannot be moved to a parent in another project"
+        ))
+        .with_detail("issue", key.to_string())
+        .with_detail("parent", to.to_string())
+        .with_hint("move the parent issue's project in Jira, which moves its sub-tasks with it"));
+    }
+    Ok(to.to_string())
+}
+
 /// Whether the issue's type is one of Jira's sub-tasks.
 ///
 /// Read off the flag Jira itself goes by rather than off the type's name:
@@ -1747,6 +1794,17 @@ fn unapplied(action: &Action, confirmed: &RemoteIssue) -> Option<String> {
                 (Some(wanted), None) => format!("the parent is still unset, not {wanted}"),
                 (None, Some(now)) => format!("the parent is still {now}"),
                 (None, None) => unreachable!("equal parents are not a difference"),
+            })
+        }
+        // The wizard answers in HTML, and a page that renders is not a move
+        // that happened — an upgrade that moves the form, a permission the
+        // account turns out not to have, a step that quietly re-renders. This
+        // is the only evidence there is.
+        Action::MoveParent { to } => {
+            let now = confirmed.fields.parent.as_deref();
+            (!same(now, Some(to))).then(|| match now {
+                Some(now) => format!("the parent is still {now}, not {to}"),
+                None => format!("the parent is still unset, not {to}"),
             })
         }
         // Read through the workspace's field map, so an instance whose `/field`
@@ -2033,6 +2091,7 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                     .move_to_sprint(sprint.as_deref(), &[key.to_string()])
                     .await
             }
+            Action::MoveParent { to } => client.move_subtask_parent(key, to).await,
             Action::CreateComment(body) => client.add_comment(key, body).await.map(|_| ()),
             Action::UpdateComment { id, body } => {
                 client.update_comment(key, id, body).await.map(|_| ())
@@ -2241,6 +2300,46 @@ mod tests {
             )
             .is_none(),
             "the sprint it rolled over from is still in the list"
+        );
+    }
+
+    /// The wizard answers in HTML: a page rendered without complaint is not
+    /// evidence, so the move is judged by where the issue then is.
+    #[test]
+    fn a_re_parenting_is_believed_only_when_the_parent_moved() {
+        let moved = Action::MoveParent {
+            to: "TSK-301".into(),
+        };
+        assert!(unapplied(&moved, &confirmed(Some("TSK-301"), &[])).is_none());
+        assert!(unapplied(&moved, &confirmed(Some("tsk-301"), &[])).is_none());
+        assert!(unapplied(&moved, &confirmed(Some("TSK-203"), &[]))
+            .expect("the parent did not move")
+            .contains("TSK-203"));
+        assert!(unapplied(&moved, &confirmed(None, &[]))
+            .expect("the parent did not move")
+            .contains("still unset"));
+    }
+
+    /// The two moves Jira's wizard has no page for, refused while the edit is
+    /// still on screen rather than as the HTML it would answer with.
+    #[test]
+    fn a_sub_task_needs_a_parent_and_cannot_leave_its_project() {
+        assert_eq!(
+            subtask_parent("DC-79", &json!({"key": "DC-78"})).unwrap(),
+            "DC-78"
+        );
+        let none = subtask_parent("DC-79", &Value::Null).unwrap_err();
+        assert!(
+            none.message.contains("without a parent"),
+            "{}",
+            none.message
+        );
+
+        let across = subtask_parent("DC-79", &json!({"key": "OPS-12"})).unwrap_err();
+        assert!(
+            across.message.contains("another project"),
+            "{}",
+            across.message
         );
     }
 

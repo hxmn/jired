@@ -8,6 +8,43 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.4.0] — 2026-08-29
+
+### Breaking
+
+- **A sub-task's `parent:` is sent on Data Center instead of refused.** 0.3.3
+  made the change exit 10 at plan time, which was the honest answer while jired
+  had no route for it; it now has one, and a push that used to fail applies the
+  move. A workspace scripted around the refusal — treating exit 10 on a
+  `parent:` edit as "leave it staged" — will find the edit gone through instead.
+  The two moves Jira genuinely cannot make are still refused, now at exit 2: a
+  sub-task with no parent at all, and a parent in another project.
+
+### Added
+
+- **Sub-tasks move between parents on Data Center.** Jira exposes this nowhere
+  in its REST API — `PUT /issue` takes a sub-task's `parent`, answers success
+  and leaves it where it was, which is [JRASERVER-68763], open since 2018 — so
+  `push` drives the same Move wizard the UI does: it fetches the form Jira
+  serves, posts back every field that form declared with the new parent filled
+  in, and follows the confirm step. Reading the form rather than assuming its
+  shape is what keeps it working across versions, and `push --dry-run` shows it
+  as `move_parent` against `/secure/MoveSubTaskParent.jspa` rather than
+  pretending it is a REST call. It is a web action, so success is never taken
+  on its word: the re-read that already follows every push checks the parent
+  actually moved, and one that did not is a failed operation with the edit
+  still in the file. Cloud is unchanged — there the field update works, and it
+  is still what goes out.
+
+- **`jired parent ISSUES… --to ISSUE`** stages the same change without opening
+  the files, across as many sub-tasks as you name — the case it exists for is
+  the four sub-tasks filed under the wrong story. Staged like `label` and
+  `sprint add`: `status` and `diff` show it, `push` sends it, `--push` sends it
+  now. An issue already under that parent is reported and not staged; an issue
+  named as its own parent is exit 2.
+
+[JRASERVER-68763]: https://jira.atlassian.com/browse/JRASERVER-68763
+
 ## [0.3.3] — 2026-08-29
 
 ### Fixed

@@ -21,6 +21,7 @@ pub mod log;
 pub mod logwork;
 pub mod lookup;
 pub mod open;
+pub mod parent;
 pub mod pick;
 pub mod prompt;
 pub mod pull;

@@ -57,6 +57,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("log", include_str!("../../../schemas/log.json")),
     ("logwork", include_str!("../../../schemas/logwork.json")),
     ("open", include_str!("../../../schemas/open.json")),
+    ("parent", include_str!("../../../schemas/parent.json")),
     ("projects", include_str!("../../../schemas/projects.json")),
     ("pull", include_str!("../../../schemas/pull.json")),
     ("push", include_str!("../../../schemas/push.json")),

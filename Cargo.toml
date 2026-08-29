@@ -1,6 +1,6 @@
 [package]
 name = "jired"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 # std file locking (`File::try_lock`) stabilized in 1.89.
 rust-version = "1.89"
@@ -24,8 +24,12 @@ clap_complete = "4.6"
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "fs", "time", "sync"] }
 # `rustls-no-provider` keeps the aws-lc-rs C toolchain out of the build; the
 # ring provider is installed explicitly in `api::http`.
+# `cookies` is for Data Center's Move wizard alone: it is a web action rather
+# than a REST endpoint, and its XSRF check compares the form's `atl_token`
+# against the cookie the same session was handed.
 reqwest = { version = "0.13", default-features = false, features = [
     "json", "rustls-no-provider", "multipart", "stream", "gzip", "system-proxy",
+    "cookies",
 ] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rusqlite = { version = "0.40", features = ["bundled", "chrono"] }

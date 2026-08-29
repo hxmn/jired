@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/parent/1",
+  "title": "jired parent result",
+  "description": "Sub-tasks staged for a different parent",
+  "type": "object",
+  "required": [
+    "schema",
+    "parent",
+    "issues",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/parent/1"
+    },
+    "parent": {
+      "type": "string",
+      "description": "The issue key they were moved under"
+    },
+    "issues": {
+      "type": "array",
+      "description": "One entry per issue whose file was written",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the issue was already under that parent"
+          }
+        }
+      }
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

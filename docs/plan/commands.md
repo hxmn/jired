@@ -197,11 +197,24 @@ reported as history that cannot be rewritten.
 A sub-task is not a board item — it takes its sprint from its parent — so a
 `sprint:` on one is refused at plan time (exit 2, the hint naming the parent to
 move instead) rather than sent to a board call that answers 204 and does
-nothing. Its `parent:` is refused the same way on Data Center (exit 10), where
-Jira re-parents a sub-task only through the Move operation, which the REST API
-does not offer. Both refusals are made in `plan`, so `--dry-run` shows them
-before anything is sent, and both leave the edit in the file: the issue fails,
-base does not advance, and nothing is overwritten.
+nothing. The refusal is made in `plan`, so `--dry-run` shows it before anything
+is sent, and it leaves the edit in the file: the issue fails, base does not
+advance, and nothing is overwritten.
+A sub-task's `parent:` is an operation of its own on Data Center, not a field
+update: `PUT /issue` accepts the payload, answers success and ignores it, and
+the REST API offers no route at all (JRASERVER-68763). The change is taken out
+of the field payload in `plan` and becomes a `move_parent` op, which drives the
+web action behind Jira's Move dialog — `GET
+/secure/MoveSubTaskParent!default.jspa?id=…`, then the form that page serves,
+posted back with `parentIssue` filled in and every field it declared (the
+`atl_token` its XSRF check wants included), following its redirects to the
+confirm step. Reading the form rather than assuming it is what survives a
+version change; the answer is verified by re-reading the issue, because a page
+that renders is not a move that happened. Cloud sends the field update, which
+is the route Atlassian added there and never on Data Center. Two moves have no
+wizard page and are refused at plan time (exit 2): a sub-task with no parent at
+all, which is a conversion rather than a move, and a parent in another project,
+which would have to change the sub-task's key.
 A 2xx is not evidence, so the re-read that rebuilds the file is asked first
 whether the change is in it. `parent` and the sprint are checked — the two whose
 payload and whose rendering can be compared without guessing, and the two Jira
@@ -682,6 +695,19 @@ A label containing whitespace is exit 2 — Jira labels have no spaces, so it is
 list somebody separated the wrong way — and so is passing several to `add` or
 `remove`, which act on one at a time.
 JSON: `{"schema":"jired/label/1","operation":"add","labels":["regular"],"issues":[…],"pushed":false}`.
+
+### `jired parent ISSUES… --to ISSUE [--push] [--dry-run]`
+Writes `parent:` across several sub-tasks at once, staged like `label` and
+`sprint add`: the same edit a text editor makes, without opening four files to
+correct one misfiling. `--to` takes a key or a path, and something that is not
+an issue key is exit 2 rather than a value pushed at the server. An issue
+already under that parent is reported and not staged, and an issue named as its
+own parent is exit 2 — the shape a mistyped `--to` usually takes.
+
+What `push` does with the staged line differs by deployment and neither this
+command nor the file carries that difference; see `push` above for the Move
+wizard Data Center needs and the verification that follows it.
+JSON: `{"schema":"jired/parent/1","parent":"PROJ-150","issues":[…],"pushed":false}`.
 
 ### `jired set --field F --value V ISSUES… [--push] [--dry-run]`
 The general form of the three above, for the fields that do not earn their own

@@ -568,6 +568,31 @@ impl JiraApi for FixtureClient {
         Ok(())
     }
 
+    /// Recorded under the path the wizard's own step posts to, so a test can
+    /// tell a move that was sent from one that was only planned — and so
+    /// `ignored.json` can make this "server" answer it and do nothing, which
+    /// is the failure the real one is capable of.
+    async fn move_subtask_parent(&self, key: &str, parent: &str) -> Result<()> {
+        let path = "/secure/MoveSubTaskParent.jspa";
+        self.record("POST", path, json!({ "id": key, "parentIssue": parent }))?;
+        if !self.applies("POST", path) {
+            return Ok(());
+        }
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            let Some(issue) = issues.get_mut(key) else {
+                return Err(JiredError::usage(format!("fixture has no issue {key}"))
+                    .with_hint(FIXTURE_HINT)
+                    .with_detail("status", 404));
+            };
+            // Keep the shape a real payload has: the id and summary of the
+            // parent travel with the key, and the renderer reads all three.
+            issue["fields"]["parent"] = json!({ "key": parent });
+        }
+        self.bump_updated(key);
+        Ok(())
+    }
+
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {
         let v = self.issue_value(key)?;
         Ok(normalize::worklogs_from(

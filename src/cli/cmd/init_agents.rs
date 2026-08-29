@@ -578,11 +578,20 @@ pub fn render() -> String {
     );
     s.push_str(
         "A sub-task is not a board item: it takes its sprint from its parent, and \
-         a `sprint:` on one is exit 2 naming the parent to move instead. Its \
-         `parent:` is the same on Data Center, where Jira changes it only through \
-         the Move operation it offers nowhere in the API: exit 10. Both are \
-         refused at plan time, so `push --dry-run` shows them, and nothing is \
-         sent and nothing is overwritten — the edit stays in the file.\n\n",
+         a `sprint:` on one is exit 2 naming the parent to move instead. It is \
+         refused at plan time, so `push --dry-run` shows it, and nothing is sent \
+         and nothing is overwritten — the edit stays in the file.\n\n",
+    );
+    s.push_str(
+        "`jired parent KEY… --to ISSUE` moves sub-tasks under a different parent, \
+         and stages like `sprint add` does; editing `parent:` in the file is the \
+         same change. Cloud sends a field update. Data Center has no REST call \
+         for it — `PUT /issue` accepts the payload and ignores it — so `push` \
+         drives the same Move wizard the UI does, shown in `--dry-run` as \
+         `move_parent`, and then re-reads the issue: a parent that did not \
+         actually move fails the push with the edit still in the file. Two moves \
+         Jira has no page for are exit 2 at plan time: leaving a sub-task with \
+         no parent, and a parent in another project.\n\n",
     );
     s.push_str(
         "A push that moves an issue between sprints, columns or parents rebuilds \
@@ -831,6 +840,7 @@ mod tests {
             ("transition", "stages a status change"),
             ("assign", "stages an assignee"),
             ("label", "stages labels"),
+            ("parent", "stages a sub-task's parent"),
             ("set", "stages any editable field"),
             ("attach", "stages a file for upload"),
             ("open", "launches a browser"),

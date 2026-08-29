@@ -3889,31 +3889,188 @@ fn a_sub_task_cannot_be_moved_into_a_sprint_of_its_own() {
     assert_eq!(ws.json(&["status"])["dirty"][0]["key"], "PROJ-143");
 }
 
-/// Data Center re-parents a sub-task through the Move operation, which it
-/// exposes nowhere in the API: `PUT /issue` takes `parent`, answers success and
-/// leaves it where it was.
+const DC_SUB_TASK: &str = "DC-0079. Update the connector config.md";
+
+/// Data Center re-parents a sub-task through the Move wizard, which is a web
+/// action rather than a REST endpoint — `PUT /issue` takes `parent`, answers
+/// success and leaves it where it was. The plan has to say which of the two it
+/// is sending, and the push has to send it.
 #[test]
-fn a_sub_tasks_parent_is_refused_on_data_center() {
+fn a_sub_task_moves_to_another_parent_on_data_center() {
     let ws = Ws::of(Deployment::DataCenter);
     ws.init();
     ws.json(&["pull"]);
 
-    const SUB_TASK: &str = "DC-0079. Update the connector config.md";
-    let text = ws.read(SUB_TASK);
+    let text = ws.read(DC_SUB_TASK);
     assert!(text.contains("parent: DC-77"), "{text}");
-    ws.write(SUB_TASK, &text.replace("parent: DC-77", "parent: DC-78"));
+    ws.write(DC_SUB_TASK, &text.replace("parent: DC-77", "parent: DC-78"));
 
-    let report = ws.json_code(&["push", "--dry-run"], 10);
+    // The dry run names the wizard, not `PUT /issue`: the whole point is that
+    // the call jired would otherwise make is the one that does nothing.
+    let planned = ws.json(&["push", "--dry-run"]);
+    let op = &planned["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "move_parent", "{planned}");
+    assert_eq!(op["summary"], "DC-77 → DC-78", "{planned}");
+    assert_eq!(
+        op["request"]["path"], "/secure/MoveSubTaskParent.jspa",
+        "{planned}"
+    );
+
+    let journal = ws.path().join("calls.jsonl");
+    let out = ws
+        .cmd(&["push", "--yes"])
+        .arg("--json")
+        .env("JIRED_FIXTURE_JOURNAL", &journal)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The parent left the field payload: sending it there is the silence this
+    // whole path exists to avoid.
+    let calls: Vec<Value> = std::fs::read_to_string(&journal)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c["path"] == "/secure/MoveSubTaskParent.jspa"
+                && c["body"]["parentIssue"] == "DC-78"),
+        "the wizard was driven: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c["body"]["fields"]["parent"].is_object()),
+        "no PUT carried the parent: {calls:?}"
+    );
+
+    // And the file now reads back from the server, which is what a push that
+    // worked looks like.
+    assert!(ws.read(DC_SUB_TASK).contains("parent: DC-78"));
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// The wizard answers in HTML, so a step that renders is not a move that
+/// happened. The push re-reads the issue, and a parent that did not move fails
+/// the operation with the edit still in the file — the same protection the
+/// swallowed field update gets.
+#[test]
+fn a_re_parenting_the_server_does_not_make_fails_the_push() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "ignored.json",
+        serde_json::json!(["POST /secure/MoveSubTaskParent.jspa"]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws.read(DC_SUB_TASK);
+    ws.write(DC_SUB_TASK, &text.replace("parent: DC-77", "parent: DC-78"));
+
+    let report = ws.json_code(&["push", "--yes"], 10);
     let result = &report["results"][0];
     assert_eq!(result["ok"], false, "{report}");
     assert!(
-        result["error"].as_str().unwrap().contains("Move operation"),
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("the parent is still DC-77"),
         "{report}"
     );
-    assert!(result["ops"].as_array().unwrap().is_empty(), "{report}");
 
-    ws.json_code(&["push", "--yes"], 10);
-    assert!(ws.read(SUB_TASK).contains("parent: DC-78"));
+    assert!(ws.read(DC_SUB_TASK).contains("parent: DC-78"));
+    assert_eq!(ws.json(&["status"])["dirty"][0]["key"], "DC-79");
+}
+
+/// The two moves Jira has no wizard page for. Refused while the edit is on
+/// screen, rather than sent and answered with a page nobody can read.
+#[test]
+fn a_sub_task_cannot_lose_its_parent_or_change_project() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let original = ws.read(DC_SUB_TASK);
+
+    ws.write(DC_SUB_TASK, &original.replace("parent: DC-77\n", ""));
+    let report = ws.json_code(&["push", "--dry-run"], 2);
+    assert!(
+        report["results"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("without a parent"),
+        "{report}"
+    );
+
+    ws.write(
+        DC_SUB_TASK,
+        &original.replace("parent: DC-77", "parent: OPS-12"),
+    );
+    let report = ws.json_code(&["push", "--dry-run"], 2);
+    assert!(
+        report["results"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("another project"),
+        "{report}"
+    );
+
+    // Nothing was sent and nothing was rewritten, either time.
+    assert!(ws.read(DC_SUB_TASK).contains("parent: OPS-12"));
+}
+
+/// `jired parent` is the same edit without opening the file, and stages like
+/// every other write command.
+#[test]
+fn parent_stages_a_move_and_pushes_it() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let staged = ws.json(&["parent", "DC-79", "--to", "DC-78"]);
+    assert_eq!(staged["schema"], "jired/parent/1", "{staged}");
+    assert_eq!(staged["parent"], "DC-78", "{staged}");
+    assert_eq!(staged["issues"][0]["key"], "DC-79", "{staged}");
+    assert_eq!(staged["issues"][0]["changed"], true, "{staged}");
+    assert_eq!(staged["pushed"], false, "{staged}");
+    assert!(ws.read(DC_SUB_TASK).contains("parent: DC-78"));
+    assert_eq!(ws.json(&["status"])["dirty"][0]["key"], "DC-79");
+
+    // Staging the move it is already staged for changes nothing rather than
+    // giving `push` an operation that does nothing.
+    let again = ws.json(&["parent", "DC-79", "--to", "DC-78"]);
+    assert_eq!(again["issues"][0]["changed"], false, "{again}");
+    ws.json(&["push", "--yes"]);
+
+    // And back again, sent in the one command this time.
+    let pushed = ws.json(&["parent", "DC-79", "--to", "DC-77", "--push"]);
+    assert_eq!(pushed["push"]["summary"]["ok"], 1, "{pushed}");
+    assert_eq!(
+        pushed["push"]["results"][0]["ops"][0]["kind"], "move_parent",
+        "{pushed}"
+    );
+    assert!(ws.read(DC_SUB_TASK).contains("parent: DC-77"));
+}
+
+/// An issue cannot hang off itself, and a mistyped `--to` is what that usually
+/// is. Caught before the file is written rather than by the server.
+#[test]
+fn parent_refuses_an_issue_as_its_own_parent() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws
+        .cmd(&["parent", "DC-79", "--to", "DC-79"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(ws.read(DC_SUB_TASK).contains("parent: DC-77"));
 }
 
 /// A 2xx is not evidence. The reported case in one push: a `parent` and a sprint

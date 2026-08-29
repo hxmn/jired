@@ -345,6 +345,7 @@ the filename you were just editing instead of retyping the key.
 | `transition ISSUE --to STATUS` | stage a workflow change; `--list` shows what is available, `--field k=v` fills a transition screen |
 | `assign ISSUE --me\|--user Q\|--none` | stage an assignee change |
 | `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues; `add`/`remove` keep the other labels, `set` replaces them |
+| `parent ISSUES… --to ISSUE` | move sub-tasks under a different parent — see [Sub-tasks](#sub-tasks) |
 | `set --field F --value V ISSUES…` | stage any editable field across issues, including `customfield_*` ids |
 | `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues |
 | `set --field F --value V ISSUES…` | stage any editable field across issues |
@@ -478,10 +479,9 @@ that does nothing.
 A sub-task is the one issue none of this reaches: it is not a board item, and
 takes its sprint from whatever its parent is in. `push` refuses a `sprint:` on
 one — exit 2, naming the parent to move instead — rather than making a board
-call Jira answers 204 to and ignores. Its `parent:` is refused the same way on
-Data Center (exit 10), where a sub-task moves between parents only through
-Jira's Move operation, which the API does not offer. Both show in `push
---dry-run`, and both leave your edit where you wrote it.
+call Jira answers 204 to and ignores. It shows in `push --dry-run`, and it
+leaves your edit where you wrote it. Moving the sub-task itself is
+[below](#sub-tasks).
 
 The frontmatter is still the interface, and `sprint:` is a history — an issue
 that rolls over stays in the sprint it came from — so a move appends to the list
@@ -489,6 +489,38 @@ and only its last entry is where the issue is now. `sprint remove` empties it,
 which is what the backlog looks like in a file. See
 [Grouping folders](#grouping-folders) for the `sprints/` view of where
 everything is.
+
+### Sub-tasks
+
+```sh
+jired parent PROJ-143,PROJ-144 --to PROJ-150    # stage the move
+jired parent PROJ-143 --to PROJ-150 --push      # and send it
+```
+
+`parent:` in the frontmatter is where a sub-task hangs, and editing that line
+does exactly what the command does — several issues at a time is the only reason
+the command exists, that and not having to open four files to fix one
+misfiling.
+
+What `push` then does with it depends on the deployment, and neither the file
+nor the command has to know. Cloud takes `parent` as an ordinary field update.
+Data Center has no REST call for it at all: `PUT /issue` accepts the payload,
+answers success and leaves the parent exactly where it was — the request behind
+[JRASERVER-68763](https://jira.atlassian.com/browse/JRASERVER-68763), open since
+2018 — so jired drives the same Move wizard the UI drives, posting the form
+Jira itself serves rather than a payload guessed at from outside. `push
+--dry-run` shows it as `move_parent` against `/secure/MoveSubTaskParent.jspa`,
+which is the honest description: it is a web action, unversioned, and an
+upgrade can move it.
+
+Which is why the result is never taken on the wizard's word. `push` re-reads
+the issue afterwards, and a parent that did not actually move is a failed
+operation — exit 10, your edit still in the file, nothing overwritten — rather
+than a green push and a line quietly rewritten back. The two moves Jira has no
+page for are refused before anything is sent, at exit 2: a sub-task cannot be
+left without a parent (that is a conversion, in Jira's UI), and it cannot be
+moved to a parent in another project, because its key would have to change with
+it.
 
 ### Grouping folders
 

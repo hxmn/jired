@@ -222,6 +222,8 @@ pub enum Command {
     /// Put a label on issues, or take one off
     #[command(subcommand)]
     Label(cmd::label::LabelCmd),
+    /// Move sub-tasks under a different parent
+    Parent(cmd::parent::ParentArgs),
     /// Write any editable field on any number of issues
     Set(cmd::set::SetArgs),
     /// Stage a file for upload to an issue
@@ -334,6 +336,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Transition(a) => cmd::transition::run(g, a, out),
         Command::Assign(a) => cmd::assign::run(g, a, out),
         Command::Label(a) => cmd::label::run(g, a, out),
+        Command::Parent(a) => cmd::parent::run(g, a, out),
         Command::Set(a) => cmd::set::run(g, a, out),
         Command::Attach(a) => cmd::attach::run(g, a, out),
         Command::Attachments(a) => cmd::attach::run_attachments(g, a, out),

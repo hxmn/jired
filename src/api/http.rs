@@ -83,6 +83,12 @@ impl RateLimiter {
     }
 }
 
+/// An HTML reply, and the URL the redirects finished at.
+pub struct WebPage {
+    pub url: String,
+    pub html: String,
+}
+
 pub struct HttpClient {
     client: reqwest::Client,
     base_url: String,
@@ -116,6 +122,11 @@ impl HttpClient {
 
         let mut builder = reqwest::Client::builder()
             .default_headers(headers)
+            // Only Data Center's Move wizard needs this, and it needs it twice
+            // over: the session cookie carries the wizard's own state between
+            // its two steps, and the XSRF cookie is half of the pair the
+            // `atl_token` in the form is checked against.
+            .cookie_store(true)
             .user_agent(concat!("jired/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(15));
@@ -255,6 +266,70 @@ impl HttpClient {
                 }
             }
         }
+    }
+
+    /// Fetch a Jira page that is not part of the REST API.
+    ///
+    /// One operation needs this: re-parenting a sub-task on Data Center, which
+    /// Jira exposes only as the web action behind the Move dialog. The reply is
+    /// HTML, so `Accept` has to say so — the client-wide default asks for JSON,
+    /// and Jira honours it by answering some web actions with a JSON error
+    /// instead of the form the caller came for.
+    pub async fn get_page(&self, path: &str) -> Result<WebPage> {
+        self.limiter.acquire().await;
+        let url = self.url(path);
+        tracing::debug!("GET {path}");
+        let resp = self
+            .client
+            .get(&url)
+            .header(ACCEPT, "text/html,application/xhtml+xml")
+            .send()
+            .await
+            .map_err(|e| network_error(&e, &Method::GET, path))?;
+        self.page(Method::GET, path, resp).await
+    }
+
+    /// Submit an HTML form, following Jira's redirect to the next step.
+    ///
+    /// `action` is whatever the form itself declared, which is a path far more
+    /// often than a URL; both are accepted so the caller can pass it through
+    /// unread.
+    pub async fn post_form(&self, action: &str, fields: &[(String, String)]) -> Result<WebPage> {
+        self.limiter.acquire().await;
+        let url = if action.starts_with("http://") || action.starts_with("https://") {
+            action.to_string()
+        } else {
+            self.url(action)
+        };
+        tracing::debug!("POST {action} ({} field(s))", fields.len());
+        // The values can name an issue and its new parent, which is content;
+        // the same rule the JSON bodies follow puts them at `-vv`.
+        tracing::trace!("POST {action} form: {fields:?}");
+        let resp = self
+            .client
+            .post(&url)
+            .header(ACCEPT, "text/html,application/xhtml+xml")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(form_encode(fields))
+            .send()
+            .await
+            .map_err(|e| network_error(&e, &Method::POST, action))?;
+        self.page(Method::POST, action, resp).await
+    }
+
+    async fn page(&self, method: Method, path: &str, resp: reqwest::Response) -> Result<WebPage> {
+        let status = resp.status();
+        // Where the redirects stopped, which is how the wizard says which step
+        // it is on — and, at the end, that it has left the wizard entirely.
+        let url = resp.url().to_string();
+        tracing::debug!("{method} {path} → {} at {url}", status.as_u16());
+        if !status.is_success() {
+            return Err(self.status_error(status, &method, path, resp).await);
+        }
+        Ok(WebPage {
+            url,
+            html: resp.text().await.unwrap_or_default(),
+        })
     }
 
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
@@ -431,6 +506,25 @@ fn b64(s: &str) -> String {
         });
     }
     out
+}
+
+/// `application/x-www-form-urlencoded`, as a browser would send it.
+///
+/// A space is `+` and everything outside the unreserved set is escaped: an
+/// XSRF token carries `|`, and a summary carried in a hidden field can carry
+/// anything at all.
+fn form_encode(fields: &[(String, String)]) -> String {
+    fields
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                urlencoding::encode(k).replace("%20", "+"),
+                urlencoding::encode(v).replace("%20", "+")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 fn should_retry_status(status: StatusCode) -> bool {
