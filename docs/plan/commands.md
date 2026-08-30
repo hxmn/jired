@@ -235,6 +235,27 @@ write that can be accepted and not performed, it is verified on the re-read: an
 assignee that did not change fails the operation at exit 10 with the edit left
 in the file.
 
+A `links:` line is an operation of its own on both deployments: an added line
+is a `create_link` op (`POST /issueLink`), a removed one a `delete_link`
+(`DELETE /issueLink/{id}`, the id read out of the base snapshot's `issuelinks`
+entry — the file spells a link as a direction and a key, and only the snapshot
+still knows the id). The direction the file spells — `is blocked by` — is
+resolved against the instance's link types (`GET /issueLinkType`), fetched once
+per push and only when a link actually changed. Jira's convention reads
+backwards and is absorbed in `plan`: the *inward* issue of the create call is
+the one that bears the type's *outward* description, so `TSK-303 is blocked by
+TSK-266` posts `{inwardIssue: TSK-266, outwardIssue: TSK-303}`. A direction
+this Jira does not define is refused at plan time (exit 2, visible in
+`--dry-run`), the hint naming the directions it does offer. A removed link is
+deleted without the opt-in a comment or worklog deletion takes: those are
+unrecoverable content someone else may have written, while a link is exactly
+the pair on the deleted line, and an ordinary revert puts it back. On a `NEW-*`
+issue the links are follow-ups after the create — the create call has no field
+for them — planned before it so the dry run lists them and an unknown
+direction refuses the issue while nothing has been sent. `epic` remains the
+one editable field with no call behind it; a change to it is warned about
+rather than sent.
+
 A sub-task's `parent:` is an operation of its own on Data Center, not a field
 update: `PUT /issue` accepts the payload, answers success and ignores it, and
 the REST API offers no route at all (JRASERVER-68763). The change is taken out

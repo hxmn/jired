@@ -8,6 +8,30 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.9.0] — 2026-08-31
+
+### Added
+
+- **`push` sends `links:`.** The field was editable in the format, counted by
+  `diff`, and had no call behind it — since 0.5.0 a push at least warned, and
+  the links still had to be clicked together in the Jira web UI (the reported
+  case: an issue created with four `is blocked by` lines arrived with none).
+  An added line is now a `create_link` op (`POST /issueLink`), a removed one a
+  `delete_link` (`DELETE /issueLink/{id}`, the id read out of the base
+  snapshot), on both deployments. The direction the file spells — `is blocked
+  by`, `blocks` — is resolved against the instance's own link types (`GET
+  /issueLinkType`, fetched once per push and only when a link changed), and
+  Jira's backwards convention is absorbed in the plan: the *inward* issue of
+  the create call is the one that bears the type's *outward* description. A
+  direction the instance does not define is refused at plan time (exit 2,
+  visible in `--dry-run`), the hint naming the directions it does offer. On a
+  `NEW-*` issue the links follow the create as their own planned ops, aimed at
+  the key the create hands back. A removed link is deleted without an opt-in
+  flag, unlike a comment or a worklog: the pair is exactly what was on the
+  deleted line, and a revert puts it back. `jired/push/1` gains the two op
+  kinds; `epic` remains the one editable field push cannot send, and still
+  says so.
+
 ## [0.8.0] — 2026-08-30
 
 ### Breaking

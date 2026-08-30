@@ -526,9 +526,17 @@ pub fn render() -> String {
     // trusts it either skips an editable field or edits a rejected one.
     s.push_str(&format!(
         "Editable frontmatter fields: {}. A difference in one of these becomes an API \
-         call on the next push.\n\n",
+         call on the next push. The one exception is `epic`, which jired cannot send \
+         yet: a change to it is warned about rather than sent.\n\n",
         field_list(frontmatter::EDITABLE)
     ));
+    s.push_str(
+        "`links:` is a list of single-entry maps, one link per line, spelled with the \
+         instance's own directed wording: `- is blocked by: PROJ-1`, `- blocks: PROJ-2`. \
+         Adding a line creates the link on the next push, deleting one deletes it; a \
+         direction this Jira does not define is refused at plan time, naming the ones \
+         it does.\n\n",
+    );
     s.push_str(&format!(
         "Read-only fields: {}; `jired:` is the whole sync block. They only report \
          server state, so an edit is dropped with a warning on the next write.\n\n",

@@ -324,6 +324,27 @@ route!(
 );
 
 route!(
+    /// The instance's link types, asked for once per push and only when a
+    /// `links:` line changed: the directed descriptions a file spells a link
+    /// with are per instance, not a fixed vocabulary.
+    ISSUE_LINK_TYPES,
+    "getIssueLinkTypes",
+    "GET",
+    Api,
+    "issueLinkType",
+);
+route!(CREATE_ISSUE_LINK, "linkIssues", "POST", Api, "issueLink");
+route!(
+    /// By the link's own id — the one each `issuelinks` entry carries — which
+    /// is why deleting needs the snapshot the link was last seen in.
+    DELETE_ISSUE_LINK,
+    "deleteIssueLink",
+    "DELETE",
+    Api,
+    "issueLink/{linkId}",
+);
+
+route!(
     ADD_ATTACHMENT,
     "addAttachment",
     "POST",
@@ -439,6 +460,9 @@ pub const ALL: &[&Route] = &[
     &ADD_WORKLOG,
     &UPDATE_WORKLOG,
     &DELETE_WORKLOG,
+    &ISSUE_LINK_TYPES,
+    &CREATE_ISSUE_LINK,
+    &DELETE_ISSUE_LINK,
     &ADD_ATTACHMENT,
     &FIND_USERS,
     &FIND_ASSIGNABLE_USERS,
@@ -565,6 +589,9 @@ mod tests {
             "addWorklog",
             "updateWorklog",
             "deleteWorklog",
+            "getIssueLinkTypes",
+            "linkIssues",
+            "deleteIssueLink",
             "addAttachment",
             "findUsers",
             "findAssignableUsers",
@@ -578,7 +605,7 @@ mod tests {
         ] {
             assert!(listed.contains(&id), "{id} is missing from ALL");
         }
-        assert_eq!(ALL.len(), 32, "a route was added without a test naming it");
+        assert_eq!(ALL.len(), 35, "a route was added without a test naming it");
 
         // `getIssue` is a method id in both modules, so nothing may key on the
         // id alone — the contract test keys on (method, path).

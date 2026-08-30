@@ -919,6 +919,45 @@ impl JiraApi for Rest {
         Ok(Some(screen))
     }
 
+    async fn link_types(&self) -> Result<Vec<IssueLinkType>> {
+        let v = self.get(&routes::ISSUE_LINK_TYPES, &[], &[]).await?;
+        Ok(v.get("issueLinkTypes")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| {
+                        Some(IssueLinkType {
+                            id: id_string(t.get("id")?)?,
+                            name: t.get("name")?.as_str()?.to_string(),
+                            inward: t.get("inward")?.as_str()?.to_string(),
+                            outward: t.get("outward")?.as_str()?.to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn create_link(&self, type_name: &str, inward: &str, outward: &str) -> Result<()> {
+        self.http
+            .post_json(
+                &self.url(&routes::CREATE_ISSUE_LINK, &[], &[]),
+                json!({
+                    "type": { "name": type_name },
+                    "inwardIssue": { "key": inward },
+                    "outwardIssue": { "key": outward },
+                }),
+            )
+            .await
+            .map(|_| ())
+    }
+
+    async fn delete_link(&self, link_id: &str) -> Result<()> {
+        self.http
+            .delete(&self.url(&routes::DELETE_ISSUE_LINK, &[("linkId", link_id)], &[]))
+            .await
+    }
+
     async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
         self.http
             .put_json(

@@ -190,6 +190,18 @@ pub trait JiraApi: Send + Sync {
     /// type named as a person names it.
     async fn create_meta(&self, project: &str, issue_type: &str) -> Result<Option<ScreenMeta>>;
 
+    /// The link types this instance defines, directions and all.
+    async fn link_types(&self) -> Result<Vec<IssueLinkType>>;
+
+    /// Link two issues. Jira's own convention, which reads backwards: the
+    /// *inward* issue is the one that bears the type's *outward* description —
+    /// `{inward: A, outward: B}` with `Blocks` records "A blocks B".
+    async fn create_link(&self, type_name: &str, inward: &str, outward: &str) -> Result<()>;
+
+    /// Delete a link by its own id — the one the issue payload carries on each
+    /// `issuelinks` entry, not either issue's.
+    async fn delete_link(&self, link_id: &str) -> Result<()>;
+
     /// Set or clear an issue's assignee.
     ///
     /// Its own route rather than a field edit. Jira offers `PUT

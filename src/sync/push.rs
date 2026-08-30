@@ -303,6 +303,22 @@ enum Action {
         key: String,
         to_status: String,
     },
+    /// Link this issue to another. The type's registered name, because that is
+    /// what the create call takes; which side this issue is on, because the
+    /// call does not know whose file the line was written in.
+    CreateLink {
+        type_name: String,
+        other_key: String,
+        /// Whether this issue is the link's *inward* issue — which, in Jira's
+        /// backwards convention, is the side that bears the type's *outward*
+        /// description: `blocks OTHER` puts this issue inward.
+        self_is_inward: bool,
+    },
+    /// Unlink, by the link's own id out of the base snapshot — the only place
+    /// it exists, since the file spells a link as a direction and a key.
+    DeleteLink {
+        id: String,
+    },
 }
 
 pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
@@ -323,6 +339,10 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         .get_u64("attachments.max_upload")?
         .unwrap_or(50 * 1024 * 1024);
     let done_transition = ctx.resolver.get_value("children.done_transition")?;
+    let mut link_types = LinkTypes {
+        client: client.as_ref(),
+        cached: None,
+    };
     let mut wanted: Vec<String> = args
         .issues
         .iter()
@@ -389,6 +409,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             &row.key,
             &file.relative,
             args,
+            &mut link_types,
         ) {
             Ok(result) => {
                 if let Some(new_key) = &result.new_key {
@@ -524,6 +545,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 max_upload,
                 done_transition.as_deref(),
                 moved.map(String::as_str),
+                &mut link_types,
                 &mut report.warnings,
             )
         })();
@@ -794,6 +816,7 @@ fn create_issue(
     temp_key: &str,
     file: &str,
     args: &PushArgs,
+    link_types: &mut LinkTypes<'_>,
 ) -> Result<IssueResult> {
     let doc = engine.projector.read(file)?;
     let project = engine
@@ -905,7 +928,7 @@ fn create_issue(
     // rather than after the write so `--dry-run` can show them: a plan that
     // listed only `create_issue` was how a move or a transition went unnoticed
     // until the file came back without it.
-    let (follow_ups, follow_up_warnings) = follow_ups_after_create(&doc, &sprints);
+    let (follow_ups, follow_up_warnings) = follow_ups_after_create(&doc, &sprints, link_types)?;
     for w in &follow_up_warnings {
         ctx.out.warn(w);
     }
@@ -1268,7 +1291,8 @@ struct FollowUp {
 fn follow_ups_after_create(
     doc: &IssueDoc,
     sprints: &[crate::store::state::SprintRow],
-) -> (Vec<FollowUp>, Vec<String>) {
+    link_types: &mut LinkTypes<'_>,
+) -> Result<(Vec<FollowUp>, Vec<String>)> {
     let mut out = Vec::new();
     let mut warnings = Vec::new();
 
@@ -1314,7 +1338,185 @@ fn follow_ups_after_create(
             },
         });
     }
-    (out, warnings)
+
+    // The create call has no field for links, so each `links:` line is a call
+    // of its own, aimed at the key the create hands back. Resolved here,
+    // before anything is sent, so an unknown direction refuses the issue with
+    // the edit still on screen rather than after the create has happened.
+    for (direction, other) in doc.frontmatter.link_pairs() {
+        let (type_name, self_is_inward) =
+            resolved_link(&doc.frontmatter.key, &direction, link_types.get()?)?;
+        let (inward, outward) = link_ends("{key}", &other, self_is_inward);
+        out.push(FollowUp {
+            kind: "create_link",
+            summary: format!("{direction} {other}"),
+            request: json!({"method": "POST", "path": "/issueLink",
+                            "body": {"type": {"name": type_name},
+                                     "inwardIssue": {"key": inward},
+                                     "outwardIssue": {"key": outward}}}),
+            action: Action::CreateLink {
+                type_name,
+                other_key: other,
+                self_is_inward,
+            },
+        });
+    }
+    Ok((out, warnings))
+}
+
+/// The instance's link types, fetched once per push and only when a `links:`
+/// line actually changed. Most pushes carry none, and a request on every one
+/// would be paid by everybody for a field few touch.
+struct LinkTypes<'a> {
+    client: &'a dyn JiraApi,
+    cached: Option<Vec<crate::api::IssueLinkType>>,
+}
+
+impl LinkTypes<'_> {
+    fn get(&mut self) -> Result<&[crate::api::IssueLinkType]> {
+        if self.cached.is_none() {
+            self.cached = Some(crate::api::block_on(self.client.link_types())?);
+        }
+        Ok(self.cached.as_deref().expect("just filled"))
+    }
+}
+
+/// Resolve the direction a `links:` line spells — `is blocked by` — into the
+/// type's registered name and which side this issue is on, or refuse with the
+/// directions this Jira does offer (exit 2, at plan time, so `--dry-run` shows
+/// it and nothing has been sent).
+fn resolved_link(
+    key: &str,
+    direction: &str,
+    types: &[crate::api::IssueLinkType],
+) -> Result<(String, bool)> {
+    // The outward reading first; when both match the type is symmetric —
+    // `relates to` both ways — and the sides are interchangeable anyway.
+    for t in types {
+        if t.outward.eq_ignore_ascii_case(direction) {
+            return Ok((t.name.clone(), true));
+        }
+    }
+    for t in types {
+        if t.inward.eq_ignore_ascii_case(direction) {
+            return Ok((t.name.clone(), false));
+        }
+    }
+    let mut known: Vec<String> = types
+        .iter()
+        .flat_map(|t| [t.outward.clone(), t.inward.clone()])
+        .collect();
+    known.sort();
+    known.dedup();
+    Err(JiredError::usage(format!(
+        "{key}: `{direction}` is not a link direction this Jira knows"
+    ))
+    .with_detail("issue", key.to_string())
+    .with_detail("direction", direction.to_string())
+    .with_detail("known", json!(known))
+    .with_hint(match known.is_empty() {
+        true => "the server offered no link types; check the credential can read them".to_string(),
+        false => format!("one of: {}", known.join(", ")),
+    }))
+}
+
+/// The `(inwardIssue, outwardIssue)` of the create call, given which side this
+/// issue is on. `{key}` stands for an issue not yet created.
+fn link_ends(self_key: &str, other: &str, self_is_inward: bool) -> (String, String) {
+    match self_is_inward {
+        true => (self_key.to_string(), other.to_string()),
+        false => (other.to_string(), self_key.to_string()),
+    }
+}
+
+/// The id of the link the base snapshot shows as `(direction, key)`.
+///
+/// Read the way `normalize` reads the pair — the entry's `outwardIssue` under
+/// the type's outward name, else its `inwardIssue` under the inward one — so
+/// what was rendered into the file is exactly what is found here.
+fn link_id_in(base_raw: &Value, direction: &str, other_key: &str) -> Option<String> {
+    base_raw
+        .pointer("/fields/issuelinks")?
+        .as_array()?
+        .iter()
+        .find_map(|l| {
+            let t = l.get("type")?;
+            let (desc, other) = match l.get("outwardIssue") {
+                Some(o) => (t.get("outward")?.as_str()?, o.get("key")?.as_str()?),
+                None => {
+                    let i = l.get("inwardIssue")?;
+                    (t.get("inward")?.as_str()?, i.get("key")?.as_str()?)
+                }
+            };
+            if desc != direction || other != other_key {
+                return None;
+            }
+            // Jira is inconsistent about whether ids are numbers or strings.
+            match l.get("id")? {
+                Value::String(s) => Some(s.clone()),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            }
+        })
+}
+
+/// Plan the `links:` half of an update: a create per added line, a delete per
+/// removed one.
+///
+/// A removed link is deleted without the opt-in a comment or a worklog takes:
+/// those are unrecoverable content someone else may have written, while a link
+/// is exactly the pair on the line that was deleted, and an ordinary revert
+/// puts it back.
+fn plan_links(
+    bf: &crate::doc::Frontmatter,
+    wf: &crate::doc::Frontmatter,
+    base_raw: &Value,
+    link_types: &mut LinkTypes<'_>,
+    ops: &mut Vec<Op>,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    let before = bf.link_pairs();
+    let after = wf.link_pairs();
+    if before == after {
+        return Ok(());
+    }
+
+    for (direction, other) in after.iter().filter(|p| !before.contains(p)) {
+        let (type_name, self_is_inward) = resolved_link(&bf.key, direction, link_types.get()?)?;
+        let (inward, outward) = link_ends(&bf.key, other, self_is_inward);
+        ops.push(Op {
+            kind: "create_link",
+            summary: format!("{direction} {other}"),
+            request: json!({"method": "POST", "path": "/issueLink",
+                            "body": {"type": {"name": type_name},
+                                     "inwardIssue": {"key": inward},
+                                     "outwardIssue": {"key": outward}}}),
+            action: Action::CreateLink {
+                type_name,
+                other_key: other.clone(),
+                self_is_inward,
+            },
+        });
+    }
+
+    for (direction, other) in before.iter().filter(|p| !after.contains(p)) {
+        match link_id_in(base_raw, direction, other) {
+            Some(id) => ops.push(Op {
+                kind: "delete_link",
+                summary: format!("{direction} {other}"),
+                request: json!({"method": "DELETE", "path": format!("/issueLink/{id}")}),
+                action: Action::DeleteLink { id },
+            }),
+            // A snapshot too old to carry the id: nothing to aim a DELETE at,
+            // and guessing would delete somebody's other link.
+            None => warnings.push(format!(
+                "{}: the last-synced snapshot carries no id for `{direction}: {other}`, so \
+                 that link was not deleted — run `jired pull`, then remove it again",
+                bf.key
+            )),
+        }
+    }
+    Ok(())
 }
 
 /// What an editable frontmatter field becomes on the wire.
@@ -1389,15 +1591,12 @@ pub fn issue_field(
             None => Mapped::Refused("this instance has no Story Points field".to_string()),
         },
         // Carried by an operation of their own further down.
-        "status" | "sprint" | "custom" => Mapped::Elsewhere,
+        "status" | "sprint" | "custom" | "links" => Mapped::Elsewhere,
         // Known to the format, not yet to push. Warned about rather than
-        // dropped: `diff` calls these sendable, and a push that reported clean
-        // success without them would be lying about what it did.
+        // dropped: `diff` calls it sendable, and a push that reported clean
+        // success without it would be lying about what it did.
         "epic" => Mapped::Refused(
             "jired cannot send `epic` yet; set the epic in Jira and pull".to_string(),
-        ),
-        "links" => Mapped::Refused(
-            "jired cannot send `links` yet; add the link in Jira and pull".to_string(),
         ),
         other => Mapped::Refused(format!("`{other}` is not a field jired knows how to send")),
     }
@@ -1439,6 +1638,7 @@ fn plan(
     max_upload: u64,
     done_transition: Option<&str>,
     board_move: Option<&str>,
+    link_types: &mut LinkTypes<'_>,
     warnings: &mut Vec<String>,
 ) -> Result<Vec<Op>> {
     let mut ops = Vec::new();
@@ -1650,6 +1850,8 @@ fn plan(
             action: Action::Transition { to_status: to },
         });
     }
+
+    plan_links(bf, wf, base_raw, link_types, &mut ops, warnings)?;
 
     for c in &working.comments {
         match &c.id {
@@ -2292,6 +2494,15 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
             }
             Action::Assign { to } => client.assign(key, to.as_deref()).await,
             Action::MoveParent { to } => client.move_subtask_parent(key, to).await,
+            Action::CreateLink {
+                type_name,
+                other_key,
+                self_is_inward,
+            } => {
+                let (inward, outward) = link_ends(key, other_key, *self_is_inward);
+                client.create_link(type_name, &inward, &outward).await
+            }
+            Action::DeleteLink { id } => client.delete_link(id).await,
             Action::CreateComment(body) => client.add_comment(key, body).await.map(|_| ()),
             Action::UpdateComment { id, body } => {
                 client.update_comment(key, id, body).await.map(|_| ())
@@ -2594,6 +2805,84 @@ mod tests {
             &confirmed(None, &[])
         )
         .is_none());
+    }
+
+    fn link_types() -> Vec<crate::api::IssueLinkType> {
+        let t = |name: &str, inward: &str, outward: &str| crate::api::IssueLinkType {
+            id: "1".into(),
+            name: name.into(),
+            inward: inward.into(),
+            outward: outward.into(),
+        };
+        vec![
+            t("Blocks", "is blocked by", "blocks"),
+            t("Relates", "relates to", "relates to"),
+        ]
+    }
+
+    /// The reported case, spelled from the file's side: `TSK-303 is blocked by
+    /// TSK-266` must put the *blocker* at the inward end, because Jira's inward
+    /// issue is the one that bears the type's outward description.
+    #[test]
+    fn a_link_direction_resolves_to_the_sides_jira_expects() {
+        let types = link_types();
+
+        let (name, self_is_inward) = resolved_link("TSK-303", "is blocked by", &types).unwrap();
+        assert_eq!(name, "Blocks");
+        assert!(!self_is_inward);
+        assert_eq!(
+            link_ends("TSK-303", "TSK-266", self_is_inward),
+            ("TSK-266".to_string(), "TSK-303".to_string())
+        );
+
+        let (name, self_is_inward) = resolved_link("TSK-303", "Blocks", &types).unwrap();
+        assert_eq!(name, "Blocks");
+        assert!(self_is_inward, "`blocks` reads outward from this issue");
+        assert_eq!(
+            link_ends("TSK-303", "TSK-310", self_is_inward),
+            ("TSK-303".to_string(), "TSK-310".to_string())
+        );
+
+        // A symmetric type matches both ways; either side is the same link.
+        assert!(resolved_link("TSK-303", "relates to", &types).is_ok());
+    }
+
+    /// The refusal is exit 2 at plan time, and it names what the server does
+    /// offer — the file's spelling is per instance, not a fixed vocabulary.
+    #[test]
+    fn an_unknown_link_direction_is_refused_naming_the_known_ones() {
+        let err = resolved_link("TSK-303", "depends on", &link_types()).unwrap_err();
+        assert_eq!(err.exit_code().as_i32(), 2);
+        assert!(err.message.contains("depends on"), "{}", err.message);
+        let hint = err.hint.as_deref().unwrap();
+        assert!(hint.contains("is blocked by"), "{hint}");
+        assert!(hint.contains("blocks"), "{hint}");
+    }
+
+    /// A deletion aims at the link's own id, which only the base snapshot
+    /// holds; the pair is matched exactly the way the file was rendered.
+    #[test]
+    fn a_removed_link_is_found_in_the_snapshot_by_direction_and_key() {
+        let raw = json!({"fields": {"issuelinks": [
+            {"id": "10500",
+             "type": {"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+             "outwardIssue": {"key": "PROJ-150"}},
+            {"id": 10501,
+             "type": {"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+             "inwardIssue": {"key": "PROJ-99"}}
+        ]}});
+        assert_eq!(
+            link_id_in(&raw, "blocks", "PROJ-150").as_deref(),
+            Some("10500")
+        );
+        // A numeric id still reads, and the inward side matches its own name.
+        assert_eq!(
+            link_id_in(&raw, "is blocked by", "PROJ-99").as_deref(),
+            Some("10501")
+        );
+        // The same key under the wrong direction is a different link.
+        assert_eq!(link_id_in(&raw, "is blocked by", "PROJ-150"), None);
+        assert_eq!(link_id_in(&json!({}), "blocks", "PROJ-150"), None);
     }
 
     #[test]

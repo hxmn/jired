@@ -259,6 +259,18 @@ impl JiraApi for DataCenter {
         self.rest.create_meta(project, issue_type).await
     }
 
+    async fn link_types(&self) -> Result<Vec<IssueLinkType>> {
+        self.rest.link_types().await
+    }
+
+    async fn create_link(&self, type_name: &str, inward: &str, outward: &str) -> Result<()> {
+        self.rest.create_link(type_name, inward, outward).await
+    }
+
+    async fn delete_link(&self, link_id: &str) -> Result<()> {
+        self.rest.delete_link(link_id).await
+    }
+
     async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
         self.rest.assign(key, user_id).await
     }

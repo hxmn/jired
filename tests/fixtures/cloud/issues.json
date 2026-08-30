@@ -118,11 +118,13 @@
         {
           "type": {
             "outward": "blocks",
-            "inward": "is blocked by"
+            "inward": "is blocked by",
+            "name": "Blocks"
           },
           "outwardIssue": {
             "key": "PROJ-150"
-          }
+          },
+          "id": "10500"
         }
       ],
       "subtasks": [

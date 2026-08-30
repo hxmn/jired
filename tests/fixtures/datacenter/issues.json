@@ -63,11 +63,13 @@
         {
           "type": {
             "outward": "relates to",
-            "inward": "relates to"
+            "inward": "relates to",
+            "name": "Relates"
           },
           "outwardIssue": {
             "key": "DC-78"
-          }
+          },
+          "id": "20500"
         }
       ],
       "subtasks": [

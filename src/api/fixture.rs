@@ -566,6 +566,87 @@ impl JiraApi for FixtureClient {
         .map(|v| normalize::screen_from_json(&v)))
     }
 
+    async fn link_types(&self) -> Result<Vec<IssueLinkType>> {
+        Ok(read_json(&self.dir, "linkTypes.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default())
+    }
+
+    /// Applied to both ends, the way the server stores one record and shows it
+    /// twice: the inward issue gains an `outwardIssue` entry and vice versa,
+    /// so a re-read of either renders the link from its own side.
+    async fn create_link(&self, type_name: &str, inward: &str, outward: &str) -> Result<()> {
+        self.record(
+            "POST",
+            "/issueLink",
+            json!({
+                "type": { "name": type_name },
+                "inwardIssue": { "key": inward },
+                "outwardIssue": { "key": outward },
+            }),
+        )?;
+        let link_type = self
+            .link_types()
+            .await?
+            .into_iter()
+            .find(|t| t.name.eq_ignore_ascii_case(type_name))
+            .ok_or_else(|| {
+                JiredError::usage(format!("fixture has no link type `{type_name}`"))
+                    .with_hint(FIXTURE_HINT)
+            })?;
+        let id = self.next_id();
+        let type_json = json!({
+            "id": link_type.id, "name": link_type.name,
+            "inward": link_type.inward, "outward": link_type.outward,
+        });
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            for (own_key, role, other_key) in [
+                (inward, "outwardIssue", outward),
+                (outward, "inwardIssue", inward),
+            ] {
+                // An end outside the recording — a link to an issue the
+                // fixture never held — is simply not reflected, as a pull
+                // that never fetches it would never see it either.
+                let Some(issue) = issues.get_mut(own_key) else {
+                    continue;
+                };
+                let entry = json!({
+                    "id": id, "type": type_json,
+                    role: { "key": other_key },
+                });
+                match issue["fields"]["issuelinks"].as_array_mut() {
+                    Some(list) => list.push(entry),
+                    None => issue["fields"]["issuelinks"] = json!([entry]),
+                }
+            }
+        }
+        self.bump_updated(inward);
+        self.bump_updated(outward);
+        Ok(())
+    }
+
+    async fn delete_link(&self, link_id: &str) -> Result<()> {
+        self.record("DELETE", &format!("/issueLink/{link_id}"), Value::Null)?;
+        let mut touched = Vec::new();
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            for (key, issue) in issues.iter_mut() {
+                if let Some(list) = issue["fields"]["issuelinks"].as_array_mut() {
+                    let before = list.len();
+                    list.retain(|l| l.get("id").and_then(Value::as_str) != Some(link_id));
+                    if list.len() != before {
+                        touched.push(key.clone());
+                    }
+                }
+            }
+        }
+        for key in touched {
+            self.bump_updated(&key);
+        }
+        Ok(())
+    }
+
     /// The dedicated assignee route, recorded under its own path.
     ///
     /// Its own recording is the point: a test can tell an assignee that was

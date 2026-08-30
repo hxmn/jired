@@ -197,6 +197,9 @@ Anything else you add to the header is kept verbatim and never sent, so notes of
 your own survive a pull. `summary` in the frontmatter wins over the `# ` heading
 when the two disagree; the heading is written from it.
 
+One exception to the first row: `epic` has no call behind it yet, so a change to
+it is warned about rather than sent.
+
 Links are single-entry maps, one per line, using the link type's own wording:
 
 ```yaml
@@ -204,6 +207,13 @@ links:
 - blocks: PROJ-150
 - relates to: PROJ-99
 ```
+
+The direction is the line: `- is blocked by: TSK-266` and `- blocks: TSK-266`
+are the two ends of the same link type. Push turns an added line into
+`POST /issueLink`, a removed one into `DELETE /issueLink/{id}`, and resolves
+the wording against the instance's own link types — a direction this Jira does
+not define is refused at plan time (exit 2, visible in `--dry-run`), naming the
+ones it does.
 
 `due_date:` is Jira's own `duedate` — a date with no time, `2026-09-14`. It is a
 system field, so it is named in the header rather than living under `custom:`.

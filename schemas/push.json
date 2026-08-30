@@ -76,6 +76,8 @@
                     "create_worklog",
                     "update_worklog",
                     "delete_worklog",
+                    "create_link",
+                    "delete_link",
                     "upload_attachment",
                     "rename_file"
                   ]

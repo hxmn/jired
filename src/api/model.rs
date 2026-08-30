@@ -182,6 +182,22 @@ pub struct IssueLink {
     pub other_key: String,
 }
 
+/// One of the instance's link types, with both directed descriptions.
+///
+/// A file spells a link by a description — `is blocked by` — and the create
+/// call wants the type's registered name plus which side each issue is on;
+/// this is the table that turns one into the other.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IssueLinkType {
+    pub id: String,
+    /// The registered name — `Blocks` — which is what the create call names.
+    pub name: String,
+    /// How the link reads on the issue at the outward end: `is blocked by`.
+    pub inward: String,
+    /// How it reads on the issue at the inward end: `blocks`.
+    pub outward: String,
+}
+
 /// Normalized issue fields. `raw` on [`RemoteIssue`] remains the source of
 /// truth for anything not modelled here.
 #[derive(Debug, Clone, Default, PartialEq)]

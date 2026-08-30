@@ -3114,8 +3114,8 @@ fn creating_an_issue_sends_every_field_the_file_carries() {
 }
 
 /// A field jired cannot send must not be reported as a clean success. `epic`
-/// and `links` are in the format and in `diff`, and push has no call for
-/// either; saying so is the difference between a known gap and a lost value.
+/// is in the format and in `diff`, and push has no call for it; saying so is
+/// the difference between a known gap and a lost value.
 #[test]
 fn a_field_push_cannot_send_is_warned_about_rather_than_dropped() {
     let ws = Ws::new();
@@ -3146,6 +3146,122 @@ fn a_field_push_cannot_send_is_warned_about_rather_than_dropped() {
             .any(|w| w.as_str().unwrap().contains("`epic`")),
         "no warning about the field that was not sent: {push}"
     );
+}
+
+/// The field report's case: `links:` is editable and now has calls behind it.
+/// An added line becomes `POST /issueLink`, a removed one `DELETE
+/// /issueLink/{id}`, and the sides follow Jira's backwards convention — the
+/// issue that "is blocked by" another stands at the *outward* end, because the
+/// inward issue is the one that bears the type's outward description.
+#[test]
+fn a_link_edit_becomes_its_own_calls_on_push() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("- blocks: PROJ-150", "- is blocked by: PROJ-143");
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let ops = dry["results"][0]["ops"].as_array().unwrap().clone();
+    let create = ops
+        .iter()
+        .find(|o| o["kind"] == "create_link")
+        .expect("a create_link op");
+    assert_eq!(create["request"]["method"], "POST");
+    assert_eq!(create["request"]["path"], "/issueLink");
+    assert_eq!(create["request"]["body"]["type"]["name"], "Blocks");
+    // PROJ-142 is blocked by PROJ-143: the blocker is the inward issue.
+    assert_eq!(create["request"]["body"]["inwardIssue"]["key"], "PROJ-143");
+    assert_eq!(create["request"]["body"]["outwardIssue"]["key"], "PROJ-142");
+    let delete = ops
+        .iter()
+        .find(|o| o["kind"] == "delete_link")
+        .expect("a delete_link op");
+    // By the link's own id, read out of the base snapshot.
+    assert_eq!(delete["request"]["path"], "/issueLink/10500");
+
+    let push = ws.json(&["push"]);
+    assert_eq!(push["results"][0]["ok"], true, "{push}");
+
+    // The re-read shows the link from this issue's side, and base advanced.
+    let after = ws.read(ISSUE_FILE);
+    assert!(after.contains("is blocked by: PROJ-143"), "{after}");
+    assert!(!after.contains("blocks: PROJ-150"), "{after}");
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+}
+
+/// A direction the instance does not define is refused while nothing has been
+/// sent: exit 2, in the plan, the hint naming the directions it does offer —
+/// the spelling is per instance, not a fixed vocabulary.
+#[test]
+fn an_unknown_link_direction_is_refused_at_plan_time() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("- blocks: PROJ-150", "- depends on: PROJ-143");
+    ws.write(ISSUE_FILE, &text);
+
+    let dry = ws.json_code(&["push", "--dry-run"], 2);
+    let result = &dry["results"][0];
+    assert_eq!(result["ok"], false);
+    assert!(
+        result["error"].as_str().unwrap().contains("depends on"),
+        "{dry}"
+    );
+    assert!(
+        result["hint"].as_str().unwrap().contains("is blocked by"),
+        "{dry}"
+    );
+
+    // Refused for real too, with the edit still in the file.
+    ws.json_code(&["push"], 2);
+    let status = ws.json(&["status"]);
+    assert_eq!(status["dirty"].as_array().unwrap().len(), 1, "{status}");
+    assert!(ws.read(ISSUE_FILE).contains("- depends on: PROJ-143"));
+}
+
+/// The live case from the field report: an issue created with `is blocked by`
+/// lines was created and the links never followed. They are follow-ups the
+/// create call cannot carry — planned before it so `--dry-run` shows them,
+/// aimed at the key the create hands back.
+#[test]
+fn a_new_issue_pushes_its_links_after_the_create() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["create", "--summary", "Wire the audit log"]);
+    let file = report["file"].as_str().unwrap().to_string();
+    let text = ws.read(&file).replace(
+        "links: []",
+        "links:\n- is blocked by: PROJ-143\n- relates to: PROJ-150",
+    );
+    ws.write(&file, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let kinds: Vec<&str> = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create_issue", "create_link", "create_link"]);
+
+    let push = ws.json(&["push"]);
+    let result = &push["results"][0];
+    assert_eq!(result["ok"], true, "{push}");
+    let new_key = result["new_key"].as_str().unwrap();
+    let number = new_key.rsplit('-').next().unwrap();
+    let created = ws.read(&format!("PROJ-{number:0>4}. Wire the audit log.md"));
+    assert!(created.contains("is blocked by: PROJ-143"), "{created}");
+    assert!(created.contains("relates to: PROJ-150"), "{created}");
 }
 
 #[test]
