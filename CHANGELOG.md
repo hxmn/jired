@@ -8,6 +8,61 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.8.0] — 2026-08-30
+
+### Breaking
+
+- **`jired transition` and `jired assign` take several issues, and their JSON
+  is per-issue.** Both now take `<ISSUES>...` the way `label`, `set` and
+  `sprint add` always have — a bulk status change was a shell loop, and the two
+  commands most worth piping `jired list --keys` into were the two that could
+  not accept a list. The result documents changed shape with it:
+  `jired/transition/1` and `jired/assign/1` now carry an `issues` array (one
+  `{key, file, changed}` entry per file written; transition's entries also
+  carry `to` and `transition_id`, which differ per issue even under one
+  `--to`) where they used to carry one top-level `key`/`file`. A script
+  reading `.key` reads `.issues[0].key` now. Each issue is validated against
+  its own workflow: one that cannot move is a warning beside the ones staged,
+  and only every issue failing fails the command. `transition --list` reads
+  one issue at a time.
+
+### Added
+
+- **`jired list --category`, `--not-status`, and a repeatable `--status`.**
+  "Everything in this sprint that isn't finished yet" had no expression:
+  `--status` matched one exact name, and spelling the negation by hand breaks
+  the day a workflow gains a status. `--category new|indeterminate|done`
+  selects by Jira's own three buckets — the same vocabulary the picker's
+  `ui.issues.filter` takes — read off the snapshots' `statusCategory`, so it
+  works across differently-named workflows. `--status` repeats to mean "any
+  of", and `--not-status` (repeatable) excludes by exact name.
+
+- **`push` warns about work an earlier push left unfinished.** A push whose
+  summary read `failed: 0` while failed operations sat in the journal waiting
+  for `--resume` was telling the truth about what it attempted and hiding the
+  queue: the only way to learn of the stuck operations was `jired status`.
+  They are named in the push report's `warnings` now — for issues the push did
+  not touch, since an issue in `results` already tells its own story.
+
+### Fixed
+
+- **`diff` agrees with `status` and `push` about an untouched file.** A file
+  whose bytes are exactly what the last pull wrote holds no edit, but base
+  re-rendered under today's rules can differ from it anyway — a field the
+  renderer has learned since the file was written (`due_date` in 0.3.0), or
+  `ignored_custom_fields` changed underneath it. `status` and `push` skipped
+  such files on the recorded hash; `diff` re-rendered and reported the drift
+  as a `"sendable": true` change no push would ever send, and telling which
+  answer was true took a dry run. `diff` now skips on the same hash in its
+  default mode, and the next `pull` rewrites the file in today's rendering.
+
+- **A retried failing push no longer duplicates its journal.** Every attempt
+  journaled a fresh set of `pending_op` rows and only success cleared them, so
+  each retry of a failing operation added another byte-identical `failed` row
+  for `status` to report. A re-plan now replaces the failed attempt's rows for
+  that issue: two failed attempts at one operation are one unfinished
+  operation.
+
 ## [0.7.0] — 2026-08-30
 
 ### Added
