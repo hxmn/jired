@@ -347,10 +347,10 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** unit and e2e pass and no document names 9.0 as the floor.
 
 ### M6.7 Assignable-user search
-- [ ] `UserScope` and the new `search_users` signature; `Rest` Cloud-shaped; `DataCenter` on `findUsers`/`findAssignableUsers`; a pure `user_search_url()` with unit `assignable_search_is_scoped_by_issue_or_project`
-- [ ] `assign.rs` passes `UserScope::Issue(&key)` into `resolve_assignee`
-- [ ] Fixture fallback chain; e2e `assign_searches_the_users_who_can_be_assigned_the_issue` (Data Center: `users.json` = jane, bob; `assignable-DC-77.json` = jane; `--user bo` exits 2 "no user matches"; `--user ja` stages)
-- [ ] Docs: `commands.md` `jired assign`, README, the `init-agents` prose; CHANGELOG **Added** — Cloud now finds only assignable users too, which is Added rather than Breaking since no command surface changes
+- [x] `UserScope` and the new `search_users` signature; `Rest` Cloud-shaped; `DataCenter` on `findUsers`/`findAssignableUsers`; a pure `user_search_url()` with unit `assignable_search_is_scoped_by_issue_or_project`
+- [x] `assign.rs` passes `UserScope::Issue(&key)` into `resolve_assignee`
+- [x] Fixture fallback chain; e2e `assign_searches_the_users_who_can_be_assigned_the_issue` (Data Center: `users.json` = jane, bob; `assignable-DC-77.json` = jane; `--user bo` exits 2 "no user matches"; `--user ja` stages)
+- [x] Docs: `commands.md` `jired assign`, README, the `init-agents` prose; CHANGELOG **Added** — Cloud now finds only assignable users too, which is Added rather than Breaking since no command surface changes
 - **Done when:** the e2e passes, and fails when the scope is ignored (bob found).
 
 ### M6.8 The assignee route (Breaking)

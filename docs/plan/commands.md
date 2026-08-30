@@ -469,7 +469,11 @@ back to the cached list (with its age) when the network is down.
 
 ### `jired assign ISSUE --me|--user Q|--none [--push] [--dry-run]`
 Exactly one of `--me`/`--user`/`--none` is required — clap enforces it, so the
-error arrives before any work. `--user` resolves via user search; an ambiguous
+error arrives before any work. `--user` resolves against the users who can be
+assigned *this* issue (`user/assignable/search`, scoped by `issueKey`), which is
+a smaller set than the instance's directory: assignment is a permission held per
+project and per issue-security level, and searching everyone offered names the
+server would then refuse — a failure that arrives one push later. An ambiguous
 query lists the candidates and exits 2 rather than picking one. There is no
 picker: the TUI is M4 work and nothing in the tree draws one today.
 

@@ -550,7 +550,9 @@ pub fn render() -> String {
          opens the same fields in a form for a person at a terminal, and needs \
          one: it exits 7 without it. The key may also be a file name or a path, \
          and with none given it searches. `comment`, `transition` and `assign` are \
-         the scriptable single-field equivalents.\n\n",
+         the scriptable single-field equivalents. `assign --user` searches only \
+         the people who can be assigned that issue, so a name it does not find \
+         may exist on the instance without being assignable here.\n\n",
     );
     s.push_str(
         "An operation Jira accepted is not an operation Jira performed — it \

@@ -2364,6 +2364,38 @@ fn assign_me_uses_the_authenticated_account() {
     assert!(ws.read(ISSUE_FILE).contains("5b10a2ilya"));
 }
 
+/// Assignment is a permission, held per project and per issue-security level,
+/// so the users who can be assigned an issue are fewer than the users who
+/// exist. Searching the whole directory offered names the server would then
+/// refuse — a failure that arrives one push later, on someone else's screen.
+#[test]
+fn assign_searches_the_users_who_can_be_assigned_the_issue() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "users.json",
+        serde_json::json!([
+            {"id": "jane", "display_name": "Jane D"},
+            {"id": "bob", "display_name": "Bob R"},
+        ]),
+    );
+    // Bob exists on the instance and cannot be assigned this issue.
+    ws.write_fixture(
+        "assignable-DC-77.json",
+        serde_json::json!([{"id": "jane", "display_name": "Jane D"}]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["assign", "DC-77", "--user", "bo"], 2);
+    assert!(
+        err["message"].as_str().unwrap().contains("no user matches"),
+        "{err}"
+    );
+
+    let report = ws.json(&["assign", "DC-77", "--user", "ja"]);
+    assert_eq!(report["assignee"], "@[Jane D](jane)");
+}
+
 #[test]
 fn assign_none_clears_the_field_and_pushes_a_null() {
     let ws = Ws::new();

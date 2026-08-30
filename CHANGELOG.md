@@ -22,6 +22,15 @@ version between the one you have and the one you are moving to.
 
 ### Added
 
+- **`jired assign --user` searches only the people who can be assigned that
+  issue.** Assignment is a permission, held per project and per issue-security
+  level, so the assignable users are a smaller set than the instance's
+  directory — and jired had been searching the directory, offering names the
+  server would then refuse on a push that had already got as far as sending.
+  It now asks `user/assignable/search`, scoped to the issue in hand, on both
+  deployments. A name that no longer resolves is a name that could not have
+  been assigned.
+
 - **jired carries the API description its Data Center routes are checked
   against.** `specs/datacenter/10.7.4/` holds the three WADLs a Jira Data
   Center 10.7.4 publishes for itself, recorded with the host replaced by a
