@@ -231,6 +231,11 @@ pub struct RemoteIssue {
     pub description: RichText,
     pub fields: IssueFields,
     pub comments: Vec<RemoteComment>,
+    /// How many comments the server says the issue has.
+    ///
+    /// Like [`RemoteIssue::worklog_total`]: an issue payload carries only the
+    /// first page, so this is what says whether the list above is all of them.
+    pub comment_total: usize,
     pub worklogs: Vec<RemoteWorklog>,
     /// How many worklogs the server says the issue has.
     ///

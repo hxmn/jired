@@ -307,6 +307,57 @@ pub fn spec_modules(deployment: Deployment) -> Vec<SpecModule> {
     }
 }
 
+/// Whether an issue payload paged its comments, or its worklogs [M6.5].
+///
+/// An issue payload carries only the first page of each — 50 comments and 20
+/// worklogs on a stock instance — and says how many there are. A file showing
+/// 50 of 120 comments reads as a discussion that stopped; one showing 20 of 45
+/// worklogs is simply wrong about the time booked.
+pub fn comments_are_paged(issue: &model::RemoteIssue) -> bool {
+    issue.comment_total > issue.comments.len()
+}
+
+pub fn worklogs_are_paged(issue: &model::RemoteIssue) -> bool {
+    issue.worklog_total > issue.worklogs.len()
+}
+
+/// Put a completed comment listing where the rest of jired will find it.
+///
+/// Into [`model::RemoteIssue::raw`], and the parsed list re-derived from it —
+/// not onto the struct alone. That is the whole point: `raw` is the payload
+/// `fetch` stores and `pull` re-parses to render a file, so a completion only
+/// the struct knew about was dropped before it could reach one. This is why
+/// the worklog completion, which has worked this way since it was written,
+/// had never actually put a missing worklog in a file.
+pub fn set_comments(
+    issue: &mut model::RemoteIssue,
+    values: Vec<serde_json::Value>,
+    markup: Markup,
+) {
+    issue.raw["fields"]["comment"] = serde_json::json!({
+        "comments": values,
+        "total": values.len(),
+    });
+    let (parsed, total) = normalize::comments_from(issue.raw.pointer("/fields/comment"), markup);
+    issue.comment_total = total.max(issue.comment_total);
+    issue.comments = parsed;
+}
+
+/// The same for worklogs. See [`set_comments`].
+pub fn set_worklogs(
+    issue: &mut model::RemoteIssue,
+    values: Vec<serde_json::Value>,
+    markup: Markup,
+) {
+    issue.raw["fields"]["worklog"] = serde_json::json!({
+        "worklogs": values,
+        "total": values.len(),
+    });
+    let (parsed, total) = normalize::worklogs_from(issue.raw.pointer("/fields/worklog"), markup);
+    issue.worklog_total = total.max(issue.worklog_total);
+    issue.worklogs = parsed;
+}
+
 /// Build the assignee/reporter payload for a deployment: Cloud wants an
 /// `accountId`, Data Center a `name`.
 pub fn user_field_value(deployment: Deployment, user_id: Option<&str>) -> serde_json::Value {

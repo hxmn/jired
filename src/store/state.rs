@@ -1164,6 +1164,7 @@ mod tests {
                 ..Default::default()
             },
             comments: vec![],
+            comment_total: 0,
             worklogs: Vec::new(),
             worklog_total: 0,
             attachments: vec![],

@@ -334,10 +334,10 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** green, and `grep -n 'match self.deployment' src/api/rest.rs` finds only `api()` and `markup()`.
 
 ### M6.5 Complete paged comments
-- [ ] `RemoteIssue.comment_total`; `normalize::comments_from` returns `(Vec<RemoteComment>, usize)` like `worklogs_from`; every call site and `RemoteIssue` literal updated (`sync/attachments.rs`, `sync/render.rs`, `store/state.rs`, `push.rs` tests — the compiler finds them)
-- [ ] `JiraApi::comments(key)`: both deployments page `getComments` (`startAt`, `maxResults=100`) to `total`; fixture reads `comments-{key}.json`, else the payload's list
-- [ ] `Rest::complete_comments` beside `complete_worklogs`, called from `search` and `issue`; `DataCenter` inherits it through delegation
-- [ ] Unit `a_paged_comment_field_reports_the_full_total`; e2e `every_comment_is_pulled_when_the_issue_payload_pages_them` on both deployments (payload `comment.total = 3` with one inline; `comments-{key}.json` with three; `pull`; three comment headings)
+- [x] `RemoteIssue.comment_total`; `normalize::comments_from` returns `(Vec<RemoteComment>, usize)` like `worklogs_from`; every call site and `RemoteIssue` literal updated (`sync/attachments.rs`, `sync/render.rs`, `store/state.rs`, `push.rs` tests — the compiler finds them)
+- [x] `JiraApi::comments(key)`: both deployments page `getComments` (`startAt`, `maxResults=100`) to `total`; fixture reads `comments-{key}.json`, else the payload's list
+- [x] `Rest::complete_comments` beside `complete_worklogs`, called from `search` and `issue`; `DataCenter` inherits it through delegation
+- [x] Unit `a_paged_comment_field_reports_the_full_total`; e2e `every_comment_is_pulled_when_the_issue_payload_pages_them` on both deployments (payload `comment.total = 3` with one inline; `comments-{key}.json` with three; `pull`; three comment headings)
 - **Done when:** the e2e fails without `complete_comments` and passes with it.
 
 ### M6.6 The floor: Data Center 10.0 (Breaking)

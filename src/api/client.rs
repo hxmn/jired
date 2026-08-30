@@ -177,6 +177,9 @@ pub trait JiraApi: Send + Sync {
     ) -> Result<RemoteWorklog>;
     async fn delete_worklog(&self, key: &str, id: &str) -> Result<()>;
 
+    /// Every comment on an issue, for the case the issue payload paged them.
+    async fn comments(&self, key: &str) -> Result<Vec<RemoteComment>>;
+
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment>;
     async fn update_comment(&self, key: &str, id: &str, body: &RichText) -> Result<RemoteComment>;
     async fn delete_comment(&self, key: &str, id: &str) -> Result<()>;

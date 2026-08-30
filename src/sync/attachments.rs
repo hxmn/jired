@@ -227,6 +227,7 @@ mod tests {
             description: crate::api::RichText::Empty,
             fields: Default::default(),
             comments: vec![],
+            comment_total: 0,
             worklogs: Vec::new(),
             worklog_total: 0,
             attachments: vec![attachment("known.txt", 1)],

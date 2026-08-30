@@ -1704,6 +1704,59 @@ fn for_each_deployment(scenario: impl Fn(&Ws)) {
     }
 }
 
+/// An issue payload carries only the first page of comments — 50 on a stock
+/// instance — and says how many there are. A file that shows the page and not
+/// the count reads as a discussion that stopped, which is exactly wrong on the
+/// long-running issues where it happens.
+#[test]
+fn every_comment_is_pulled_when_the_issue_payload_pages_them() {
+    for deployment in [Deployment::Cloud, Deployment::DataCenter] {
+        let ws = Ws::of(deployment);
+        ws.init();
+        ws.json(&["pull"]);
+        let key = deployment.key();
+
+        // The server now says there are three, and still sends one.
+        ws.mutate_remote(key, |issue| {
+            issue["fields"]["comment"]["total"] = 3.into();
+        });
+        let body = |n: u32| match deployment {
+            Deployment::Cloud => serde_json::json!({
+                "type": "doc", "version": 1,
+                "content": [{"type": "paragraph",
+                             "content": [{"type": "text", "text": format!("page comment {n}")}]}]
+            }),
+            Deployment::DataCenter => serde_json::json!(format!("page comment {n}")),
+        };
+        ws.write_fixture(
+            &format!("comments-{key}.json"),
+            serde_json::json!({
+                "startAt": 0, "maxResults": 100, "total": 3,
+                "comments": [
+                    {"id": "90001", "body": body(1), "created": "2026-08-15T10:00:00.000+0000",
+                     "updated": "2026-08-15T10:00:00.000+0000",
+                     "author": {"displayName": "Jane D", "name": "jane", "accountId": "5b1af9"}},
+                    {"id": "90002", "body": body(2), "created": "2026-08-15T11:00:00.000+0000",
+                     "updated": "2026-08-15T11:00:00.000+0000",
+                     "author": {"displayName": "Jane D", "name": "jane", "accountId": "5b1af9"}},
+                    {"id": "90003", "body": body(3), "created": "2026-08-15T12:00:00.000+0000",
+                     "updated": "2026-08-15T12:00:00.000+0000",
+                     "author": {"displayName": "Jane D", "name": "jane", "accountId": "5b1af9"}},
+                ]
+            }),
+        );
+
+        ws.json(&["pull"]);
+        let text = ws.read(deployment.issue_file());
+        for n in 1..=3 {
+            assert!(
+                text.contains(&format!("page comment {n}")),
+                "{deployment:?}: comment {n} of 3 is missing from:\n{text}"
+            );
+        }
+    }
+}
+
 #[test]
 fn init_detects_the_deployment_from_the_server_not_the_url() {
     let cloud = Ws::of(Deployment::Cloud);

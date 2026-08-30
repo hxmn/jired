@@ -168,6 +168,55 @@ impl FixtureClient {
         self.deployment.markup()
     }
 
+    /// Ask for the rest of anything the payload paged, as the real client does.
+    ///
+    /// This client stands in for [`crate::api::rest::Rest`], and completion is
+    /// something a client does rather than something a server sends — so
+    /// without it here, no end-to-end test could ever observe it. A recording
+    /// poses the case by giving an issue a `comment.total` larger than the
+    /// comments in it, and a `comments-{key}.json` holding the rest.
+    fn complete(&self, issue: &mut RemoteIssue) {
+        let markup = self.markup();
+        if crate::api::comments_are_paged(issue) {
+            crate::api::set_comments(issue, self.comment_values(&issue.key), markup);
+        }
+        if crate::api::worklogs_are_paged(issue) {
+            crate::api::set_worklogs(issue, self.worklog_values(&issue.key), markup);
+        }
+    }
+
+    /// The recorded comment listing for an issue, or the issue's own.
+    fn comment_values(&self, key: &str) -> Vec<Value> {
+        if let Some(v) = read_json(&self.dir, &format!("comments-{key}.json")) {
+            return values_of(&v, "comments");
+        }
+        self.issue_value(key)
+            .ok()
+            .map(|i| {
+                values_of(
+                    i.pointer("/fields/comment").unwrap_or(&Value::Null),
+                    "comments",
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    /// The recorded worklog listing for an issue, or the issue's own.
+    fn worklog_values(&self, key: &str) -> Vec<Value> {
+        if let Some(v) = read_json(&self.dir, &format!("worklogs-{key}.json")) {
+            return values_of(&v, "worklogs");
+        }
+        self.issue_value(key)
+            .ok()
+            .map(|i| {
+                values_of(
+                    i.pointer("/fields/worklog").unwrap_or(&Value::Null),
+                    "worklogs",
+                )
+            })
+            .unwrap_or_default()
+    }
+
     fn issue_value(&self, key: &str) -> Result<Value> {
         self.issues
             .lock()
@@ -424,10 +473,13 @@ impl JiraApi for FixtureClient {
             .take(query.max_results)
             .collect();
 
-        let parsed = page
+        let mut parsed = page
             .iter()
             .map(|v| normalize::issue_from_json(v, self.markup(), &self.field_map))
             .collect::<Result<Vec<_>>>()?;
+        for issue in &mut parsed {
+            self.complete(issue);
+        }
 
         Ok(SearchPage {
             issues: parsed,
@@ -439,7 +491,9 @@ impl JiraApi for FixtureClient {
 
     async fn issue(&self, key: &str) -> Result<RemoteIssue> {
         let v = self.issue_value(key)?;
-        normalize::issue_from_json(&v, self.markup(), &self.field_map)
+        let mut issue = normalize::issue_from_json(&v, self.markup(), &self.field_map)?;
+        self.complete(&mut issue);
+        Ok(issue)
     }
 
     async fn issue_updated(&self, key: &str) -> Result<DateTime<Utc>> {
@@ -616,12 +670,8 @@ impl JiraApi for FixtureClient {
     }
 
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {
-        let v = self.issue_value(key)?;
-        Ok(normalize::worklogs_from(
-            v.get("fields").and_then(|f| f.get("worklog")),
-            self.markup(),
-        )
-        .0)
+        let values = self.worklog_values(key);
+        Ok(normalize::worklogs_from(Some(&json!(values)), self.markup()).0)
     }
 
     async fn add_worklog(&self, key: &str, worklog: &WorklogInput) -> Result<RemoteWorklog> {
@@ -718,6 +768,15 @@ impl JiraApi for FixtureClient {
         Ok(())
     }
 
+    /// A recorded comment listing if there is one, else the issue's own.
+    ///
+    /// `comments-{key}.json` is how a fixture poses the case this call exists
+    /// for: an issue payload whose `comment.total` exceeds the comments in it.
+    async fn comments(&self, key: &str) -> Result<Vec<RemoteComment>> {
+        let values = self.comment_values(key);
+        Ok(normalize::comments_from(Some(&json!(values)), self.markup()).0)
+    }
+
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment> {
         self.record(
             "POST",
@@ -747,6 +806,7 @@ impl JiraApi for FixtureClient {
         }
         self.bump_updated(key);
         normalize::comments_from(Some(&json!([comment])), self.markup())
+            .0
             .into_iter()
             .next()
             .ok_or_else(|| {
@@ -783,6 +843,7 @@ impl JiraApi for FixtureClient {
         }
         self.bump_updated(key);
         normalize::comments_from(Some(&json!([updated])), self.markup())
+            .0
             .into_iter()
             .next()
             .ok_or_else(|| {
@@ -892,6 +953,20 @@ impl JiraApi for FixtureClient {
                 u.display_name.to_lowercase().contains(&q) || u.id.to_lowercase().contains(&q)
             })
             .collect())
+    }
+}
+
+/// The rows of a listing, which a fixture may write as the server's wrapper
+/// object or as a bare array.
+fn values_of(v: &Value, field: &str) -> Vec<Value> {
+    match v {
+        Value::Object(o) => o
+            .get(field)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        Value::Array(a) => a.clone(),
+        _ => Vec::new(),
     }
 }
 

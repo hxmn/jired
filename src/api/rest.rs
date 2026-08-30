@@ -166,27 +166,91 @@ impl Rest {
         }
     }
 
-    /// Fetch the worklogs an issue payload left out.
+    /// Every comment on an issue as the server sent it, paged.
     ///
-    /// An issue carries only the first page of them — 20 on a stock instance —
-    /// and a file that shows 20 of 45 is a file that lies. Only issues that
-    /// actually have more cost the extra call.
-    async fn complete_worklogs(&self, issue: &mut RemoteIssue) {
-        if issue.worklog_total <= issue.worklogs.len() {
-            return;
-        }
-        match self.worklogs(&issue.key).await {
-            Ok(all) => {
-                issue.worklog_total = all.len().max(issue.worklog_total);
-                issue.worklogs = all;
+    /// Raw values rather than parsed ones because the completed page has to go
+    /// back into [`RemoteIssue::raw`] — see [`crate::api::complete_from`].
+    pub(crate) async fn comment_values(&self, key: &str) -> Result<Vec<Value>> {
+        let mut out: Vec<Value> = Vec::new();
+        let mut start = 0usize;
+        loop {
+            let v = self
+                .get(
+                    &routes::GET_COMMENTS,
+                    &[("issueIdOrKey", key)],
+                    &[("startAt", &start.to_string()), ("maxResults", "100")],
+                )
+                .await?;
+            let page = v
+                .get("comments")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let total = v.get("total").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let n = page.len();
+            out.extend(page);
+            if n == 0 || out.len() >= total {
+                break;
             }
-            // A worklog endpoint that refuses is not a reason to fail a fetch;
-            // the first page is still better than nothing.
-            Err(e) => tracing::warn!(
-                "{}: cannot read the rest of the worklogs: {}",
-                issue.key,
-                e.message
-            ),
+            start += n;
+        }
+        Ok(out)
+    }
+
+    /// Every worklog on an issue as the server sent it.
+    pub(crate) async fn worklog_values(&self, key: &str) -> Result<Vec<Value>> {
+        let mut out: Vec<Value> = Vec::new();
+        let mut start = 0usize;
+        loop {
+            let v = self
+                .http
+                .get_json(&crate::api::cloud::GET_WORKLOGS.url(
+                    self.api(),
+                    &[("issueIdOrKey", key)],
+                    &[("startAt", &start.to_string()), ("maxResults", "100")],
+                ))
+                .await?;
+            let page = v
+                .get("worklogs")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let total = v.get("total").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let n = page.len();
+            out.extend(page);
+            if n == 0 || out.len() >= total {
+                break;
+            }
+            start += n;
+        }
+        Ok(out)
+    }
+
+    /// Ask for the pages an issue payload left out.
+    ///
+    /// A listing that cannot be read is warned about rather than fatal: the
+    /// first page is still better than a failed fetch.
+    async fn complete(&self, issue: &mut RemoteIssue) {
+        let markup = self.markup();
+        if crate::api::comments_are_paged(issue) {
+            match self.comment_values(&issue.key).await {
+                Ok(all) => crate::api::set_comments(issue, all, markup),
+                Err(e) => tracing::warn!(
+                    "{}: cannot read the rest of the comments: {}",
+                    issue.key,
+                    e.message
+                ),
+            }
+        }
+        if crate::api::worklogs_are_paged(issue) {
+            match self.worklog_values(&issue.key).await {
+                Ok(all) => crate::api::set_worklogs(issue, all, markup),
+                Err(e) => tracing::warn!(
+                    "{}: cannot read the rest of the worklogs: {}",
+                    issue.key,
+                    e.message
+                ),
+            }
         }
     }
 }
@@ -472,7 +536,7 @@ impl JiraApi for Rest {
             .transpose()?
             .unwrap_or_default();
         for issue in &mut issues {
-            self.complete_worklogs(issue).await;
+            self.complete(issue).await;
         }
 
         Ok(SearchPage {
@@ -499,7 +563,7 @@ impl JiraApi for Rest {
             )
             .await?;
         let mut issue = normalize::issue_from_json(&v, self.markup(), &map)?;
-        self.complete_worklogs(&mut issue).await;
+        self.complete(&mut issue).await;
         Ok(issue)
     }
 
@@ -694,27 +758,8 @@ impl JiraApi for Rest {
     }
 
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {
-        let markup = self.markup();
-        let mut out = Vec::new();
-        let mut start = 0usize;
-        loop {
-            let v = self
-                .http
-                .get_json(&crate::api::cloud::GET_WORKLOGS.url(
-                    self.api(),
-                    &[("issueIdOrKey", key)],
-                    &[("startAt", &start.to_string()), ("maxResults", "100")],
-                ))
-                .await?;
-            let (page, total) = normalize::worklogs_from(Some(&v), markup);
-            let n = page.len();
-            out.extend(page);
-            if n == 0 || out.len() >= total {
-                break;
-            }
-            start += n;
-        }
-        Ok(out)
+        let values = self.worklog_values(key).await?;
+        Ok(normalize::worklogs_from(Some(&json!(values)), self.markup()).0)
     }
 
     async fn add_worklog(&self, key: &str, worklog: &WorklogInput) -> Result<RemoteWorklog> {
@@ -756,6 +801,15 @@ impl JiraApi for Rest {
                 &[],
             ))
             .await
+    }
+
+    /// Every comment, paged.
+    ///
+    /// Both deployments declare `startAt` and `maxResults` here — unlike the
+    /// worklog route, where only Cloud does — so one loop serves both.
+    async fn comments(&self, key: &str) -> Result<Vec<RemoteComment>> {
+        let values = self.comment_values(key).await?;
+        Ok(normalize::comments_from(Some(&json!(values)), self.markup()).0)
     }
 
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment> {
@@ -942,6 +996,7 @@ fn id_string_ref(v: &Value) -> Option<String> {
 
 fn one_comment(v: &Value, markup: Markup) -> Result<RemoteComment> {
     normalize::comments_from(Some(&json!([v])), markup)
+        .0
         .into_iter()
         .next()
         .ok_or_else(|| JiredError::generic("the server returned an unreadable comment"))

@@ -335,6 +335,7 @@ mod tests {
                     comment: RichText::Wiki("Chased the redirect loop.".into()),
                 },
             ],
+            comment_total: 1,
             worklog_total: 2,
             attachments: vec![RemoteAttachment {
                 id: "5001".into(),

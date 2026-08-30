@@ -251,6 +251,10 @@ impl JiraApi for DataCenter {
         self.rest.delete_worklog(key, id).await
     }
 
+    async fn comments(&self, key: &str) -> Result<Vec<RemoteComment>> {
+        self.rest.comments(key).await
+    }
+
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment> {
         self.rest.add_comment(key, body).await
     }

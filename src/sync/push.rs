@@ -2301,6 +2301,7 @@ mod tests {
                 ..Default::default()
             },
             comments: vec![],
+            comment_total: 0,
             worklogs: vec![],
             worklog_total: 0,
             attachments: vec![],

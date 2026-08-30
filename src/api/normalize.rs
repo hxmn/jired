@@ -185,6 +185,7 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
     };
 
     let (worklogs, worklog_total) = worklogs_from(f.get("worklog"), markup);
+    let (comments, comment_total) = comments_from(f.get("comment"), markup);
 
     Ok(RemoteIssue {
         key,
@@ -192,8 +193,10 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
         updated,
         description,
         fields,
-        comments: comments_from(f.get("comment"), markup),
+
         worklogs,
+        comments,
+        comment_total,
         worklog_total,
         attachments: attachments_from(f.get("attachment")),
         raw: v.clone(),
@@ -217,13 +220,23 @@ pub fn rich_text(v: Option<&Value>, markup: Markup) -> RichText {
     }
 }
 
-pub fn comments_from(v: Option<&Value>, markup: Markup) -> Vec<RemoteComment> {
-    let list = match v {
-        Some(Value::Object(o)) => o.get("comments").and_then(Value::as_array).cloned(),
-        Some(Value::Array(a)) => Some(a.clone()),
-        _ => None,
+/// The comments a payload carries, and how many the server says there are.
+///
+/// An issue payload holds only the first page of them — 50 on a stock instance
+/// — so the total is what tells a caller it has to ask for the rest. A bare
+/// array carries no total and is taken to be all of itself, which is what the
+/// single-comment responses a write returns are.
+pub fn comments_from(v: Option<&Value>, markup: Markup) -> (Vec<RemoteComment>, usize) {
+    let (list, total) = match v {
+        Some(Value::Object(o)) => (
+            o.get("comments").and_then(Value::as_array).cloned(),
+            o.get("total").and_then(Value::as_u64).map(|n| n as usize),
+        ),
+        Some(Value::Array(a)) => (Some(a.clone()), None),
+        _ => (None, None),
     };
-    list.unwrap_or_default()
+    let comments: Vec<RemoteComment> = list
+        .unwrap_or_default()
         .iter()
         .filter_map(|c| {
             Some(RemoteComment {
@@ -240,7 +253,9 @@ pub fn comments_from(v: Option<&Value>, markup: Markup) -> Vec<RemoteComment> {
                 body: rich_text(c.get("body"), markup),
             })
         })
-        .collect()
+        .collect();
+    let total = total.unwrap_or(comments.len()).max(comments.len());
+    (comments, total)
 }
 
 /// The worklogs a payload carries, and how many the server says there are.
@@ -693,6 +708,31 @@ mod tests {
 
         // No worklog field at all is zero of them, not an unknown number.
         assert_eq!(worklogs_from(None, Markup::Adf).1, 0);
+    }
+
+    /// The same for comments, which page at 50 on a stock instance: a long
+    /// incident is exactly the issue whose discussion a file would truncate.
+    #[test]
+    fn a_paged_comment_field_reports_the_full_total() {
+        let v = json!({"startAt": 0, "maxResults": 50, "total": 120, "comments": [
+            {"id": "1", "body": "first"}
+        ]});
+        let (comments, total) = comments_from(Some(&v), Markup::Wiki);
+        assert_eq!(comments.len(), 1);
+        assert_eq!(total, 120);
+
+        // A bare array is a write's answer, carrying one comment and no total;
+        // it is all of itself.
+        let (one, total) = comments_from(Some(&json!([{"id": "9", "body": "hi"}])), Markup::Wiki);
+        assert_eq!((one.len(), total), (1, 1));
+
+        assert_eq!(comments_from(None, Markup::Wiki).1, 0);
+
+        // A server that reports fewer than it sent is not believed downward:
+        // the total exists to say whether the list is complete, and a total
+        // under the count would say a full list needs completing.
+        let v = json!({"total": 1, "comments": [{"id": "1"}, {"id": "2"}]});
+        assert_eq!(comments_from(Some(&v), Markup::Wiki).1, 2);
     }
 
     #[test]
