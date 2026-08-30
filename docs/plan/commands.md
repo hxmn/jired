@@ -295,6 +295,15 @@ listed, and on an issue with real changes the row rides along marked
 `"sendable": false` — shown, not counted in `--stat`, never on its own. Between
 two server snapshots (`--remote`) every difference is sendable: nothing is being
 pushed, and the history is exactly what a pull would bring in.
+In the default mode a file whose bytes are exactly what the last pull wrote is
+skipped outright, whatever base re-rendered under today's rules would say: the
+rendering changes between versions (a field the renderer has since learned) and
+between configurations (`ignored_custom_fields`), and that drift is not an edit
+anyone made. `status` and `push` skip on the same hash, and the three have to
+agree about one working copy — `diff` reporting a `"sendable": true` change
+that `status` calls clean and `push` will never send left callers dry-running a
+push to learn which answer was true. The next `jired pull` rewrites the file in
+today's rendering.
 
 ### `jired status [--all]`
 One-screen overview: dirty files, new local issues, staged transitions (incl. board

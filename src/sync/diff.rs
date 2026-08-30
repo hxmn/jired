@@ -181,6 +181,20 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
         if !wanted.is_empty() && !wanted.contains(&row.key) {
             continue;
         }
+        // A file whose bytes are exactly what the last pull wrote holds no
+        // edit, whatever a re-render of base says: rendering changes between
+        // versions (a field the renderer has since learned) and between
+        // configurations (`ignored_custom_fields`), and reporting that drift
+        // as a sendable change contradicts `status` and `push`, which skip on
+        // this same hash. The three answer one question about one working
+        // copy; the next `jired pull` rewrites the file in today's rendering.
+        if args.mode() == DiffMode::WorkingBase {
+            if let (Some(base), Some(f)) = (&row.base, files.get(&row.key)) {
+                if engine.projector.hash_of(&f.relative).as_deref() == Some(base.md_hash.as_str()) {
+                    continue;
+                }
+            }
+        }
         let (left, right) = match args.mode() {
             DiffMode::WorkingBase => (
                 row.base

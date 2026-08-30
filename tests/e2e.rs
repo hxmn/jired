@@ -6397,6 +6397,56 @@ fn an_ignored_field_left_in_a_file_is_reported_rather_than_pushed() {
     assert!(sent.get("priority").is_some(), "{sent}");
 }
 
+/// `diff`, `status` and `push` answer one question about one working copy, and
+/// they have to answer it alike. A file whose bytes are exactly what the last
+/// pull wrote holds no edit — but base re-rendered under today's rules can
+/// differ from it anyway: a field the renderer has learned since the file was
+/// written, or `ignored_custom_fields` changed underneath it. `diff` used to
+/// report that drift as a sendable change while `status` said clean and `push`
+/// sent nothing, and telling which of the three was lying took a dry run.
+#[test]
+fn an_untouched_file_diffs_clean_however_base_renders_today() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    // The drift, without running `doctor` to reconcile the file: base now
+    // renders without the field, the file still carries it, the hash is the
+    // one the pull recorded.
+    ws.json(&[
+        "config",
+        "add",
+        "ignored_custom_fields",
+        "customfield_10300",
+    ]);
+
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+    let diff = ws.json(&["diff"]);
+    assert_eq!(
+        diff["issues"].as_array().map(Vec::len),
+        Some(0),
+        "diff must not report a change no push will send: {diff}"
+    );
+    let dry = ws.json(&["push", "--dry-run"]);
+    assert!(dry["results"].as_array().unwrap().is_empty(), "{dry}");
+
+    // A real edit still shows: the hash is not a blindfold, it is the answer
+    // to "did anyone touch this file".
+    let file = Deployment::DataCenter.issue_file();
+    let text = ws.read(file).replace("priority: High", "priority: Low");
+    ws.write(file, &text);
+    let diff = ws.json(&["diff"]);
+    assert!(
+        diff["issues"][0]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["field"] == "priority"),
+        "{diff}"
+    );
+}
+
 /// `add` is for lists; saying it to a single-valued setting is a mistake worth
 /// catching where the typo is still on screen.
 #[test]
