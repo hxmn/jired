@@ -306,13 +306,13 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings`.
 
 ### M6.1 Vendor the 10.7.4 description, retire the 9.12.4 stubs
-- [ ] Copy the three WADLs to `specs/datacenter/10.7.4/jira.corp.example-datacenter-10.7.4-{api-2,agile-1.0,auth-1}.wadl`, replacing the recording host with `jira.corp.example` (two occurrences per file: `base=` and the `?detail=true` hint). No other edit — the files are the server's words
-- [ ] Replace `tests/fixtures/datacenter/spec-api-2.wadl` and `spec-agile-1.0.wadl` with byte-identical copies; keep `spec-auth-1.wadl` absent (the e2e for a module the server does not serve)
-- [ ] `tests/fixtures/datacenter/serverInfo.json` → `10.7.4` / `[10, 7, 4]` — before M6.6, or every Data Center e2e fails at `init`
-- [ ] `tests/e2e.rs::fetch_spec_writes_one_file_per_described_rest_module`: `9.12.4` → `10.7.4` in the report and both file names; the content check `path="api/2/search"` → `id="searchUsingSearchRequest"` (Jersey 2 puts the module in `base` and nests the paths, so the old string does not occur)
-- [ ] `tests/no_secrets.rs`: `walk` collects `.wadl` as well as `.json`; both fixture scans also walk `specs/`; `fixture_hosts_are_reserved_names` accepts the XML namespace identifiers (`wadl.dev.java.net`, `www.w3.org`, `jersey.java.net`) with the comment that a parser never contacts them
-- [ ] `.gitattributes`: `*.wadl -text`, so a Windows checkout keeps the bytes the byte-equality test compares
-- [ ] `docs/plan/commands.md` `fetch-spec` sample file names → 10.7.4; open `## [0.6.0] — <date>` in `CHANGELOG.md` (never `Unreleased`)
+- [x] Copy the three WADLs to `specs/datacenter/10.7.4/jira.corp.example-datacenter-10.7.4-{api-2,agile-1.0,auth-1}.wadl`, replacing the recording host with `jira.corp.example` (two occurrences per file: `base=` and the `?detail=true` hint). No other edit — the files are the server's words
+- [x] Replace `tests/fixtures/datacenter/spec-api-2.wadl` and `spec-agile-1.0.wadl` with byte-identical copies; keep `spec-auth-1.wadl` absent (the e2e for a module the server does not serve)
+- [x] `tests/fixtures/datacenter/serverInfo.json` → `10.7.4` / `[10, 7, 4]` — before M6.6, or every Data Center e2e fails at `init`
+- [x] `tests/e2e.rs::fetch_spec_writes_one_file_per_described_rest_module`: `9.12.4` → `10.7.4` in the report and both file names; the content check `path="api/2/search"` → `id="searchUsingSearchRequest"` (Jersey 2 puts the module in `base` and nests the paths, so the old string does not occur)
+- [x] `tests/no_secrets.rs`: `walk` collects `.wadl` as well as `.json`; both fixture scans also walk `specs/`; `fixture_hosts_are_reserved_names` accepts the XML namespace identifiers (`wadl.dev.java.net`, `www.w3.org`, `jersey.java.net`) with the comment that a parser never contacts them
+- [x] `.gitattributes`: `*.wadl -text`, so a Windows checkout keeps the bytes the byte-equality test compares
+- [x] `docs/plan/commands.md` `fetch-spec` sample file names → 10.7.4; open `## [0.6.0] — <date>` in `CHANGELOG.md` (never `Unreleased`)
 - **Done when:** `cargo test --test e2e fetch_spec` and `cargo test --test no_secrets` pass with the real WADLs in place.
 
 ### M6.2 Split `datacenter.rs` into a module

@@ -589,9 +589,9 @@ Data Center instances describe the REST API they serve, and `fetch-spec` writes
 that description out:
 
 ```
-Corp Jira 9.12.4 at https://jira.corp.example/jira
-  jira.corp.example-datacenter-9.12.4-api-2.wadl      1.2 MiB
-  jira.corp.example-datacenter-9.12.4-agile-1.0.wadl  86.4 KiB
+Corp Jira 10.7.4 at https://jira.corp.example/jira
+  jira.corp.example-datacenter-10.7.4-api-2.wadl      1.2 MiB
+  jira.corp.example-datacenter-10.7.4-agile-1.0.wadl  86.4 KiB
   auth-1 — this server does not serve one
 2 files into /home/you/specs
 ```

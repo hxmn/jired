@@ -1,0 +1,481 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<application xmlns="http://wadl.dev.java.net/2009/02">
+    <doc xmlns:jersey="http://jersey.java.net/" jersey:generatedBy="Jersey: 2.45 2024-08-27 13:07:04"/>
+    <doc xmlns:jersey="http://jersey.java.net/" jersey:hint="This is simplified WADL with user and core resources only. To get full WADL with extended resources use the query parameter detail. Link: https://jira.corp.example/rest/agile/1.0/application.wadl?detail=true"/>
+    <grammars/>
+    <resources base="https://jira.corp.example/rest/agile/1.0/">
+        <resource path="board/{boardId}/sprint">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+            <method id="getAllSprints" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="state" style="query" type="xs:string"/>
+                </request>
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <resource path="{sprintId}/issue">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="sprintId" style="template" type="xs:long"/>
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+                <method id="getIssuesForSprint" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="jql" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="validateQuery" style="query" type="xs:boolean"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="backlog">
+            <resource path="issue">
+                <method id="moveIssuesToBacklog" name="POST">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="sprint/{sprintId}/properties">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="sprintId" style="template" type="xs:string"/>
+            <method id="getPropertiesKeys" name="GET">
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <resource path="/{propertyKey}">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="propertyKey" style="template" type="xs:string"/>
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="sprintId" style="template" type="xs:string"/>
+                <method id="deleteProperty" name="DELETE">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="getProperty" name="GET">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="setProperty" name="PUT">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="board/{boardId}/epic">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+            <method id="getEpics" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="done" style="query" type="xs:string"/>
+                </request>
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <resource path="none/issue">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+                <method id="getIssuesWithoutEpic" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="jql" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="validateQuery" style="query" type="xs:boolean"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{epicId}/issue">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="epicId" style="template" type="xs:long"/>
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+                <method id="getIssuesForEpic" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="jql" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="validateQuery" style="query" type="xs:boolean"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="issue">
+            <resource path="{issueIdOrKey}/estimation">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="issueIdOrKey" style="template" type="xs:string"/>
+                <method id="getIssueEstimationForBoard" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="query" type="xs:long"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="estimateIssueForBoard" name="PUT">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="query" type="xs:long"/>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="rank">
+                <method id="rankIssues" name="PUT">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{issueIdOrKey}">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="issueIdOrKey" style="template" type="xs:string"/>
+                <method id="getIssue" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="updateHistory" style="query" type="xs:boolean"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="board/{boardId}/project">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+            <method id="getProjects" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                </request>
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="board/{boardId}/version">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+            <method id="getAllVersions" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="released" style="query" type="xs:string"/>
+                </request>
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="sprint">
+            <method id="createSprint" name="POST">
+                <request>
+                    <representation mediaType="application/json"/>
+                </request>
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <resource path="{sprintId}/issue">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="sprintId" style="template" type="xs:long"/>
+                <method id="moveIssuesToSprint" name="POST">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="getIssuesForSprint" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="jql" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="validateQuery" style="query" type="xs:boolean"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="unmap-all">
+                <method id="unmapAllSprints" name="PUT">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="unmap">
+                <method id="unmapSprints" name="PUT">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{sprintId}/swap">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="sprintId" style="template" type="xs:long"/>
+                <method id="swapSprint" name="POST">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{sprintId}">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="sprintId" style="template" type="xs:long"/>
+                <method id="deleteSprint" name="DELETE">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="updateSprint" name="PUT">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="partiallyUpdateSprint" name="POST">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="getSprint" name="GET">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="board/{boardId}/settings">
+            <resource path="/refined-velocity">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+                <method id="getRefinedVelocity" name="GET">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="setRefinedVelocity" name="PUT">
+                    <request>
+                        <representation mediaType="application/json"/>
+                        <representation mediaType="application/x-www-form-urlencoded"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="epic">
+            <resource path="none/issue">
+                <method id="removeIssuesFromEpic" name="POST">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="getIssuesWithoutEpic" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="jql" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="validateQuery" style="query" type="xs:boolean"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{epicIdOrKey}">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="epicIdOrKey" style="template" type="xs:string"/>
+                <method id="partiallyUpdateEpic" name="POST">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="getEpic" name="GET">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{epicIdOrKey}/rank">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="epicIdOrKey" style="template" type="xs:string"/>
+                <method id="rankEpics" name="PUT">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{epicIdOrKey}/issue">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="epicIdOrKey" style="template" type="xs:string"/>
+                <method id="moveIssuesToEpic" name="POST">
+                    <request>
+                        <representation mediaType="application/json"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="getIssuesForEpic" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="jql" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="validateQuery" style="query" type="xs:boolean"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="board">
+            <method id="getAllBoards" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="type" style="query" type="xs:string"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="name" style="query" type="xs:string"/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="projectKeyOrId" style="query" type="xs:string"/>
+                </request>
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <method id="createBoard" name="POST">
+                <request>
+                    <representation mediaType="application/json"/>
+                </request>
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <resource path="{boardId}/backlog">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+                <method id="getIssuesForBacklog" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="jql" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="validateQuery" style="query" type="xs:boolean"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{boardId}/issue">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+                <method id="getIssuesForBoard" name="GET">
+                    <request>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="startAt" style="query" type="xs:long"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="maxResults" style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="jql" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="validateQuery" style="query" type="xs:boolean"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="fields" style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="expand" style="query" type="xs:string"/>
+                    </request>
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{boardId}/configuration">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+                <method id="getConfiguration" name="GET">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+            <resource path="{boardId}">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:long"/>
+                <method id="getBoard" name="GET">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="deleteBoard" name="DELETE">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+        <resource path="board/{boardId}/properties">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:string"/>
+            <method id="getPropertiesKeys" name="GET">
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <resource path="/{propertyKey}">
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="propertyKey" style="template" type="xs:string"/>
+                <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="boardId" style="template" type="xs:string"/>
+                <method id="deleteProperty" name="DELETE">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="getProperty" name="GET">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+                <method id="setProperty" name="PUT">
+                    <response>
+                        <representation mediaType="application/json"/>
+                    </response>
+                </method>
+            </resource>
+        </resource>
+    </resources>
+</application>

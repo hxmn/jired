@@ -8,6 +8,17 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.6.0] — 2026-08-30
+
+### Added
+
+- **jired carries the API description its Data Center routes are checked
+  against.** `specs/datacenter/10.7.4/` holds the three WADLs a Jira Data
+  Center 10.7.4 publishes for itself, recorded with the host replaced by a
+  reserved name and otherwise byte for byte as the server sent them. The
+  recorded Data Center fixtures replay the same files, so the description a
+  test reads and the description `fetch-spec` writes are one document.
+
 ## [0.5.1] — 2026-08-29
 
 ### Fixed

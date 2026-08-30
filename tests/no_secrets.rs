@@ -1,8 +1,13 @@
-//! Secret-leak guards [M1.12, M5.5].
+//! Secret-leak guards [M1.12, M5.5, M6.1].
 //!
 //! Two things must never carry a credential: the fixtures committed to this
 //! repository, and anything jired prints. Both are checked mechanically here
 //! rather than by review, because a review only has to miss once.
+//!
+//! The vendored API descriptions under `specs/` are held to the same rule.
+//! They were recorded from a real instance, which is exactly why: a WADL names
+//! the server it came from in its `base` URL and again in the link it offers
+//! to its own detailed form.
 
 use assert_cmd::Command;
 use std::path::{Path, PathBuf};
@@ -27,12 +32,27 @@ const FORBIDDEN_IN_FIXTURES: &[&str] = &[
     "avatarUrls", // signed URLs, and the recorder drops them
 ];
 
+/// Hosts that name an XML vocabulary rather than a server.
+///
+/// A WADL declares its own namespaces by URI, and Jersey stamps the generator
+/// it was built with. Nothing ever requests these — they are identifiers — so
+/// they are the one exception to the reserved-host rule, listed by name so a
+/// real host cannot slip in behind a wildcard.
+const XML_NAMESPACES: &[&str] = &["wadl.dev.java.net", "www.w3.org", "jersey.java.net"];
+
+/// Everything committed that was recorded from a server: the fixtures the tests
+/// replay, and the API descriptions the Data Center routes are checked against.
+fn recorded_files() -> Vec<PathBuf> {
+    let mut out = walk(&repo().join("tests/fixtures"));
+    out.extend(walk(&repo().join("specs")));
+    out
+}
+
 #[test]
 fn committed_fixtures_carry_no_credentials_or_real_hosts() {
-    let root = repo().join("tests/fixtures");
     let mut checked = 0;
 
-    for entry in walk(&root) {
+    for entry in recorded_files() {
         let text = std::fs::read_to_string(&entry).unwrap();
         checked += 1;
         for needle in FORBIDDEN_IN_FIXTURES {
@@ -45,7 +65,7 @@ fn committed_fixtures_carry_no_credentials_or_real_hosts() {
     }
     assert!(
         checked > 0,
-        "no fixtures were checked; did the layout move?"
+        "no fixtures or specs were checked; did the layout move?"
     );
 }
 
@@ -53,17 +73,19 @@ fn committed_fixtures_carry_no_credentials_or_real_hosts() {
 fn fixture_hosts_are_reserved_names() {
     // `.invalid` and `.example` are reserved by RFC 2606, so a fixture URL can
     // never accidentally resolve to something real.
-    for entry in walk(&repo().join("tests/fixtures")) {
+    for entry in recorded_files() {
         let text = std::fs::read_to_string(&entry).unwrap();
         for line in text.lines() {
-            for token in line.split(['"', ' ', ',']) {
+            for token in line.split(['"', ' ', ',', '\'', '<', '>']) {
                 if let Some(rest) = token
                     .strip_prefix("https://")
                     .or(token.strip_prefix("http://"))
                 {
                     let host = rest.split('/').next().unwrap_or("");
                     assert!(
-                        host.ends_with(".invalid") || host.contains(".example"),
+                        host.ends_with(".invalid")
+                            || host.contains(".example")
+                            || XML_NAMESPACES.contains(&host),
                         "{}: {host} is not a reserved test host",
                         entry.display()
                     );
@@ -71,6 +93,27 @@ fn fixture_hosts_are_reserved_names() {
             }
         }
     }
+}
+
+/// The scan has to reach the specs, not just be pointed at them: they are the
+/// files most likely to carry a real host, and the largest, so a silent miss
+/// here would be the one that matters.
+#[test]
+fn the_vendored_specs_are_scanned() {
+    let specs: Vec<PathBuf> = recorded_files()
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "wadl"))
+        .collect();
+    assert!(
+        specs.len() >= 5,
+        "expected the vendored descriptions and the fixture copies, found {specs:?}"
+    );
+    assert!(
+        specs
+            .iter()
+            .any(|p| p.starts_with(repo().join("specs"))),
+        "the specs directory was not walked: {specs:?}"
+    );
 }
 
 /// The token is passed to a full workflow; it must appear in no output.
@@ -161,7 +204,10 @@ fn walk(root: &Path) -> Vec<PathBuf> {
         let path = entry.path();
         if path.is_dir() {
             out.extend(walk(&path));
-        } else if path.extension().is_some_and(|e| e == "json") {
+        } else if path
+            .extension()
+            .is_some_and(|e| e == "json" || e == "wadl")
+        {
             out.push(path);
         }
     }

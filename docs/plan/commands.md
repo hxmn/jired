@@ -607,7 +607,7 @@ script would then act on.
 ### `jired fetch-spec [-o/--output DIR]`
 Writes the server's own description of the REST API it serves into `DIR`
 (default `.`), one file per described module, named for the server and the
-version that answered — `jira.corp.example-datacenter-9.12.4-api-2.wadl`. The
+version that answered — `jira.corp.example-datacenter-10.7.4-api-2.wadl`. The
 name is the point: a bare `application.wadl` in a directory is a file nobody can
 place six months later, and two Jiras — or two versions of one — do not answer
 the same. The version and the host keep their dots; everything else in a name is
@@ -649,7 +649,7 @@ does not cover `fetch-spec`, while a Claude Code `Bash(jired fetch:*)` entry
 matches on text and may. What it could do with that is write a WADL under a name
 it does not choose into a directory it does; worth knowing rather than worth a
 different spelling.
-JSON: `{"schema":"jired/fetch-spec/1","base_url":…,"deployment":"datacenter","version":"9.12.4","title":…,"output_dir":…,"specs":[{"module","path","file","media_type","bytes"}],"skipped":[{"module","path","reason"}]}`.
+JSON: `{"schema":"jired/fetch-spec/1","base_url":…,"deployment":"datacenter","version":"10.7.4","title":…,"output_dir":…,"specs":[{"module","path","file","media_type","bytes"}],"skipped":[{"module","path","reason"}]}`.
 
 ### `jired sprint create [NAME] [--board B] [--start TS] [--end TS] [--goal TEXT] [-i] [-n]`
 The one write that does not go through `push`: a sprint has no file to stage it

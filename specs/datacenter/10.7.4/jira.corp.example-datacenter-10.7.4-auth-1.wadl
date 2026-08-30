@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<application xmlns="http://wadl.dev.java.net/2009/02">
+    <doc xmlns:jersey="http://jersey.java.net/" jersey:generatedBy="Jersey: 2.45 2024-08-27 13:07:04"/>
+    <doc xmlns:jersey="http://jersey.java.net/" jersey:hint="This is simplified WADL with user and core resources only. To get full WADL with extended resources use the query parameter detail. Link: https://jira.corp.example/rest/auth/1/application.wadl?detail=true"/>
+    <grammars>
+        <include href="application.wadl/xsd0.xsd">
+            <doc title="Generated" xml:lang="en"/>
+        </include>
+    </grammars>
+    <resources base="https://jira.corp.example/rest/auth/1/">
+        <resource path="session">
+            <method id="logout" name="DELETE">
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <method id="login" name="POST">
+                <request>
+                    <ns2:representation xmlns:ns2="http://wadl.dev.java.net/2009/02" xmlns="" element="session" mediaType="application/json"/>
+                </request>
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+            <method id="currentUser" name="GET">
+                <response>
+                    <representation mediaType="application/json"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="websudo">
+            <method id="release" name="DELETE">
+                <response>
+                    <representation mediaType="*/*"/>
+                </response>
+            </method>
+        </resource>
+    </resources>
+</application>

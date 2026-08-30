@@ -6787,7 +6787,7 @@ fn fetch_spec_writes_one_file_per_described_rest_module() {
     let out = ws.path().join("specs");
     let report = ws.json(&["fetch-spec", "--output", out.to_str().unwrap()]);
 
-    assert_eq!(report["version"], "9.12.4");
+    assert_eq!(report["version"], "10.7.4");
     assert_eq!(report["deployment"], "datacenter");
 
     let names: Vec<&str> = report["specs"]
@@ -6804,19 +6804,22 @@ fn fetch_spec_writes_one_file_per_described_rest_module() {
     let agile = &report["specs"][1];
     assert_eq!(agile["path"], "/rest/agile/1.0/application.wadl");
 
-    let file = out.join("jira.corp.example-datacenter-9.12.4-api-2.wadl");
+    let file = out.join("jira.corp.example-datacenter-10.7.4-api-2.wadl");
     let text = std::fs::read_to_string(&file).unwrap_or_else(|e| {
         panic!("{} was not written: {e}", file.display());
     });
     assert!(text.starts_with("<?xml"), "not a WADL:\n{text}");
-    assert!(text.contains(r#"path="api/2/search""#), "{text}");
+    // Named by the method rather than by its path: Jersey 2 puts the module in
+    // the `base` URL and nests the resources under it, so the flat
+    // `path="api/2/search"` an older Jira wrote does not occur here.
+    assert!(text.contains(r#"id="searchUsingSearchRequest""#), "{text}");
     assert_eq!(report["specs"][0]["file"], file.display().to_string());
     assert_eq!(report["specs"][0]["bytes"], text.len());
 
     // A module this Jira does not describe is reported, not invented.
     assert_eq!(report["skipped"][0]["module"], "auth-1");
     assert!(!out
-        .join("jira.corp.example-datacenter-9.12.4-auth-1.wadl")
+        .join("jira.corp.example-datacenter-10.7.4-auth-1.wadl")
         .exists());
 }
 

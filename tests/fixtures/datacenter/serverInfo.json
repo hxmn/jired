@@ -1,6 +1,6 @@
 {
-  "version": "9.12.4",
-  "versionNumbers": [9, 12, 4],
+  "version": "10.7.4",
+  "versionNumbers": [10, 7, 4],
   "deploymentType": "Server",
   "serverTitle": "Fixture Data Center"
 }

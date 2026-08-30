@@ -1,0 +1,5 @@
+# The vendored API descriptions are the server's own bytes, and a test compares
+# the fixture copies against them byte for byte. A checkout that rewrote their
+# line endings — Windows, by default — would fail that comparison for a reason
+# that has nothing to do with the API.
+*.wadl -text
