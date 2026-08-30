@@ -82,6 +82,11 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 jsonschema = "0.49"
+# Reads the vendored WADLs in `tests/dc_spec_contract.rs`. Pure Rust with no
+# dependencies of its own, and its `has_tag_name` matches on the local name,
+# which is what lets one parser read both the default-namespace documents a
+# Jersey 2 Jira writes and the `ns2:`-prefixed ones its predecessor wrote.
+roxmltree = "0.21"
 
 [profile.dev]
 # Debug info dominates artifact size here and jired debugs fine without it.

@@ -321,9 +321,9 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** `cargo test api::datacenter` runs the same tests; no behaviour change.
 
 ### M6.3 The route table and the contract test
-- [ ] `routes.rs` as designed, with unit tests `a_url_substitutes_and_encodes_its_arguments`, `an_undeclared_query_parameter_is_a_programming_error` (`#[should_panic]`) and `every_route_is_in_the_table`
-- [ ] `Cargo.toml` `[dev-dependencies] roxmltree`; `cargo build` so `Cargo.lock` records it; `cargo deny check`
-- [ ] `tests/dc_spec_contract.rs` with the five tests; its module doc says the vendored WADL is Jersey's simplified listing and `…/application.wadl?detail=true` is where to look before calling a route absent
+- [x] `routes.rs` as designed, with unit tests `a_url_substitutes_and_encodes_its_arguments`, `an_undeclared_query_parameter_is_a_programming_error` (`#[should_panic]`) and `every_route_is_in_the_table`
+- [x] `Cargo.toml` `[dev-dependencies] roxmltree`; `cargo build` so `Cargo.lock` records it; `cargo deny check`
+- [x] `tests/dc_spec_contract.rs` with the five tests; its module doc says the vendored WADL is Jersey's simplified listing and `…/application.wadl?detail=true` is where to look before calling a route absent
 - **Done when:** the contract passes, and changing `ASSIGN.method` to `POST` or adding `"foo"` to `GET_ISSUE.query` fails it with a message naming the route.
 
 ### M6.4 The Data Center client, and `Rest` without deployment branches

@@ -9,6 +9,7 @@
 //! [`wizard`] drives the one operation Data Center offers as a web action
 //! rather than a route.
 
+pub mod routes;
 pub mod wizard;
 
 use crate::api::client::SpecModule;
