@@ -2712,6 +2712,82 @@ fn an_assignee_the_server_did_not_apply_fails_the_push() {
     );
 }
 
+/// A failed push leaves its journal for `--resume`; a retry re-plans the same
+/// work from the same working copy. The retry's journal has to *replace* the
+/// old one — appending gave every attempt a fresh set of byte-identical
+/// `failed` rows for `status` to report, multiplying one stuck operation into
+/// a pile.
+#[test]
+fn a_retried_failure_replaces_its_journal_rather_than_duplicating_it() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "ignored.json",
+        serde_json::json!(["PUT /issue/DC-77/assignee"]),
+    );
+    ws.write_fixture(
+        "users.json",
+        serde_json::json!([{"id": "jane", "display_name": "Jane D"}]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["assign", "DC-77", "--user", "jane"]);
+
+    ws.json_code(&["push"], 10);
+    ws.json_code(&["push"], 10);
+
+    let ops = ws.json(&["status"])["pending_ops"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        ops.len(),
+        1,
+        "two failed attempts at one operation are one unfinished operation: {ops:#?}"
+    );
+    assert_eq!(ops[0]["issue_key"], "DC-77");
+}
+
+/// `summary.failed: 0` is true of what a push attempted, and silent about the
+/// queue: an operation an *earlier* push left unfinished sat invisible in the
+/// report a caller actually reads, and finding it took `jired status`. It is a
+/// warning now — for issues this push did not touch, since an issue in
+/// `results` already tells its own story.
+#[test]
+fn push_warns_about_unfinished_work_it_did_not_touch() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "ignored.json",
+        serde_json::json!(["PUT /issue/DC-77/assignee"]),
+    );
+    ws.write_fixture(
+        "users.json",
+        serde_json::json!([{"id": "jane", "display_name": "Jane D"}]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["assign", "DC-77", "--user", "jane"]);
+    ws.json_code(&["push"], 10);
+
+    // A push aimed elsewhere: DC-77 is not in its results.
+    let report = ws.json(&["push", "DC-78", "--dry-run"]);
+    assert!(report["results"].as_array().unwrap().is_empty(), "{report}");
+    let warning = report["warnings"][0].as_str().unwrap_or_default();
+    assert!(warning.contains("DC-77"), "{report}");
+    assert!(warning.contains("assign"), "{report}");
+    assert!(warning.contains("--resume"), "{report}");
+
+    // A push that re-plans the issue says it in `results`, not twice.
+    let report = ws.json_code(&["push"], 10);
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|w| !w.as_str().unwrap_or_default().contains("DC-77")),
+        "{report}"
+    );
+}
+
 /// The fields go first and the assignee follows, because they are two calls and
 /// the order is the one `push` promises: everything an ordinary field update
 /// can carry is already sent when the separate routes start.

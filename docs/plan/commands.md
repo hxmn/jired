@@ -186,6 +186,14 @@ the results of the ones already pushed; base advances only for confirmed issues
 (durable `pending_op` journal). The exit code is the failing kind's own code when
 every failure shares one kind (all-lossy → 6, all-auth → 3) and 1 when the causes
 are mixed.
+A retry re-plans the same work from the same working copy — base never advanced
+for a failure — so its journal *replaces* the failed attempt's rows for that
+issue rather than piling a second identical set beside them. And work an earlier
+push left unfinished is named in `warnings` when this push did not touch its
+issue: `summary.failed: 0` is true of what was attempted now and silent about
+the queue, and a caller reading only the push report used to have no way to know
+`--resume` still had something to retry. An issue in `results` is not warned
+about — its row already tells the story.
 `sprint:` is a list — an issue that rolls over stays in the sprint it came from
 — written as a plain string when there is only one. Its last entry is where the
 issue is now, and the only part a push can act on: a change to it is a board call

@@ -616,6 +616,27 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         stale: report.stale.clone(),
     };
 
+    // Work an earlier push left unfinished, for an issue this push did not
+    // touch: `failed: 0` above is true of what was attempted now, and a caller
+    // reading only this report would believe the queue is empty while
+    // `--resume` still has something to retry. An issue in `results` already
+    // tells its own story.
+    for op in engine.state.pending_ops()? {
+        if report.results.iter().any(|r| r.key == op.issue_key) {
+            continue;
+        }
+        report.warnings.push(format!(
+            "{}: a {} operation from an earlier push is still unfinished{} — \
+             `jired push --resume` retries it",
+            op.issue_key,
+            op.kind,
+            op.error
+                .as_ref()
+                .map(|e| format!(" ({e})"))
+                .unwrap_or_default(),
+        ));
+    }
+
     // Grouping folders are views over base, and a push has just moved base: the
     // sprint an issue is in, the column it sits in, the parent it hangs from.
     // Rebuilding them here is what makes `sprints/<the sprint just created>`
@@ -2043,6 +2064,11 @@ fn execute(
         .iter()
         .map(|o| (o.kind.to_string(), o.request.to_string()))
         .collect();
+    // This plan supersedes whatever journal a failed attempt left: base never
+    // advanced for a failure, so the same work was re-planned from the same
+    // working copy, and keeping the old rows gave every retry a growing pile
+    // of identical `failed` entries for `status` to report.
+    engine.state.clear_ops(key)?;
     let op_ids = engine.state.journal_ops(key, &journal)?;
 
     // Optimistic concurrency: Jira offers no compare-and-set, so the window
