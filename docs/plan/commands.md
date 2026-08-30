@@ -784,7 +784,7 @@ across instances and the only one nobody can read; finding out what
 the name or the id, `--custom` narrows to the instance's own.
 JSON: `{"schema":"jired/fields/1","count":42,"fields":[{"id","name","custom","schema_type","items"}]}`.
 
-### `jired list [--summary-contains T] [--label L] [--status S] [--sprint S] [--assignee U] [--type T] [--keys]`
+### `jired list [--summary-contains T] [--label L] [--status S…] [--not-status S…] [--category new|indeterminate|done] [--sprint S] [--assignee U] [--type T] [--keys]`
 `search` is JQL on the server; this is its offline half, and the other half of
 any bulk edit — choosing what to edit. Without it the choice was a `grep` over
 the `.md` files, which means the caller writing regexes against jired's own
@@ -803,6 +803,17 @@ because that is what looking for `[ALL]` means; the rest match a whole value,
 because a status half-named is a different status. `--assignee` is a substring of
 the file's `@[Name](id)`, so either half finds the person. `--sprint` asks where
 the issue *is*, which is the last entry of its sprint history.
+
+A repeated `--status` is the one disjunction — an issue is in one status, so
+several can only mean "any of" — and `--not-status` (also repeatable) excludes
+by exact name. `--category` selects by Jira's own three buckets
+(`new`/`indeterminate`/`done`), which is what "everything not finished yet"
+means across differently-named workflows and is the same vocabulary the picker's
+`ui.issues.filter` takes; naming the negation status by status breaks the day a
+workflow gains one. The bucket behind a status name is the server's
+classification, read off the snapshots — every status a workflow uses is on some
+pulled issue — so a status jired has never seen (typed into a file by hand) has
+no category and `--category` does not claim it.
 
 `--keys` prints the keys alone, one per line, with no heading, count or colour,
 so the output is an argument list:

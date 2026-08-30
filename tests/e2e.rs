@@ -5523,6 +5523,41 @@ fn list_selects_issues_from_the_working_copy() {
     assert_eq!(none["count"], 0);
 }
 
+/// "Everything in this sprint that isn't finished yet" had no expression:
+/// `--status` named one status, and naming the negation by hand breaks the day
+/// a workflow gains a status. The category is Jira's own three-way reading of
+/// any workflow, and `--not-status` is the exact-name complement.
+#[test]
+fn list_selects_by_category_and_by_negated_status() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    // The fixture: PROJ-142 In Progress (indeterminate), 143 and 150 To Do (new).
+    let open = ws.json(&["list", "--category", "indeterminate"]);
+    assert_eq!(open["count"], 1, "{open}");
+    assert_eq!(open["issues"][0]["key"], "PROJ-142");
+    assert_eq!(ws.json(&["list", "--category", "new"])["count"], 2);
+    assert_eq!(ws.json(&["list", "--category", "done"])["count"], 0);
+
+    // A repeated `--status` accepts any of them; `--not-status` excludes.
+    let either = ws.json(&["list", "--status", "To Do", "--status", "In Progress"]);
+    assert_eq!(either["count"], 3, "{either}");
+    let not_started = ws.json(&["list", "--not-status", "In Progress"]);
+    assert_eq!(not_started["count"], 2, "{not_started}");
+
+    // A status the flag cannot name is refused where the typo is on screen.
+    let out = ws
+        .cmd(&["list", "--category", "unfinished"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "clap rejects an unknown category"
+    );
+}
+
 /// `--keys` exists to be piped into the commands that take issues.
 #[test]
 fn list_keys_pipes_into_the_commands_that_edit() {

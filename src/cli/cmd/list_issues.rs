@@ -30,9 +30,18 @@ pub struct ListArgs {
     #[arg(long, value_name = "LABEL")]
     pub label: Option<String>,
 
-    /// Issues in this status
+    /// Issues in this status; repeat the flag to accept any of several
     #[arg(long, value_name = "STATUS")]
-    pub status: Option<String>,
+    pub status: Vec<String>,
+
+    /// Issues in any status but this one; repeatable
+    #[arg(long = "not-status", value_name = "STATUS")]
+    pub not_status: Vec<String>,
+
+    /// Issues whose status falls in one of Jira's three buckets, which is what
+    /// "not finished yet" means across differently-named workflows
+    #[arg(long, value_name = "CATEGORY", value_parser = ["new", "indeterminate", "done"])]
+    pub category: Option<String>,
 
     /// Issues whose current sprint is this one
     #[arg(long, value_name = "SPRINT")]
@@ -70,6 +79,14 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let engine = Engine::open(&mut ctx)?;
 
+    // Only built when asked for: `--category` is the one filter the files
+    // cannot answer alone, because the bucket behind a status name is the
+    // server's classification, not anything the frontmatter carries.
+    let categories = match args.category {
+        Some(_) => status_categories(&engine.state.issues()?),
+        None => std::collections::BTreeMap::new(),
+    };
+
     let mut matched: Vec<Match> = Vec::new();
     // Sorted by key, because `scan` returns a map keyed by it — a listing that
     // reshuffles between runs cannot be diffed against the last one.
@@ -79,7 +96,10 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
         let Ok(doc) = engine.projector.read(&file.relative) else {
             continue;
         };
-        if !matches(&doc.frontmatter, args) {
+        let category = categories
+            .get(&doc.frontmatter.status.trim().to_lowercase())
+            .map(String::as_str);
+        if !matches(&doc.frontmatter, args, category) {
             continue;
         }
         let fm = doc.frontmatter;
@@ -123,14 +143,48 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
+/// The status names this workspace has seen, each with the category the server
+/// files it under: `new`, `indeterminate` or `done`.
+///
+/// Read from the snapshots rather than asked for, like everything else here:
+/// every status a workflow actually uses is on some issue jired has pulled. A
+/// status on no snapshot — typed into a file by hand, say — has no category,
+/// and `--category` does not claim it.
+fn status_categories(
+    rows: &[crate::store::state::IssueRow],
+) -> std::collections::BTreeMap<String, String> {
+    let mut map = std::collections::BTreeMap::new();
+    for row in rows {
+        let Some(status) = row
+            .remote
+            .as_ref()
+            .map(|r| &r.raw)
+            .or(row.base.as_ref().map(|b| &b.raw))
+            .and_then(|raw| raw.pointer("/fields/status"))
+        else {
+            continue;
+        };
+        if let (Some(name), Some(key)) = (
+            status.pointer("/name").and_then(|v| v.as_str()),
+            status
+                .pointer("/statusCategory/key")
+                .and_then(|v| v.as_str()),
+        ) {
+            map.insert(name.trim().to_lowercase(), key.to_string());
+        }
+    }
+    map
+}
+
 /// Whether one issue passes every filter that was given.
 ///
 /// Every filter is a conjunction and every text comparison is
 /// case-insensitive: these are values read off a screen and typed back, not
 /// identifiers. `--summary-contains` is a substring because that is what
 /// somebody looking for `[ALL]` means; the rest match whole values, because a
-/// status half-named is a different status.
-fn matches(fm: &Frontmatter, args: &ListArgs) -> bool {
+/// status half-named is a different status. A repeated `--status` is the one
+/// disjunction: an issue is in one status, so several can only mean "any of".
+fn matches(fm: &Frontmatter, args: &ListArgs, category: Option<&str>) -> bool {
     let contains = |haystack: &str, needle: &str| {
         haystack
             .to_lowercase()
@@ -148,8 +202,16 @@ fn matches(fm: &Frontmatter, args: &ListArgs) -> bool {
             return false;
         }
     }
-    if let Some(status) = &args.status {
-        if !same(&fm.status, status) {
+    if !args.status.is_empty() && !args.status.iter().any(|s| same(&fm.status, s)) {
+        return false;
+    }
+    if args.not_status.iter().any(|s| same(&fm.status, s)) {
+        return false;
+    }
+    if let Some(wanted) = &args.category {
+        // A status jired has never seen on a snapshot has no known category,
+        // and claiming it for any bucket would be a guess.
+        if category != Some(wanted.as_str()) {
             return false;
         }
     }
@@ -208,34 +270,64 @@ mod tests {
 
     #[test]
     fn no_filter_matches_everything() {
-        assert!(matches(&issue(), &args()));
+        assert!(matches(&issue(), &args(), None));
     }
 
     #[test]
     fn a_summary_is_searched_by_substring_and_ignoring_case() {
         let mut a = args();
         a.summary_contains = Some("[all]".into());
-        assert!(matches(&issue(), &a));
+        assert!(matches(&issue(), &a, None));
         a.summary_contains = Some("иерархию".into());
-        assert!(matches(&issue(), &a));
+        assert!(matches(&issue(), &a, None));
         a.summary_contains = Some("nothing".into());
-        assert!(!matches(&issue(), &a));
+        assert!(!matches(&issue(), &a, None));
     }
 
     /// A status half-named is a different status, so these match whole values.
     #[test]
     fn the_other_filters_match_a_whole_value() {
         let mut a = args();
-        a.status = Some("in progress".into());
-        assert!(matches(&issue(), &a));
-        a.status = Some("In".into());
-        assert!(!matches(&issue(), &a));
+        a.status = vec!["in progress".into()];
+        assert!(matches(&issue(), &a, None));
+        a.status = vec!["In".into()];
+        assert!(!matches(&issue(), &a, None));
 
         let mut a = args();
         a.label = Some("auth".into());
-        assert!(matches(&issue(), &a));
+        assert!(matches(&issue(), &a, None));
         a.label = Some("au".into());
-        assert!(!matches(&issue(), &a));
+        assert!(!matches(&issue(), &a, None));
+    }
+
+    /// An issue is in one status, so several `--status` can only mean "any of".
+    #[test]
+    fn a_repeated_status_filter_accepts_any_of_them() {
+        let mut a = args();
+        a.status = vec!["To Do".into(), "in progress".into()];
+        assert!(matches(&issue(), &a, None));
+        a.status = vec!["To Do".into(), "Done".into()];
+        assert!(!matches(&issue(), &a, None));
+    }
+
+    #[test]
+    fn not_status_excludes_and_stacks() {
+        let mut a = args();
+        a.not_status = vec!["Done".into()];
+        assert!(matches(&issue(), &a, None));
+        a.not_status = vec!["Done".into(), "in progress".into()];
+        assert!(!matches(&issue(), &a, None));
+    }
+
+    /// The bucket is the server's classification; a status jired has never
+    /// seen on a snapshot has none, and `--category` must not claim it.
+    #[test]
+    fn category_matches_the_servers_bucket_and_not_a_guess() {
+        let mut a = args();
+        a.category = Some("indeterminate".into());
+        assert!(matches(&issue(), &a, Some("indeterminate")));
+        assert!(!matches(&issue(), &a, Some("done")));
+        assert!(!matches(&issue(), &a, None));
     }
 
     /// An assignee is `@[Name](id)` in the file, so either half finds them.
@@ -243,15 +335,15 @@ mod tests {
     fn an_assignee_is_found_by_name_or_by_id() {
         let mut a = args();
         a.assignee = Some("nilsson.m".into());
-        assert!(matches(&issue(), &a));
+        assert!(matches(&issue(), &a, None));
         a.assignee = Some("Maria".into());
-        assert!(matches(&issue(), &a));
+        assert!(matches(&issue(), &a, None));
         a.assignee = Some("someone else".into());
-        assert!(!matches(&issue(), &a));
+        assert!(!matches(&issue(), &a, None));
 
         let mut unassigned = issue();
         unassigned.assignee = None;
-        assert!(!matches(&unassigned, &a));
+        assert!(!matches(&unassigned, &a, None));
     }
 
     /// The sprint an issue is in is the last of the ones it has been in.
@@ -259,17 +351,17 @@ mod tests {
     fn the_sprint_filter_asks_where_the_issue_is_now() {
         let mut a = args();
         a.sprint = Some("TSK Спринт 6".into());
-        assert!(matches(&issue(), &a));
+        assert!(matches(&issue(), &a, None));
         // It has been in 5; it is not in 5.
         a.sprint = Some("TSK Спринт 5".into());
-        assert!(!matches(&issue(), &a));
+        assert!(!matches(&issue(), &a, None));
     }
 
     #[test]
     fn filters_are_a_conjunction() {
         let mut a = args();
         a.label = Some("regular".into());
-        a.status = Some("Done".into());
-        assert!(!matches(&issue(), &a), "both have to hold");
+        a.status = vec!["Done".into()];
+        assert!(!matches(&issue(), &a, None), "both have to hold");
     }
 }

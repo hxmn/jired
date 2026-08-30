@@ -717,18 +717,25 @@ pub fn render() -> String {
     );
     s.push_str("| Flag | Matches |\n|---|---|\n");
     s.push_str("| `--sprint S` | issues whose *current* sprint is this one |\n");
-    s.push_str("| `--status S` | issues in this status |\n");
+    s.push_str("| `--status S` | issues in this status; repeat the flag for \"any of\" |\n");
+    s.push_str("| `--not-status S` | issues in any status but this one; repeatable |\n");
+    s.push_str("| `--category new\\|indeterminate\\|done` | Jira's own bucket behind the status, the same across renamed workflows |\n");
     s.push_str("| `--assignee U` | any part of the name, or the id |\n");
     s.push_str("| `--label L` | issues carrying this label |\n");
     s.push_str("| `--issue-type T` | issues of this type |\n");
     s.push_str("| `--summary-contains TEXT` | case-insensitive substring of the summary |\n");
     s.push_str("| `--keys` | print only the keys, one per line |\n\n");
     s.push_str(
+        "\"Not finished yet\" is `--category new` plus `--category indeterminate` \
+         asked separately, or simpler, `--not-status Done` — do not enumerate \
+         the unfinished statuses by hand.\n\n",
+    );
+    s.push_str(
         "`--keys` is what makes the rest composable: `jired list --sprint \
-         \"Sprint 7\" --status \"To Do\" --keys` feeds `jired set`, `jired label` \
-         or `jired sprint add`, all of which take several keys. Use `--json` \
-         instead when you need more than the key. Searching the *server* rather \
-         than the working copy is `jired search JQL`.\n\n",
+         \"Sprint 7\" --status \"To Do\" --keys` feeds `jired set`, `jired label`, \
+         `jired transition` or `jired sprint add`, all of which take several \
+         keys. Use `--json` instead when you need more than the key. Searching \
+         the *server* rather than the working copy is `jired search JQL`.\n\n",
     );
 
     s.push_str("## Sprints\n\n");
