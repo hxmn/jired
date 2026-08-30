@@ -251,6 +251,14 @@ impl JiraApi for DataCenter {
         self.rest.delete_worklog(key, id).await
     }
 
+    async fn edit_meta(&self, key: &str) -> Result<Option<ScreenMeta>> {
+        self.rest.edit_meta(key).await
+    }
+
+    async fn create_meta(&self, project: &str, issue_type: &str) -> Result<Option<ScreenMeta>> {
+        self.rest.create_meta(project, issue_type).await
+    }
+
     async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
         self.rest.assign(key, user_id).await
     }

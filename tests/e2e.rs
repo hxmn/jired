@@ -2364,6 +2364,131 @@ fn assign_me_uses_the_authenticated_account() {
     assert!(ws.read(ISSUE_FILE).contains("5b10a2ilya"));
 }
 
+/// Jira's field configuration is per project, per issue type and per screen, so
+/// an issue can have a priority while the screen you edit it through offers no
+/// way to set one. That `PUT` is a 400 naming a screen, arriving after the push
+/// has sent everything else. Asked first, it is a refusal at plan time that
+/// names the field.
+#[test]
+fn a_field_the_edit_screen_lacks_is_refused_before_the_server_sees_it() {
+    let ws = Ws::of(Deployment::DataCenter);
+    // What this instance's edit screen carries — and priority is not on it.
+    ws.write_fixture(
+        "editmeta-DC-77.json",
+        serde_json::json!({"fields": {
+            "summary": {"name": "Summary", "required": true, "operations": ["set"]},
+            "description": {"name": "Description", "required": false, "operations": ["set"]},
+            "labels": {"name": "Labels", "required": false, "operations": ["add", "remove", "set"]},
+        }}),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    let file = Deployment::DataCenter.issue_file();
+    let text = ws.read(file);
+    ws.write(file, &text.replace("priority: High", "priority: Low"));
+
+    let dry = ws.json_code(&["push", "--dry-run"], 2);
+    let result = &dry["results"][0];
+    assert_eq!(result["ok"], false, "{dry}");
+    let shown = serde_json::to_string(result).unwrap();
+    // Named as the workspace knows it. This fixture's `/field` lists no system
+    // fields, so the id is the best name there is — which is the fallback
+    // working, not the mapping failing.
+    assert!(
+        shown.contains("priority is not on the edit screen"),
+        "the refusal has to name the field: {shown}"
+    );
+    assert_eq!(result["error_kind"], "usage", "{dry}");
+
+    // Nothing was sent, and the edit is still there to send once the screen
+    // carries it.
+    let journal = ws.path().join("calls.jsonl");
+    ws.cmd(&["push", "--json"])
+        .env("JIRED_FIXTURE_JOURNAL", &journal)
+        .output()
+        .unwrap();
+    let sent = std::fs::read_to_string(&journal).unwrap_or_default();
+    assert!(
+        !sent.contains("\"PUT\""),
+        "no field update should have gone out:\n{sent}"
+    );
+    assert!(ws.read(file).contains("priority: Low"));
+}
+
+/// The description travels in the same `PUT` as the fields, so it is asked
+/// about on the same screen.
+#[test]
+fn a_description_edit_is_checked_against_the_edit_screen() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "editmeta-DC-77.json",
+        serde_json::json!({"fields": {
+            "summary": {"name": "Summary", "required": true, "operations": ["set"]},
+        }}),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    let file = Deployment::DataCenter.issue_file();
+    let text = ws.read(file);
+    ws.write(
+        file,
+        &text.replace(
+            Deployment::DataCenter.editable_line(),
+            "Rolled back on the standby node instead.",
+        ),
+    );
+
+    let dry = ws.json_code(&["push", "--dry-run"], 2);
+    let shown = serde_json::to_string(&dry["results"][0]).unwrap();
+    assert!(shown.contains("escription"), "{shown}");
+}
+
+/// The same question asked of a create screen, where the failure would
+/// otherwise be an issue that does not get made at all.
+#[test]
+fn a_field_the_create_screen_lacks_is_refused_before_the_issue_is_made() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "createmeta-DC-Task.json",
+        serde_json::json!({"fields": {
+            "summary": {"name": "Summary", "required": true, "operations": ["set"]},
+            "description": {"name": "Description", "required": false, "operations": ["set"]},
+        }}),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    ws.json(&[
+        "create",
+        "--summary",
+        "Audit the bind account",
+        "--type",
+        "Task",
+        "--priority",
+        "High",
+    ]);
+
+    let dry = ws.json_code(&["push", "--dry-run"], 2);
+    let shown = serde_json::to_string(&dry["results"][0]).unwrap();
+    assert!(
+        shown.contains("priority is not on the create screen"),
+        "{shown}"
+    );
+
+    let journal = ws.path().join("calls.jsonl");
+    ws.cmd(&["push", "--json"])
+        .env("JIRED_FIXTURE_JOURNAL", &journal)
+        .output()
+        .unwrap();
+    let sent = std::fs::read_to_string(&journal).unwrap_or_default();
+    assert!(
+        !sent.contains("\"/issue\""),
+        "no issue should have been created:\n{sent}"
+    );
+}
+
 /// Assigning is not editing: Jira gives the assignee a route of its own because
 /// it is its own permission, and an instance whose edit screen does not carry
 /// `assignee` — a normal configuration — refuses the field update while

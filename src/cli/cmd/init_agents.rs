@@ -585,6 +585,14 @@ pub fn render() -> String {
          and nothing is overwritten — the edit stays in the file.\n\n",
     );
     s.push_str(
+        "On Data Center, `push` checks the fields it is about to send against \
+         the issue's edit screen, and `create` against the create screen for \
+         its project and type. A field the screen does not carry is exit 2 at \
+         plan time, named in the error and visible in `--dry-run`, rather than \
+         a 400 after the rest of the push has gone. Nothing is refused when the \
+         server describes no screen.\n\n",
+    );
+    s.push_str(
         "`assignee:` is sent as its own operation on both deployments, shown in \
          `--dry-run` as `assign` against `/issue/{key}/assignee` rather than \
          inside a field update — assigning is a permission of its own, and an \

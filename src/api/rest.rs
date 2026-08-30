@@ -803,6 +803,122 @@ impl JiraApi for Rest {
             .await
     }
 
+    async fn edit_meta(&self, key: &str) -> Result<Option<ScreenMeta>> {
+        let v = self
+            .get(&routes::EDIT_META, &[("issueIdOrKey", key)], &[])
+            .await?;
+        Ok(Some(normalize::screen_from_json(&v)))
+    }
+
+    /// Paged twice: the issue types of a project, to turn the type's name into
+    /// the id the second call takes, and then that call's own pages of fields.
+    ///
+    /// The name is what a file carries, and the id is what the route wants, so
+    /// the lookup is unavoidable. A type the project does not have is `None`
+    /// rather than an error — a `create` naming an unknown type fails on the
+    /// create itself, where the message is about the type rather than about a
+    /// metadata call the user never made.
+    async fn create_meta(&self, project: &str, issue_type: &str) -> Result<Option<ScreenMeta>> {
+        let type_id = {
+            let mut start = 0usize;
+            loop {
+                let v = self
+                    .get(
+                        &routes::CREATE_META_TYPES,
+                        &[("projectIdOrKey", project)],
+                        &[("startAt", &start.to_string()), ("maxResults", "50")],
+                    )
+                    .await?;
+                let values = v
+                    .get("values")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let n = values.len();
+                let found = values.iter().find_map(|t| {
+                    let name = t.get("name").and_then(Value::as_str)?;
+                    name.eq_ignore_ascii_case(issue_type)
+                        .then(|| t.get("id").and_then(id_string_ref))?
+                });
+                if found.is_some() {
+                    break found;
+                }
+                if n == 0 || v.get("isLast").and_then(Value::as_bool).unwrap_or(true) {
+                    break None;
+                }
+                start += n;
+            }
+        };
+        // A type this project does not offer is `None` rather than an error: a
+        // `create` naming an unknown type fails on the create itself, where the
+        // message is about the type rather than about a lookup nobody asked for.
+        let Some(type_id) = type_id else {
+            return Ok(None);
+        };
+
+        let mut screen = ScreenMeta::default();
+        let mut start = 0usize;
+        loop {
+            let v = self
+                .get(
+                    &routes::CREATE_META_FIELDS,
+                    &[("projectIdOrKey", project), ("issueTypeId", &type_id)],
+                    &[("startAt", &start.to_string()), ("maxResults", "50")],
+                )
+                .await?;
+            // The paged form answers with `values`, a list of fields each
+            // carrying its own `fieldId`; the unpaged shape is the same
+            // `fields` object editmeta uses.
+            let values = v
+                .get("values")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if values.is_empty() {
+                let page = normalize::screen_from_json(&v);
+                screen.fields.extend(page.fields);
+                break;
+            }
+            let n = values.len();
+            for f in &values {
+                let Some(id) = f
+                    .get("fieldId")
+                    .and_then(Value::as_str)
+                    .or_else(|| f.get("key").and_then(Value::as_str))
+                else {
+                    continue;
+                };
+                screen.fields.insert(
+                    id.to_string(),
+                    FieldSchema {
+                        id: id.to_string(),
+                        name: f
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or(id)
+                            .to_string(),
+                        required: f.get("required").and_then(Value::as_bool).unwrap_or(false),
+                        operations: f
+                            .get("operations")
+                            .and_then(Value::as_array)
+                            .map(|ops| {
+                                ops.iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    },
+                );
+            }
+            if n == 0 || v.get("isLast").and_then(Value::as_bool).unwrap_or(true) {
+                break;
+            }
+            start += n;
+        }
+        Ok(Some(screen))
+    }
+
     async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
         self.http
             .put_json(

@@ -353,6 +353,44 @@ pub struct Transition {
     pub required_fields: Vec<String>,
 }
 
+/// One field as a screen offers it [M6.9].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldSchema {
+    pub id: String,
+    /// What a person calls it — "Priority", not `priority` — because that is
+    /// what a refusal has to say to be worth reading.
+    pub name: String,
+    #[serde(default)]
+    pub required: bool,
+    /// What may be done to it: `set`, `add`, `remove`. Read but not yet acted
+    /// on; a field that is on the screen and permits no `set` is a case worth
+    /// naming separately when something needs it.
+    #[serde(default)]
+    pub operations: Vec<String>,
+}
+
+/// The fields one screen carries: an issue's edit screen, or the create screen
+/// for a project and issue type.
+///
+/// Jira's field configuration is per project, per issue type and per screen, so
+/// "this issue has a priority" and "this screen lets you set one" are different
+/// questions, and only the second governs whether a write is accepted.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScreenMeta {
+    pub fields: std::collections::BTreeMap<String, FieldSchema>,
+}
+
+impl ScreenMeta {
+    pub fn carries(&self, id: &str) -> bool {
+        self.fields.contains_key(id)
+    }
+
+    /// What a person calls this field, if the screen named it.
+    pub fn display_name(&self, id: &str) -> Option<&str> {
+        self.fields.get(id).map(|f| f.name.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldMeta {
     pub id: String,

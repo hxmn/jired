@@ -360,9 +360,9 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** schema contract, e2e and unit tests are green and every `"assignee"` assertion in `tests/e2e.rs` points at the new op.
 
 ### M6.9 Screen checks
-- [ ] Model types, trait methods, `Rest` (v3) and `DataCenter` implementations, `normalize::screen_from_json` with a unit test on a trimmed real editmeta payload, fixture files, `src/sync/screen.rs` with units `a_payload_field_missing_from_the_screen_is_named` and `a_screen_nobody_described_refuses_nothing`, push wiring (gated; `run()` owns the createmeta cache)
-- [ ] e2e on Data Center: `a_field_the_edit_screen_lacks_is_refused_before_the_server_sees_it` (editmeta without `priority`; edit `priority:`; dry-run exits 2 naming it; the journal shows no `PUT /issue/DC-77`; the edit stays in the file), `a_field_the_create_screen_lacks_is_refused_before_the_issue_is_made` (`createmeta-DC-Task.json`; `create … --priority High`; no `POST /issue`), `a_description_edit_is_checked_against_the_edit_screen`
-- [ ] Docs: `commands.md` push and `create --push`; README push section; `init-agents` prose; CHANGELOG **Added**, with a **Breaking** line that a push which used to fail on the server's 400 (exit 1) now exits 2 at plan time
+- [x] Model types, trait methods, `Rest` (v3) and `DataCenter` implementations, `normalize::screen_from_json` with a unit test on a trimmed real editmeta payload, fixture files, `src/sync/screen.rs` with units `a_payload_field_missing_from_the_screen_is_named` and `a_screen_nobody_described_refuses_nothing`, push wiring (gated; `run()` owns the createmeta cache)
+- [x] e2e on Data Center: `a_field_the_edit_screen_lacks_is_refused_before_the_server_sees_it` (editmeta without `priority`; edit `priority:`; dry-run exits 2 naming it; the journal shows no `PUT /issue/DC-77`; the edit stays in the file), `a_field_the_create_screen_lacks_is_refused_before_the_issue_is_made` (`createmeta-DC-Task.json`; `create … --priority High`; no `POST /issue`), `a_description_edit_is_checked_against_the_edit_screen`
+- [x] Docs: `commands.md` push and `create --push`; README push section; `init-agents` prose; CHANGELOG **Added**, with a **Breaking** line that a push which used to fail on the server's 400 (exit 1) now exits 2 at plan time
 - **Done when:** the three Data Center e2e tests pass and every Cloud test is unaffected.
 
 ### M6.10 Docs, plan, version

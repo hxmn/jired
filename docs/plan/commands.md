@@ -200,6 +200,22 @@ move instead) rather than sent to a board call that answers 204 and does
 nothing. The refusal is made in `plan`, so `--dry-run` shows it before anything
 is sent, and it leaves the edit in the file: the issue fails, base does not
 advance, and nothing is overwritten.
+On Data Center, the fields a `PUT` would carry are checked against the issue's
+edit screen (`GET /issue/{key}/editmeta`) before anything is sent, and a
+`create` against the create screen for its project and issue type
+(`GET /issue/createmeta/{project}/issuetypes/{type}`). Jira's field
+configuration is per project, per issue type and per screen, so an issue can
+have a priority while the screen it is edited through offers no way to set one;
+that write is a 400 naming a screen, arriving after everything else in the push
+has gone. Asked first, it is exit 2 at plan time, visible in `--dry-run`, naming
+the field as the workspace knows it, with the other issues in the push
+unaffected and the edit still in the file. A server that describes no screen —
+an older version, a credential that may not read it — refuses nothing: unknown
+is not "no fields", and the server's own answer remains the backstop. Cloud is
+not checked, deliberately: both endpoints exist there and both clients implement
+them, but no Cloud screen has been recorded to verify the reading against, and a
+false refusal is worse than the 400 it pre-empts.
+
 `assignee:` is an operation of its own on both deployments, an `assign` op
 against `PUT /issue/{key}/assignee`, never a key inside a `fields` payload.
 Assigning is not editing: Jira gives it a route because it is its own

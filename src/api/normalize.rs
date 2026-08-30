@@ -492,6 +492,45 @@ fn custom_fields(f: &Value, map: &FieldMap) -> BTreeMap<String, Value> {
         .collect()
 }
 
+/// The fields an editmeta or createmeta payload says a screen carries [M6.9].
+///
+/// Both endpoints answer with the same `fields` object keyed by field id, which
+/// is why one reader serves both.
+pub fn screen_from_json(v: &Value) -> ScreenMeta {
+    let mut out = ScreenMeta::default();
+    let Some(fields) = v.get("fields").and_then(Value::as_object) else {
+        return out;
+    };
+    for (id, f) in fields {
+        out.fields.insert(
+            id.clone(),
+            FieldSchema {
+                id: id.clone(),
+                // A screen that names no field still permits it; the id is a
+                // worse thing to show a person than a name, and better than
+                // nothing.
+                name: f
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id)
+                    .to_string(),
+                required: f.get("required").and_then(Value::as_bool).unwrap_or(false),
+                operations: f
+                    .get("operations")
+                    .and_then(Value::as_array)
+                    .map(|ops| {
+                        ops.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            },
+        );
+    }
+    out
+}
+
 pub fn user_ref(v: Option<&Value>) -> Option<UserRef> {
     let v = v?;
     if v.is_null() {

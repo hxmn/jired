@@ -177,6 +177,19 @@ pub trait JiraApi: Send + Sync {
     ) -> Result<RemoteWorklog>;
     async fn delete_worklog(&self, key: &str, id: &str) -> Result<()>;
 
+    /// The fields this issue's edit screen carries.
+    ///
+    /// `None` when the server describes no screen — a version that does not
+    /// serve the endpoint, or a credential that may not read it. A caller must
+    /// treat that as "unknown" and not as "no fields": refusing a write because
+    /// a metadata call was unavailable would be worse than the error it was
+    /// trying to pre-empt.
+    async fn edit_meta(&self, key: &str) -> Result<Option<ScreenMeta>>;
+
+    /// The fields the create screen carries for a project and issue type, the
+    /// type named as a person names it.
+    async fn create_meta(&self, project: &str, issue_type: &str) -> Result<Option<ScreenMeta>>;
+
     /// Set or clear an issue's assignee.
     ///
     /// Its own route rather than a field edit. Jira offers `PUT

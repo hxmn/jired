@@ -40,6 +40,17 @@ version between the one you have and the one you are moving to.
 
 ### Added
 
+- **A field the screen does not carry is refused before the server sees it
+  (Data Center).** Jira configures fields per project, per issue type and per
+  screen, so an issue can have a priority while the screen it is edited through
+  offers no way to set one — and that write comes back a 400 naming a screen,
+  after the rest of the push has already gone out. `push` and `create` now ask
+  the edit and create screens first: a field they do not carry is exit 2 at plan
+  time, visible in `push --dry-run`, naming the field, with the other issues in
+  the push unaffected and the edit still in the file. A server that describes no
+  screen refuses nothing. Note that a push which used to fail on the server's
+  400 (exit 1) now fails at plan time with exit 2.
+
 - **`jired assign --user` searches only the people who can be assigned that
   issue.** Assignment is a permission, held per project and per issue-security
   level, so the assignable users are a smaller set than the instance's

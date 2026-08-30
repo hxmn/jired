@@ -15,9 +15,11 @@ use crate::doc::{CommentId, IssueDoc, WorklogEntry, WorklogId};
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::sync::render::{render_issue, RenderContext};
+use crate::sync::screen::Screen;
 use crate::sync::Engine;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 /// The outcome in one line, before the array anybody would otherwise read to
 /// work it out. A caller checking whether a push went through should not have
@@ -537,6 +539,30 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             continue;
         }
 
+        // What is about to go out in a `PUT /issue` — the field payload, and
+        // the description, which travels in one too. Asked of the screen before
+        // it is sent, so a field the screen does not carry is named here rather
+        // than in a 400 that arrives after everything else in the push.
+        let edited: Vec<&str> = ops
+            .iter()
+            .flat_map(|op| match &op.action {
+                Action::UpdateFields(payload) => payload
+                    .as_object()
+                    .map(|o| o.keys().map(String::as_str).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                Action::UpdateDescription(_) => vec!["description"],
+                _ => Vec::new(),
+            })
+            .collect();
+        if !edited.is_empty() {
+            let meta = crate::api::block_on(client.edit_meta(&row.key));
+            if let Err(e) = check_screen(&engine, &row.key, Screen::Edit, meta, edited, &field_meta)
+            {
+                report.results.push(IssueResult::failed(&row.key, &e));
+                continue;
+            }
+        }
+
         if args.dry_run {
             report.results.push(IssueResult::ok(
                 &row.key,
@@ -697,6 +723,49 @@ fn regroups(kind: &str) -> bool {
 /// On success the temporary key is replaced everywhere — state rows, the file
 /// name and the attachment folder — so nothing keeps referring to a key that
 /// never existed on the server.
+/// Refuse the fields a screen does not carry, if the server described one.
+///
+/// Data Center only, for now. Cloud has both endpoints and both clients
+/// implement them, but nothing in the tree has a recorded Cloud screen to check
+/// the reading against — and a Cloud sub-task's re-parenting is an ordinary
+/// `parent` field edit, so a company-managed screen that omitted `parent` while
+/// the edit worked would turn a push that succeeds today into a refusal. A
+/// false refusal is worse than the 400 it pre-empts. Lifting the gate is the
+/// first line of this function.
+fn check_screen(
+    engine: &Engine,
+    key: &str,
+    screen: Screen,
+    meta: Result<Option<crate::api::ScreenMeta>>,
+    sent: Vec<&str>,
+    field_meta: &BTreeMap<String, crate::api::FieldMeta>,
+) -> Result<()> {
+    if engine.account.deployment != crate::api::Deployment::DataCenter {
+        return Ok(());
+    }
+    let meta = match meta {
+        Ok(Some(meta)) => meta,
+        // A server that describes no screen: unknown is not "no fields".
+        Ok(None) => return Ok(()),
+        // And a metadata call that failed is not a reason to fail the push —
+        // the server's own answer to the write is still the backstop, and a
+        // lookup must never turn a working push into a failing one.
+        Err(e) => {
+            tracing::warn!("{key}: cannot read the {screen:?} screen: {}", e.message);
+            return Ok(());
+        }
+    };
+    let names: BTreeMap<String, String> = field_meta
+        .iter()
+        .map(|(id, f)| (id.clone(), f.name.clone()))
+        .collect();
+    let refused = crate::sync::screen::refused_by_screen(&meta, sent.into_iter(), &names);
+    match refused.is_empty() {
+        true => Ok(()),
+        false => Err(crate::sync::screen::refusal(key, screen, &refused)),
+    }
+}
+
 fn create_issue(
     ctx: &mut Context,
     engine: &Engine,
@@ -783,6 +852,33 @@ fn create_issue(
 
     let payload = Value::Object(fields);
     let request = json!({"method": "POST", "path": "/issue", "body": {"fields": payload}});
+
+    // Before the create rather than after its 400: a field the create screen
+    // does not carry is refused here, naming the field, where `--dry-run` shows
+    // it and nothing has been sent.
+    let issue_type = payload
+        .get("issuetype")
+        .and_then(|t| t.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Task")
+        .to_string();
+    check_screen(
+        engine,
+        temp_key,
+        Screen::Create,
+        crate::api::block_on(client.create_meta(&project, &issue_type)),
+        payload
+            .as_object()
+            .map(|o| {
+                o.keys()
+                    // The two that choose the screen rather than sit on it.
+                    .filter(|k| k.as_str() != "project" && k.as_str() != "issuetype")
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        &field_meta,
+    )?;
 
     // What the create call cannot carry, and so happens after it. Planned here
     // rather than after the write so `--dry-run` can show them: a plan that

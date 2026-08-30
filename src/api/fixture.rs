@@ -543,6 +543,29 @@ impl JiraApi for FixtureClient {
         Ok(())
     }
 
+    /// A recorded edit screen, or nothing.
+    ///
+    /// Absent means the server described none, which is how a recording that
+    /// predates screen checks keeps working: unknown is not "no fields", and
+    /// nothing is refused on the strength of a file that is not there.
+    async fn edit_meta(&self, key: &str) -> Result<Option<ScreenMeta>> {
+        Ok(read_json(&self.dir, &format!("editmeta-{key}.json"))
+            .map(|v| normalize::screen_from_json(&v)))
+    }
+
+    /// A recorded create screen, keyed by project and the type's name.
+    ///
+    /// By name rather than by id because that is what a file carries and what a
+    /// test writes; the real client turns one into the other with a call this
+    /// stands in for.
+    async fn create_meta(&self, project: &str, issue_type: &str) -> Result<Option<ScreenMeta>> {
+        Ok(read_json(
+            &self.dir,
+            &format!("createmeta-{project}-{issue_type}.json"),
+        )
+        .map(|v| normalize::screen_from_json(&v)))
+    }
+
     /// The dedicated assignee route, recorded under its own path.
     ///
     /// Its own recording is the point: a test can tell an assignee that was
