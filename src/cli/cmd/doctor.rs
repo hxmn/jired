@@ -558,9 +558,10 @@ fn check_sections(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     let projector = crate::project::Projector::new(ctx.workspace.root());
     let files = projector.scan()?;
     let state = StateStore::open(&ctx.workspace)?;
-    // The checklist and the worklogs are server-owned, so the last snapshot is
-    // where their current contents come from. Without a readable account there
-    // is none, which costs those two but not the move.
+    // A file written before the split held subtasks under `## Checklist` and no
+    // worklogs at all, so neither section has a local version worth keeping and
+    // the last snapshot is where both come from. Without a readable account
+    // there is no snapshot, which costs those two but not the move.
     let engine = crate::sync::Engine::open(ctx).ok();
     let field_map = match &engine {
         Some(engine) => engine.field_map().ok(),

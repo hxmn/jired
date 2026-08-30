@@ -256,6 +256,28 @@ direction refuses the issue while nothing has been sent. `epic` remains the
 one editable field with no call behind it; a change to it is warned about
 rather than sent.
 
+`## Checklist` is a field update like any other — the checklist plugin's text
+field, carried in the same `PUT /issue` as the rest, and a follow-up after a
+create because a plugin's field is rarely on the create screen. What goes out is
+the plugin's own syntax rebuilt from the section: `# ` for a `### ` group, `-`
+`~` `+` `x` for the four statuses the checkbox and its backticked name spell,
+and a note on the line below its item. The derived fields are never written: the
+progress string is the plugin's, and the object dump is not a document anything
+could write back.
+The dialect is learned from the field rather than assumed. jired writes the
+edit only once rendering the *unedited* checklist reproduces the text the server
+holds, compared line for line with the plugin's own trailing spaces and blank
+lines discarded; the note marker is whichever of `>>` and `>` that text uses.
+Where the two do not match there is something in the field this jired does not
+model — a mandatory item, a status the instance configured itself, a syntax this
+plugin version spells differently — and sending the field would drop it, so the
+section is refused in `warnings` and left alone while the rest of the issue goes.
+The plugin's fields are found by display name, the schema deciding which of the
+pair is the writable text one (`string`) and which the object (`any`);
+`checklist.field` names it outright where an instance calls them something else.
+An instance that exposes no text field keeps the section read-only, and says so
+when it is edited.
+
 A sub-task's `parent:` is an operation of its own on Data Center, not a field
 update: `PUT /issue` accepts the payload, answers success and ignores it, and
 the REST API offers no route at all (JRASERVER-68763). The change is taken out

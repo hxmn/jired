@@ -206,6 +206,18 @@ pub const KEYS: &[KeyDef] = &[
               ticked (disabled when unset)",
     },
     KeyDef {
+        key: "checklist.field",
+        env: "JIRED_CHECKLIST_FIELD",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Text,
+        doc: "The checklist plugin's text field, by id (customfield_10206) or by \
+              the name the instance gives it. Only needed when the plugin's \
+              fields are named something jired does not recognise; it is what \
+              `## Checklist` is read from and written to",
+    },
+    KeyDef {
         key: "ignored_custom_fields",
         env: "JIRED_IGNORED_CUSTOM_FIELDS",
         flag: None,

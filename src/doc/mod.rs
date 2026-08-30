@@ -7,8 +7,8 @@
 //!
 //! The two checkbox sections are not the same thing and must not be confused:
 //! `## Checklist` is the checklist plugin's list, which lives inside this
-//! issue and is read-only; `## Children` lists the subtasks, which are issues
-//! of their own and can be transitioned by ticking a box.
+//! issue; `## Children` lists the subtasks, which are issues of their own and
+//! can be transitioned by ticking a box.
 
 pub mod frontmatter;
 
@@ -32,7 +32,7 @@ pub struct IssueDoc {
     /// Anything between the title and the first `## ` section, kept in place.
     pub preamble: String,
     pub description: String,
-    /// The checklist plugin's list, rendered read-only (D12).
+    /// The checklist plugin's list, pushed back as the plugin's own syntax.
     pub checklist: Vec<ChecklistEntry>,
     /// Subtasks, one checkbox each.
     pub children: Vec<ChildItem>,

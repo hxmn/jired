@@ -536,6 +536,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 &field_meta,
                 &fields.ignored,
                 fields.story_points.as_deref(),
+                fields.checklist_text.as_deref(),
                 &sprints,
                 markup,
                 &raw,
@@ -928,7 +929,12 @@ fn create_issue(
     // rather than after the write so `--dry-run` can show them: a plan that
     // listed only `create_issue` was how a move or a transition went unnoticed
     // until the file came back without it.
-    let (follow_ups, follow_up_warnings) = follow_ups_after_create(&doc, &sprints, link_types)?;
+    let (follow_ups, follow_up_warnings) = follow_ups_after_create(
+        &doc,
+        &sprints,
+        field_map.checklist_text.as_deref(),
+        link_types,
+    )?;
     for w in &follow_up_warnings {
         ctx.out.warn(w);
     }
@@ -1291,10 +1297,43 @@ struct FollowUp {
 fn follow_ups_after_create(
     doc: &IssueDoc,
     sprints: &[crate::store::state::SprintRow],
+    checklist_field: Option<&str>,
     link_types: &mut LinkTypes<'_>,
 ) -> Result<(Vec<FollowUp>, Vec<String>)> {
     let mut out = Vec::new();
     let mut warnings = Vec::new();
+
+    // The checklist belongs to a plugin, and a plugin's field is not on the
+    // create screen of an instance that has not put it there — which would
+    // refuse the whole create rather than the checklist. An update of its own,
+    // once the issue exists, is what the plugin's own UI does too.
+    if !doc.checklist.is_empty() {
+        match checklist_field {
+            Some(id) => {
+                match crate::api::checklist::to_text(&doc.checklist, crate::api::checklist::NOTE) {
+                    Ok(text) => {
+                        let payload = json!({ id: text });
+                        out.push(FollowUp {
+                            kind: "update_fields",
+                            summary: format!("checklist ({} lines)", text.lines().count()),
+                            request: json!({"method": "PUT", "path": "/issue/{key}",
+                                        "body": {"fields": payload}}),
+                            action: Action::UpdateFields(payload),
+                        });
+                    }
+                    Err(why) => {
+                        warnings.push(format!("the Checklist section was not sent because {why}"))
+                    }
+                }
+            }
+            None => warnings.push(
+                "this instance exposes no checklist field jired can write, so the \
+                 Checklist section was not sent — set `checklist.field` to the \
+                 plugin's text field if it has one"
+                    .to_string(),
+            ),
+        }
+    }
 
     if let Some(name) = doc.frontmatter.sprint.last() {
         match sprint_target(Some(name), sprints) {
@@ -1618,6 +1657,80 @@ fn worth_creating(value: &Value) -> bool {
     }
 }
 
+/// Plan the checklist half of an update [M5.4].
+///
+/// `## Checklist` is a rendering of a plugin's field, and the plugin is the one
+/// that has to read back what goes into it. So the edit is sent only once jired
+/// has proved, on this issue's own data, that it speaks the dialect: rendering
+/// the *unedited* checklist has to reproduce the text the server holds, line for
+/// line. When it does not — an item marked mandatory, a status the instance
+/// configured itself, a syntax this plugin version spells differently — there is
+/// something in the field jired does not model, and writing the field would drop
+/// it. That refusal is said out loud, with the checklist left alone.
+fn plan_checklist(
+    key: &str,
+    base: &IssueDoc,
+    working: &IssueDoc,
+    base_raw: &Value,
+    field: Option<&str>,
+    fields: &mut serde_json::Map<String, Value>,
+    warnings: &mut Vec<String>,
+) {
+    use crate::api::checklist;
+
+    if working.checklist == base.checklist {
+        return;
+    }
+    let refuse = |warnings: &mut Vec<String>, why: String| {
+        warnings.push(format!(
+            "{key}: the Checklist section was not pushed because {why}; \
+             the next pull restores what the server holds"
+        ));
+    };
+    let Some(id) = field else {
+        return refuse(
+            warnings,
+            "this instance exposes no checklist field jired can write — set \
+             `checklist.field` to the plugin's text field if it has one"
+                .to_string(),
+        );
+    };
+
+    // Null is what a server holds for an issue whose checklist is empty, and
+    // an empty string is what jired renders one as; they mean the same thing.
+    let stored = base_raw
+        .get("fields")
+        .and_then(|f| f.get(id))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let note = checklist::note_marker(stored);
+
+    match checklist::to_text(&base.checklist, note) {
+        Ok(text) if checklist::normalized(&text) == checklist::normalized(stored) => {}
+        Ok(_) => {
+            return refuse(
+                warnings,
+                "jired's reading of it does not reproduce the text the server holds, \
+                 so something in the checklist is not modelled here"
+                    .to_string(),
+            )
+        }
+        Err(why) => return refuse(warnings, why),
+    }
+
+    match checklist::to_text(&working.checklist, note) {
+        // Clearing the section clears the checklist, which is `null` on the
+        // wire: it is what the server itself holds for an issue that has none.
+        Ok(text) if text.is_empty() => {
+            fields.insert(id.to_string(), Value::Null);
+        }
+        Ok(text) => {
+            fields.insert(id.to_string(), json!(text));
+        }
+        Err(why) => refuse(warnings, why),
+    }
+}
+
 /// Build the ordered operation list for one issue (decision D23).
 #[allow(clippy::too_many_arguments)]
 fn plan(
@@ -1629,6 +1742,7 @@ fn plan(
     field_meta: &std::collections::BTreeMap<String, crate::api::FieldMeta>,
     ignored: &std::collections::BTreeSet<String>,
     story_points_field: Option<&str>,
+    checklist_field: Option<&str>,
     sprints: &[crate::store::state::SprintRow],
     markup: Markup,
     raw: &[crate::convert::ast::RawBlock],
@@ -1700,6 +1814,16 @@ fn plan(
         field_meta,
         ignored,
         engine,
+        &mut fields,
+        warnings,
+    );
+
+    plan_checklist(
+        &bf.key,
+        base,
+        working,
+        base_raw,
+        checklist_field,
         &mut fields,
         warnings,
     );
@@ -1957,17 +2081,6 @@ fn plan(
                             "path": format!("/issue/{{key}}/worklog/{id}")}),
             action: Action::DeleteWorklog { id: id.clone() },
         });
-    }
-
-    // The checklist plugin's list is rendered read-only: jired can show what
-    // the plugin holds but has no supported way to write it back, and inventing
-    // one would corrupt the field for everyone else looking at the issue.
-    if working.checklist != base.checklist {
-        warnings.push(format!(
-            "the Checklist section of {} is read-only, so the edit was not pushed; \
-             the next pull restores what the server holds",
-            base.frontmatter.key
-        ));
     }
 
     // A ticked child box means "this subtask is done". Acting on it is off

@@ -833,11 +833,10 @@ pub fn merge_docs(
     field!("children", children);
     field!("extra_sections", extra_sections);
 
-    // `## Checklist` is a read-only rendering, so the server always wins: it
-    // starts from `remote` and no local edit to it is worth a conflict.
-    if base.checklist != remote.checklist {
-        merged.push("checklist".into());
-    }
+    // A checklist edit is something push can send, so it merges like anything
+    // else a person writes. Taking `remote` unconditionally, which is what a
+    // read-only rendering wanted, would throw an unpushed one away.
+    field!("checklist", checklist);
     field!("preamble", preamble);
 
     // Body text merges at hunk granularity rather than all-or-nothing.

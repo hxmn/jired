@@ -252,10 +252,18 @@ ticking one transitions that subtask only when `children.done_transition` is set
 a status name, and otherwise push says so and moves on. Adding a line does **not**
 create a subtask — use `jired create --parent PROJ-142`.
 
-`## Checklist` is the checklist plugin's list inside this issue, read from its
-custom field and shown read-only: a status the checkbox does not already say is
-written in backticks ahead of the title, edits to it are reported by `push` rather
-than sent, and the next write from the server restores it.
+`## Checklist` is the checklist plugin's list inside this issue: a status the
+checkbox does not already say is written in backticks ahead of the title, `### `
+lines group items, and an indented line under an item is its note. Tick a box,
+add an item or write a note and `push` sends the list back in the plugin's own
+syntax — a whole issue can be created and finished from the CLI. Only what the
+section can show is writable: the four statuses its markers spell (`TO DO`,
+`IN PROGRESS`, `DONE`, `SKIPPED`), groups, and notes. If jired's rendering of a
+checklist does not reproduce the text the server holds — a mandatory item, a
+status the instance configured itself, a syntax this plugin version spells
+differently — the edit is refused out loud rather than sent with the rest of the
+field dropped. The plugin's fields are found by name; `checklist.field` names
+the writable one where they are called something jired does not recognise.
 
 ### Lossy regions and conflicts
 

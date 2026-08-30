@@ -626,9 +626,13 @@ pub fn render() -> String {
         "- `## Checklist` is the checklist plugin's list inside this issue, as \
          `- [ ] `IN PROGRESS` Title` — a status is written in backticks ahead of the \
          title, and only when the checkbox does not already say it. `### ` lines group \
-         items; indented lines under an item are its note. It is read-only: an edit is \
-         reported by push rather than sent, and the next write from the server \
-         replaces it.\n\n",
+         items; indented lines under an item are its note. Editing it is a push: the \
+         list goes back in the plugin's own syntax, so an issue can be created and its \
+         checklist filled in without leaving the CLI. Only what the section shows is \
+         writable — the four statuses its markers spell (`TO DO`, `IN PROGRESS`, \
+         `DONE`, `SKIPPED`), groups, notes. Anything else in the field (a mandatory \
+         item, a status the instance configured itself) makes push refuse the whole \
+         section and say so, rather than send it with that part dropped.\n\n",
     );
 
     s.push_str("## New issues\n\n");

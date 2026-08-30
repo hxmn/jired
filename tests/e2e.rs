@@ -6501,57 +6501,212 @@ fn a_plugin_checklist_renders_as_checkboxes_in_its_own_section() {
     assert!(!text.contains("customfield_10207"), "{text}");
 }
 
-/// Read-only means the edit is refused out loud rather than silently kept or
-/// silently sent.
+/// An issue whose checklist is empty has an empty section — not the plugin's
+/// own `toString()` of an empty list, which is what reading the dump as text
+/// used to put there, checkbox and all.
 #[test]
-fn editing_the_checklist_section_is_reported_and_then_undone_by_a_pull() {
+fn an_empty_checklist_is_an_empty_section_rather_than_the_plugins_dump() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws.read("DC-0078. Document the LDAP rollback plan.md");
+
+    assert_eq!(section(&text, "## Checklist").trim(), "", "{text}");
+    assert!(!text.contains("_items="), "the dump leaked: {text}");
+}
+
+/// Ticking a box, adding an item, writing a note: the section is the plugin's
+/// own syntax on the way out as well as on the way in.
+#[test]
+fn a_checklist_edit_is_pushed_as_the_plugins_own_syntax() {
     let ws = Ws::of(Deployment::DataCenter);
     ws.init();
     ws.json(&["pull"]);
     let file = Deployment::DataCenter.issue_file();
 
     let text = ws.read(file).replace(
-        "- [ ] Update the connector config",
-        "- [x] I did this myself",
+        "- [ ] Update the connector config\n",
+        "- [x] Update the connector config\n- [ ] `IN PROGRESS` Restart the pool\n  \
+         after the connector\n",
     );
     ws.write(file, &text);
 
-    // Push says why it is not sending it, and plans nothing.
-    let dry = ws.json(&["push", "--dry-run"]);
-    let warning = dry["warnings"][0].as_str().unwrap_or_default();
-    assert!(warning.contains("Checklist"), "{dry}");
-    assert!(warning.contains("read-only"), "{dry}");
-
-    // And status does not call the issue dirty for it, or the file would stay
-    // dirty for ever: there is nothing push could do to clean it.
+    // Unpushed work, and `status` says so — it used to call the file clean
+    // because there was nothing push could do about it.
     let status = ws.json(&["status"]);
+    let dirty = status["dirty"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "DC-77")
+        .expect("the checklist edit is unpushed work");
     assert!(
-        !status["dirty"]
+        dirty["fields"]
             .as_array()
             .unwrap()
-            .iter()
-            .any(|d| d["key"] == "DC-77"),
+            .contains(&Value::from("checklist")),
         "{status}"
     );
 
-    // A real edit alongside it still goes through, and the rewrite that follows
-    // the push puts the checklist back to what the server holds.
+    // One `PUT /issue`, carrying the text field and nothing derived from it.
+    let dry = ws.json(&["push", "--dry-run"]);
+    let body = &dry["results"][0]["ops"][0]["request"]["body"]["fields"];
+    assert_eq!(
+        body["customfield_10206"],
+        Value::from(
+            "~ Generate the replacement secret\n\
+             >> Coordinate the window with @jane\n\
+             + Update the connector config\n\
+             ~ Restart the pool\n\
+             >> after the connector\n\
+             + Announce the freeze\n"
+        ),
+        "{dry}"
+    );
+    assert!(body.get("customfield_10205").is_none(), "{dry}");
+    assert!(body.get("customfield_10207").is_none(), "{dry}");
+
+    // And the file settles: what comes back is what was sent, so a second push
+    // has nothing left to do.
+    assert!(ws.json(&["push"])["results"][0]["ok"]
+        .as_bool()
+        .unwrap_or(false));
+    let after = ws.read(file);
+    assert!(
+        after.contains("- [x] Update the connector config"),
+        "{after}"
+    );
+    assert!(
+        after.contains("- [ ] `IN PROGRESS` Restart the pool\n  after the connector"),
+        "{after}"
+    );
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// Items typed into an issue that has none — the round trip the plugin's web UI
+/// used to be the only way to finish.
+#[test]
+fn a_checklist_can_be_written_onto_an_issue_that_had_none() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = "DC-0078. Document the LDAP rollback plan.md";
+
     let text = ws.read(file).replace(
-        "summary: Rotate the LDAP bind credential",
-        "summary: Rotate the LDAP bind credential now",
+        "## Checklist\n",
+        "## Checklist\n\n### Analysis\n\n- [ ] Draft the plan\n- [x] Book the window\n",
     );
     ws.write(file, &text);
-    let push = ws.json(&["push"]);
-    assert!(
-        push["results"][0]["ok"].as_bool().unwrap_or(false),
-        "{push}"
+
+    let dry = ws.json(&["push", "DC-78", "--dry-run"]);
+    assert_eq!(
+        dry["results"][0]["ops"][0]["request"]["body"]["fields"]["customfield_10206"],
+        Value::from("# Analysis\n- Draft the plan\n+ Book the window\n"),
+        "{dry}"
     );
 
-    let after = ws.read("DC-0077. Rotate the LDAP bind credential now.md");
-    assert!(!after.contains("I did this myself"), "{after}");
-    assert!(
-        after.contains("- [ ] Update the connector config"),
+    ws.json(&["push", "DC-78"]);
+    let after = ws.read(file);
+    assert_eq!(
+        section(&after, "## Checklist").trim(),
+        "### Analysis\n\n- [ ] Draft the plan\n- [x] Book the window",
         "{after}"
+    );
+
+    // And emptying the section empties the checklist: `null` is what the server
+    // itself holds for an issue that has none.
+    ws.write(
+        file,
+        &after.replace(
+            "### Analysis\n\n- [ ] Draft the plan\n- [x] Book the window\n",
+            "",
+        ),
+    );
+    let dry = ws.json(&["push", "DC-78", "--dry-run"]);
+    assert_eq!(
+        dry["results"][0]["ops"][0]["request"]["body"]["fields"]["customfield_10206"],
+        Value::Null,
+        "{dry}"
+    );
+    ws.json(&["push", "DC-78"]);
+    assert_eq!(section(&ws.read(file), "## Checklist").trim(), "");
+}
+
+/// The round trip the report was about: an issue created from the CLI arrives
+/// with its checklist. The create call cannot carry it — a plugin's field is not
+/// on an instance's create screen — so it is a follow-up, listed in the plan.
+#[test]
+fn a_new_issue_gets_its_checklist_after_the_create() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["create", "--summary", "Wire the audit log"]);
+    let file = report["file"].as_str().unwrap().to_string();
+    let text = ws.read(&file).replace(
+        "## Checklist\n",
+        "## Checklist\n\n- [ ] Draft the plan\n- [ ] Review it\n",
+    );
+    ws.write(&file, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let ops = dry["results"][0]["ops"].as_array().unwrap();
+    let kinds: Vec<&str> = ops.iter().map(|o| o["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["create_issue", "update_fields"], "{dry}");
+    assert!(
+        ops[0]["request"]["body"]["fields"]
+            .get("customfield_10206")
+            .is_none(),
+        "the create screen is not asked to carry it: {dry}"
+    );
+    assert_eq!(
+        ops[1]["request"]["body"]["fields"]["customfield_10206"],
+        Value::from("- Draft the plan\n- Review it\n"),
+        "{dry}"
+    );
+
+    let push = ws.json(&["push"]);
+    let new_key = push["results"][0]["new_key"].as_str().unwrap();
+    let number = new_key.rsplit('-').next().unwrap();
+    let created = ws.read(&format!("DC-{number:0>4}. Wire the audit log.md"));
+    assert_eq!(
+        section(&created, "## Checklist").trim(),
+        "- [ ] Draft the plan\n- [ ] Review it",
+        "{created}"
+    );
+}
+
+/// The field belongs to a plugin, and jired writes it only where it can prove
+/// it reads the whole of it: rendering the *unedited* checklist has to
+/// reproduce the text the server holds. Here it cannot — the item is mandatory,
+/// which the section has no way to show — so the edit is refused out loud
+/// rather than sent with the flag quietly dropped.
+#[test]
+fn a_checklist_jired_cannot_reproduce_is_refused_rather_than_flattened() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = Deployment::DataCenter.issue_file();
+
+    // The server grows a construct this jired does not model.
+    ws.mutate_remote("DC-77", |issue| {
+        issue["fields"]["customfield_10206"] =
+            Value::from("- Update the connector config\n! Sign it off\n");
+    });
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(file)
+        .replace("- [ ] Update the connector config", "- [x] Done it");
+    ws.write(file, &text);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let warning = dry["warnings"][0].as_str().unwrap_or_default();
+    assert!(warning.contains("Checklist"), "{dry}");
+    assert!(warning.contains("not modelled"), "{dry}");
+    assert!(
+        dry["results"].as_array().unwrap().is_empty(),
+        "nothing else was planned: {dry}"
     );
 }
 

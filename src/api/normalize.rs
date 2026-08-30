@@ -20,7 +20,8 @@ pub struct FieldMap {
     pub epic_link: Option<String>,
     pub sprint: Option<String>,
     /// The checklist plugin's own field, and the text mirror of it that the
-    /// plugin keeps alongside — either one is enough to render the checklist.
+    /// plugin keeps alongside — either one is enough to render the checklist,
+    /// and the text one is the only one that can be written back.
     pub checklist: Option<String>,
     pub checklist_text: Option<String>,
     pub checklist_progress: Option<String>,
@@ -28,6 +29,21 @@ pub struct FieldMap {
     /// Field ids the workspace has asked to keep out of issue files.
     pub ignored: std::collections::BTreeSet<String>,
 }
+
+/// Display names the checklist plugin is known to give its two fields.
+///
+/// Spelled out rather than matched loosely: an instance is free to have a
+/// `Checklist due date` of its own, and writing the plugin's syntax into it
+/// would be worse than not finding the plugin at all. `checklist.field` is the
+/// way out for a name no list can predict.
+const CHECKLIST_NAMES: [&str; 6] = [
+    "checklist",
+    "checklists",
+    "checklist text",
+    "smart checklist",
+    "smart checklists",
+    "smart checklist text",
+];
 
 impl FieldMap {
     pub fn from_meta(fields: &[FieldMeta]) -> Self {
@@ -45,14 +61,20 @@ impl FieldMap {
                 "sprint" => {
                     map.sprint.get_or_insert(f.id.clone());
                 }
-                "checklist" | "smart checklist" => {
-                    map.checklist.get_or_insert(f.id.clone());
-                }
-                "checklist text" | "smart checklist text" => {
-                    map.checklist_text.get_or_insert(f.id.clone());
-                }
                 "checklist progress" | "smart checklist progress" => {
                     map.checklist_progress.get_or_insert(f.id.clone());
+                }
+                // Which of the plugin's two fields this is cannot be read off
+                // the name: one instance calls them `Checklist` and `Checklist
+                // Text`, another `Smart Checklist` and `Checklists`. The schema
+                // does say — the text mirror is a `string`, the plugin's own
+                // field is `any` — and getting it wrong means writing the
+                // syntax into a field that does not read it.
+                name if CHECKLIST_NAMES.contains(&name) => {
+                    match f.schema_type.as_deref() {
+                        Some("string") => map.checklist_text.get_or_insert(f.id.clone()),
+                        _ => map.checklist.get_or_insert(f.id.clone()),
+                    };
                 }
                 _ => {}
             }
@@ -91,6 +113,33 @@ impl FieldMap {
 
     pub fn is_ignored(&self, id: &str) -> bool {
         self.ignored.contains(id)
+    }
+
+    /// Point the checklist at the field `checklist.field` names.
+    ///
+    /// By id or by display name, the way `ignored_custom_fields` accepts both:
+    /// the plugin's field ids differ per instance, and an instance that names
+    /// them something no list here predicts would otherwise have no checklist
+    /// at all. The named field becomes the text one — the writable half — so
+    /// this is also how a workspace says which field a push may edit.
+    pub fn set_checklist_text(&mut self, entry: &str) {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            return;
+        }
+        let by_name = self
+            .names
+            .iter()
+            .find(|(id, name)| id.as_str() == entry || name.trim().eq_ignore_ascii_case(entry))
+            .map(|(id, _)| id.clone());
+        // An id the instance never reported is still honoured, for the same
+        // reason `ignore` honours one: the field metadata may be older than the
+        // config, and a field jired cannot see is one it also cannot refuse.
+        if let Some(id) =
+            by_name.or_else(|| entry.starts_with("customfield_").then(|| entry.to_string()))
+        {
+            self.checklist_text = Some(id);
+        }
     }
 
     /// True when this field has a home of its own in the file — `story_points`,
@@ -467,10 +516,13 @@ fn subtasks(v: Option<&Value>) -> Vec<SubtaskRef> {
         .unwrap_or_default()
 }
 
-/// The plugin's own field says the most; the text mirror is the fallback for
-/// instances that expose only that one.
+/// The text mirror is read first because it is the half jired writes: reading
+/// and writing the same field is what keeps a pushed checklist from coming back
+/// as a different rendering of itself. The plugin's own field is the fallback,
+/// for the instances that expose only that one — where the section stays
+/// read-only, since there is nothing a push could write.
 fn checklist(f: &Value, map: &FieldMap) -> Vec<crate::doc::ChecklistEntry> {
-    for id in [&map.checklist, &map.checklist_text].into_iter().flatten() {
+    for id in [&map.checklist_text, &map.checklist].into_iter().flatten() {
         let entries = f
             .get(id)
             .map(crate::api::checklist::from_field)
@@ -846,6 +898,49 @@ mod tests {
         );
         assert!(!issue.fields.custom.contains_key("customfield_10205"));
         assert!(!issue.fields.custom.contains_key("customfield_10207"));
+    }
+
+    /// One instance calls the plugin's two fields `Checklist` and `Checklist
+    /// Text`, another `Smart Checklist` and `Checklists`. The name does not say
+    /// which is which; the schema does, and getting it wrong means writing the
+    /// syntax into the field that does not read it.
+    #[test]
+    fn the_schema_says_which_of_the_plugins_two_fields_is_the_writable_one() {
+        let meta = |id: &str, name: &str, schema: &str| FieldMeta {
+            id: id.into(),
+            name: name.into(),
+            custom: true,
+            schema_type: Some(schema.into()),
+            items: None,
+        };
+        let map = FieldMap::from_meta(&[
+            meta("customfield_10205", "Smart Checklist", "any"),
+            meta("customfield_10206", "Checklists", "string"),
+            meta("customfield_10207", "Smart Checklist Progress", "string"),
+            // Something else entirely, which the plugin's syntax must not be
+            // written into however checklist-shaped its name looks.
+            meta("customfield_10300", "Checklist due date", "date"),
+        ]);
+        assert_eq!(map.checklist.as_deref(), Some("customfield_10205"));
+        assert_eq!(map.checklist_text.as_deref(), Some("customfield_10206"));
+        assert_eq!(map.checklist_progress.as_deref(), Some("customfield_10207"));
+        assert!(!map.is_well_known("customfield_10300"));
+    }
+
+    /// `checklist.field` is the way out for a name no list can predict.
+    #[test]
+    fn the_checklist_field_can_be_named_by_id_or_by_name() {
+        let mut map = field_map();
+        map.set_checklist_text("Checklist Progress");
+        assert_eq!(map.checklist_text.as_deref(), Some("customfield_10207"));
+
+        map.set_checklist_text("customfield_19999");
+        assert_eq!(map.checklist_text.as_deref(), Some("customfield_19999"));
+
+        // A name the instance does not have leaves the map alone rather than
+        // pointing a write at nothing.
+        map.set_checklist_text("Nothing Like It");
+        assert_eq!(map.checklist_text.as_deref(), Some("customfield_19999"));
     }
 
     /// An id is unmemorable and a name is what the issue actually shows, so

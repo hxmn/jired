@@ -28,6 +28,8 @@ pub struct Engine {
     /// `ignored_custom_fields` as configured — ids or names, resolved against
     /// the instance's field metadata by [`Engine::field_map`].
     pub ignored_custom_fields: Vec<String>,
+    /// `checklist.field`, resolved the same way and for the same reason.
+    pub checklist_field: Option<String>,
 }
 
 impl Engine {
@@ -39,6 +41,7 @@ impl Engine {
             projector: Projector::new(ctx.workspace.root()),
             account,
             ignored_custom_fields: ctx.resolver.get_list("ignored_custom_fields")?,
+            checklist_field: ctx.resolver.get_value("checklist.field")?,
         })
     }
 
@@ -55,6 +58,9 @@ impl Engine {
     pub fn field_map(&self) -> Result<crate::api::normalize::FieldMap> {
         let mut map = self.state.field_map()?;
         map.ignore(&self.ignored_custom_fields);
+        if let Some(field) = &self.checklist_field {
+            map.set_checklist_text(field);
+        }
         Ok(map)
     }
 

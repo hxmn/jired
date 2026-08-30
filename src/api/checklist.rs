@@ -1,31 +1,45 @@
-//! Reading a Smart Checklist custom field [M5.4].
+//! Reading and writing a Smart Checklist custom field [M5.4].
 //!
 //! "Smart Checklist for Jira" keeps its data in custom fields whose ids differ
-//! per instance, so they are found by display name — `Checklist`, `Checklist
-//! Text`, `Checklist Progress` — the same way Story Points and Sprint are.
+//! per instance, so they are found by display name — `Checklist`, `Checklists`,
+//! `Checklist Text`, `Checklist Progress` — the same way Story Points and
+//! Sprint are.
 //!
 //! What arrives there is not one shape but three, and which one a server sends
 //! depends on the product and the plugin version:
 //!
-//! * Data Center hands back the plugin's Java object as its `toString()`:
+//! * The text field holds the plugin's own compact syntax — `# header`,
+//!   `- to do`, `~ in progress`, `+ done`, `x skipped`, and a note on the line
+//!   below its item. This is the only one that can be written back, so it is
+//!   also the one read first: a checklist that was pushed then reads back as
+//!   what was sent rather than as a second rendering of it.
+//! * Data Center hands the plugin's Java object back as its `toString()`:
 //!   `Checklist(id=793, …, _items=[Item(id=24, value=…, rank=1, status=Status(…
-//!   statusState=UNCHECKED, name=TO DO, …), …)])`. Ugly, but it is the only
-//!   form that carries per-item status names and rank.
-//! * The companion text field holds the plugin's own compact syntax —
-//!   `# header`, `- to do`, `~ in progress`, `+ done`, `x skipped`, `>>` for an
-//!   item's description.
+//!   statusState=UNCHECKED, name=TO DO, …), …)])`. Ugly, and read-only, but it
+//!   is all an instance that exposes no text field has.
 //! * Newer versions may send structured JSON.
 //!
 //! All three land as [`ChecklistEntry`] values, which is what the `## Checklist`
-//! section of the issue file renders. The rendering is read-only (decision D12
-//! extends to it): jired does not know how to write a checklist back, and
-//! guessing at a plugin's write format would corrupt real data.
+//! section of the issue file renders. [`to_text`] builds the syntax back out of
+//! that section — only the part of it these types model, refusing anything else
+//! rather than flattening it, because the field belongs to a plugin whose own
+//! reading of it is the one that counts.
 
 use crate::doc::{ChecklistEntry, ChecklistItem};
 use serde_json::Value;
 
 /// Status names that say nothing beyond what the checkbox already shows.
 const IMPLIED: [(&str, bool); 2] = [("TO DO", false), ("DONE", true)];
+
+/// The documented spelling of an item's note.
+///
+/// Every vendor's formatting guide writes it `>>`, and so does the recorded
+/// fixture — but a live Data Center instance stores a single `>`, and the text
+/// field is the plugin's own serialization, so whatever it wrote there is what
+/// it reads back. [`note_marker`] therefore learns the spelling from the text
+/// the server holds and falls back to this one only when a checklist carries no
+/// note to learn from.
+pub const NOTE: &str = ">>";
 
 /// Parse whatever the checklist field held into checklist lines.
 pub fn from_field(value: &Value) -> Vec<ChecklistEntry> {
@@ -39,11 +53,25 @@ pub fn from_field(value: &Value) -> Vec<ChecklistEntry> {
 }
 
 fn from_str(s: &str) -> Vec<ChecklistEntry> {
-    if s.contains("Item(") && s.contains("checklistId=") {
+    if is_dump(s) {
         parse_dump(s)
     } else {
         parse_text(s)
     }
+}
+
+/// Whether a string is Data Center's `toString()` rather than the plugin's
+/// syntax.
+///
+/// An empty checklist reaches here too — `Checklist(id=871, issueId=50455,
+/// _items=[])` — and it has no `Item(` in it at all, so a test for one read the
+/// dump as text and turned it into a ticked-looking item in the file of every
+/// issue whose checklist was empty. The wrapper is what says "dump", not what
+/// it happens to contain.
+fn is_dump(s: &str) -> bool {
+    let s = s.trim_start();
+    (s.starts_with("Checklist(") && s.contains("_items=["))
+        || (s.contains("Item(") && s.contains("checklistId="))
 }
 
 /// The plugin's own text syntax, which is also what the text field holds.
@@ -58,8 +86,11 @@ pub fn parse_text(text: &str) -> Vec<ChecklistEntry> {
             out.push(ChecklistEntry::Header(header.trim().to_string()));
             continue;
         }
-        // `>>` continues the previous item rather than starting a new one.
-        if let Some(note) = t.strip_prefix(">>") {
+        // A note continues the previous item rather than starting a new one.
+        // Both spellings are read: which one an instance writes is the plugin's
+        // business, and a note taken for an item of its own would be pushed
+        // back as one.
+        if let Some(note) = t.strip_prefix(">>").or_else(|| t.strip_prefix('>')) {
             if let Some(ChecklistEntry::Item(last)) = out.last_mut() {
                 append_description(last, note.trim());
                 continue;
@@ -97,6 +128,92 @@ fn split_marker(line: &str) -> Option<(bool, Option<&'static str>, &str)> {
         _ => return None,
     };
     Some((checked, status, rest))
+}
+
+/// The plugin's syntax, built back out of the `## Checklist` section.
+///
+/// `Err` names why a checklist cannot be written: a status no marker spells, an
+/// item with no text. Refusing is the whole point — the field is read by a
+/// plugin, and an item silently demoted from a status jired does not model to
+/// one it does is a change nobody asked for, made to somebody else's data.
+pub fn to_text(entries: &[ChecklistEntry], note: &str) -> std::result::Result<String, String> {
+    let mut out = String::new();
+    for entry in entries {
+        match entry {
+            ChecklistEntry::Header(h) => match h.trim() {
+                "" => return Err("a `### ` group has no name".to_string()),
+                name => out.push_str(&format!("# {name}\n")),
+            },
+            ChecklistEntry::Item(item) => {
+                let title = item.title.trim();
+                if title.is_empty() {
+                    return Err("a checklist item has no text".to_string());
+                }
+                let Some(marker) = marker_for(item) else {
+                    return Err(format!(
+                        "`{}` is not a status the checklist syntax can spell",
+                        item.status.as_deref().unwrap_or_default()
+                    ));
+                };
+                out.push_str(&format!("{marker} {title}\n"));
+                for line in item.description.iter().flat_map(|d| d.lines()) {
+                    match line.trim() {
+                        "" => continue,
+                        note_line => out.push_str(&format!("{note} {note_line}\n")),
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The inverse of [`split_marker`]: the character that spells this item's state.
+fn marker_for(item: &ChecklistItem) -> Option<&'static str> {
+    let named = |want: &str| {
+        item.status
+            .as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case(want))
+    };
+    match (item.checked, item.status.is_none()) {
+        (false, true) => Some("-"),
+        (true, true) => Some("+"),
+        (false, _) if named("TO DO") => Some("-"),
+        (false, _) if named("IN PROGRESS") => Some("~"),
+        (true, _) if named("DONE") => Some("+"),
+        (true, _) if named("SKIPPED") => Some("x"),
+        // A status the instance configured itself, or one of the four against
+        // the wrong checkbox.
+        _ => None,
+    }
+}
+
+/// Which note spelling the text a server holds is written in.
+pub fn note_marker(stored: &str) -> &'static str {
+    for line in stored.lines() {
+        let t = line.trim();
+        if t.starts_with(">>") {
+            return ">>";
+        }
+        if t.starts_with('>') {
+            return ">";
+        }
+    }
+    NOTE
+}
+
+/// Two spellings of the same checklist text, reduced to what they both mean.
+///
+/// The plugin is not consistent about trailing spaces — a live instance stores
+/// `+ Hand over to @abercrombie.d \n` — and a blank line in the field is not an
+/// entry. Neither survives a render, so neither may decide whether jired's
+/// reading of a checklist reproduces the server's own text.
+pub fn normalized(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Data Center's `toString()` dump.
@@ -292,6 +409,96 @@ mod tests {
         assert_eq!(item(&entries[3]).status, None);
         assert_eq!(item(&entries[4]).status.as_deref(), Some("SKIPPED"));
         assert!(item(&entries[4]).checked);
+    }
+
+    /// The instance this was reported from writes a single `>`; the vendor's
+    /// guide and the recorded fixture write `>>`. A note read as an item of its
+    /// own would be pushed back as one.
+    #[test]
+    fn both_spellings_of_a_note_are_read_as_a_note() {
+        for text in ["+ Analyse\n> Ask first\n", "+ Analyse\n>> Ask first\n"] {
+            let entries = parse_text(text);
+            assert_eq!(entries.len(), 1, "{text}");
+            assert_eq!(item(&entries[0]).description.as_deref(), Some("Ask first"));
+        }
+        assert_eq!(note_marker("+ Analyse\n> Ask first\n"), ">");
+        assert_eq!(note_marker("+ Analyse\n>> Ask first\n"), ">>");
+        // Nothing to learn from: the documented spelling.
+        assert_eq!(note_marker("+ Analyse\n"), NOTE);
+    }
+
+    /// An empty checklist arrives as the plugin's dump of an empty list, and
+    /// reading that as text put the dump itself in the file — with a checkbox
+    /// in front of it — for every issue whose checklist was empty.
+    #[test]
+    fn an_empty_checklist_is_empty_rather_than_the_dump_as_an_item() {
+        let empty = json!(["Checklist(id=871, issueId=50455, _items=[])"]);
+        assert!(from_field(&empty).is_empty());
+    }
+
+    #[test]
+    fn the_syntax_is_written_back_out_of_the_entries() {
+        let entries =
+            parse_text("# Analysis\n~ Analyse\n>> ask first\n- Refine\n+ Ship\nx Skip me\n");
+        assert_eq!(
+            to_text(&entries, ">>").unwrap(),
+            "# Analysis\n~ Analyse\n>> ask first\n- Refine\n+ Ship\nx Skip me\n"
+        );
+        // The note is written in whichever spelling the instance uses.
+        assert!(to_text(&entries, ">").unwrap().contains("\n> ask first\n"));
+    }
+
+    /// The four markers are all the syntax has. A status jired cannot spell is
+    /// refused, because the alternative is demoting somebody's item to one it
+    /// can — and the plugin, not jired, is what reads the field back.
+    #[test]
+    fn a_status_no_marker_spells_refuses_to_be_written() {
+        let blocked = vec![ChecklistEntry::Item(ChecklistItem {
+            checked: false,
+            status: Some("BLOCKED".into()),
+            title: "Wait for review".into(),
+            description: None,
+        })];
+        assert!(to_text(&blocked, NOTE).unwrap_err().contains("BLOCKED"));
+
+        let untitled = vec![ChecklistEntry::Item(ChecklistItem {
+            checked: false,
+            status: None,
+            title: "  ".into(),
+            description: None,
+        })];
+        assert!(to_text(&untitled, NOTE).is_err());
+    }
+
+    /// The four the reader hides behind the checkbox are still writable: a file
+    /// may spell one out, and `TO DO` on an empty box is the same `-`.
+    #[test]
+    fn a_status_the_checkbox_already_says_is_written_all_the_same() {
+        let spelled = |checked, status: &str| {
+            vec![ChecklistEntry::Item(ChecklistItem {
+                checked,
+                status: Some(status.into()),
+                title: "Item".into(),
+                description: None,
+            })]
+        };
+        assert_eq!(to_text(&spelled(false, "TO DO"), NOTE).unwrap(), "- Item\n");
+        assert_eq!(to_text(&spelled(true, "done"), NOTE).unwrap(), "+ Item\n");
+        // The right name against the wrong checkbox is not something the plugin
+        // could have written, so it is not something jired guesses at.
+        assert!(to_text(&spelled(true, "TO DO"), NOTE).is_err());
+    }
+
+    /// What `push` checks before it writes: jired's rendering of what the server
+    /// holds has to be the server's own text back again.
+    #[test]
+    fn the_round_trip_survives_the_noise_a_plugin_leaves_in_its_text() {
+        let stored = "+ Provide the analysis\n+ Hand over to @abercrombie.d \n\n";
+        let entries = parse_text(stored);
+        assert_eq!(
+            normalized(&to_text(&entries, note_marker(stored)).unwrap()),
+            normalized(stored)
+        );
     }
 
     /// A line the plugin's syntax does not cover is still content.

@@ -8,6 +8,59 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.10.0] — 2026-08-31
+
+### Breaking
+
+- **`## Checklist` is no longer read-only.** An edit to it used to be reported
+  by `push` and undone by the next `pull`; it is sent now, so a file whose
+  checklist was edited and left alone in the belief it could not be pushed will
+  be pushed. `status` and the `pull` merge treat it like any other section a
+  person writes: an unpushed checklist edit is dirty work, and a checklist
+  changed on both sides is a conflict rather than a silent win for the server.
+
+### Added
+
+- **`push` writes the Smart Checklist.** 0.9.0 closed `links:`, which left the
+  checklist as the one thing keeping the "create an issue from the CLI, then go
+  and finish it in the browser" round trip open (the reported case: an issue
+  created from the CLI whose two checklist items had to be typed into the web
+  UI). Ticking a box, adding an item, grouping with `### `, writing a note — all
+  of it goes back as the plugin's own syntax in the text field, carried in the
+  ordinary `PUT /issue` alongside the rest of the issue, and as a follow-up
+  after a create, where a plugin's field is rarely on the create screen. The
+  derived fields are never written: the progress string and the object dump are
+  the plugin's own.
+- **`checklist.field`** (`JIRED_CHECKLIST_FIELD`) names the plugin's text field
+  by id or by display name, for an instance that calls it something jired does
+  not recognise. Recognition itself got better: the pair is matched by name with
+  the schema deciding which is the writable text field (`string`) and which the
+  object (`any`), so `Smart Checklist` + `Checklists` is read the same way
+  `Checklist` + `Checklist Text` always was.
+
+### Fixed
+
+- **An empty checklist is an empty section.** Data Center answers for an issue
+  with no checklist with the plugin's `toString()` of an empty list, and jired
+  read that as text — so `## Checklist` held `- [ ] Checklist(id=871,
+  issueId=50455, _items=[])`, complete with a checkbox that looked tickable, in
+  every file whose checklist was empty. In the workspace this was reported from,
+  292 of 299 files.
+- **A note is read whichever way the plugin spells it.** `>` as well as `>>`:
+  a note read as an item of its own is a note that gets pushed back as one.
+
+### Notes
+
+The checklist is a plugin's field, so a push writes it only where jired can
+prove it reads the whole of it: rendering the *unedited* checklist has to
+reproduce the text the server holds, line for line, and the note marker is
+whichever of the two that text uses. Where it does not match, there is something
+in the field this jired does not model — a mandatory item, a status the instance
+configured itself — and the section is refused in `warnings` and left alone
+while the rest of the issue goes. Only the four statuses the section can show
+(`TO DO`, `IN PROGRESS`, `DONE`, `SKIPPED`) are writable; an instance that
+exposes no text field keeps the section read-only and says so when it is edited.
+
 ## [0.9.0] — 2026-08-31
 
 ### Added

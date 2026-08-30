@@ -177,7 +177,12 @@
       "comment": {
         "comments": []
       },
-      "attachment": []
+      "attachment": [],
+      "customfield_10205": [
+        "Checklist(id=871, issueId=20502, _items=[])"
+      ],
+      "customfield_10206": null,
+      "customfield_10207": null
     }
   },
   {

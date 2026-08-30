@@ -49,11 +49,12 @@ fetches, and release packaging (M5.7).
 - [x] `jired completion bash|zsh|fish|powershell` via `clap_complete`
 - **Done when:** completions generate and smoke-load in bash and zsh CI steps.
 
-### M5.4 Checklist plugin adapter (read-only)
-- [x] Plugin fields detected by display name (`Checklist`, `Checklist Text`, `Checklist Progress`) and kept out of `custom:`
+### M5.4 Checklist plugin adapter
+- [x] Plugin fields detected by display name (`Checklist`, `Checklists`, `Checklist Text`, `Checklist Progress`, with the schema deciding which of the pair is the writable text field) and kept out of `custom:`; `checklist.field` names it where an instance calls it something else
 - [x] `api::checklist` parses all three forms a server sends: the Data Center `toString()` dump, the plugin's text syntax, and JSON
-- [x] Read-only rendering under `## Checklist` (subtasks moved to `## Children`); edits warn on push, and the section is server-wins on pull
-- **Done when:** plugin fixture renders and local edits produce the warning, not a push.
+- [x] Rendering under `## Checklist` (subtasks moved to `## Children`)
+- [x] **Writable in 0.10.0.** The section goes back as the plugin's text syntax in the ordinary `PUT /issue`, and as a follow-up after a create. Sent only where rendering the *unedited* checklist reproduces the text the server holds, so a construct jired does not model refuses the section rather than dropping it; an instance exposing no text field keeps it read-only and says so. Merges and `status` treat it like any other section a person writes.
+- **Done when:** the plugin fixture renders, an edit is pushed as the plugin's syntax, and one jired cannot reproduce is refused instead.
 
 ### M5.5 Security hardening & audit
 - [x] Redaction audit: grep-based leak tests over logs, JSON output, error chains for all fixture secrets
