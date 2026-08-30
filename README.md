@@ -625,6 +625,13 @@ OpenAPI document for Data Center; the platform WADL is published per release on
 move — there is nothing at all. Your instance serves both, for the version you
 actually run.
 
+jired keeps a copy of its own, under `specs/datacenter/10.7.4/` in the source
+tree: that is the description every Data Center route it calls is checked
+against in CI, so a route, a method or a query parameter that a Jira 10.7.4 does
+not actually offer fails the build rather than your push. It is also why the
+Data Center floor is 10.0. If your instance is a different version, `fetch-spec`
+is how you get the description that matches it.
+
 Jira Cloud is refused: an Atlassian-hosted site serves no description of itself,
 and the [OpenAPI document](https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json)
 that covers Cloud comes from Atlassian rather than from your site — jired names

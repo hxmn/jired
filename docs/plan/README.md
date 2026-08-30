@@ -24,7 +24,7 @@ them with Jira Cloud (REST v3, ADF) or Jira Data Center (REST v2, wiki markup).
 | M3 | [m3-collaboration.md](milestones/m3-collaboration.md) | Comments, attachments, checklists, `create`/`transition`/`assign`/`log`/`resolve`/`clean` | done but for `search --pull` and per-field resolve |
 | M4 | [m4-grouping-tui.md](milestones/m4-grouping-tui.md) | Grouping folders, link fallback, board moves, TUI | grouping done; TUI framework and the `create` form done; **other screens not built** |
 | M5 | [m5-agent-json-polish.md](milestones/m5-agent-json-polish.md) | JSON schemas, agent docs, completion, hardening, release | contract, security and the checklist adapter done; **packaging not built** |
-| M6 | [m6-datacenter-spec-client.md](milestones/m6-datacenter-spec-client.md) | Data Center client rewritten against the server's own API description (10.7.4 WADL): route table + contract test, assignable users, complete comments, assignee route, screen checks, floor 10.0 | **planned** |
+| M6 | [m6-datacenter-spec-client.md](milestones/m6-datacenter-spec-client.md) | Data Center client rewritten against the server's own API description (10.7.4 WADL): route table + contract test, assignable users, complete comments, assignee route, screen checks, floor 10.0 | done |
 
 ## Where the project stands
 
@@ -54,6 +54,7 @@ Guards that hold the design in place, each verified rather than asserted:
 | Agent-docs drift test | Docs that no longer describe the binary |
 | Leak tests (themselves leak-tested) | A credential reaching output, a fixture or a config file |
 | Scale benchmark | Silent quadratic behaviour as a workspace grows |
+| Data Center route contract | A route, method or parameter the server does not actually offer |
 
 **Not built:** the TUI, release packaging, and
 recording fixtures from real instances (`jired-record` exists but needs

@@ -13,8 +13,9 @@ graph TD
     SYNC --> STATE[(state.db)]
     AUTH --> SESS[(session.db)]
     SYNC --> API[JiraApi trait]
-    API --> CLOUD[CloudClient v3 ADF]
-    API --> DC[DataCenterClient v2 wiki]
+    API --> CLOUD[Rest — Cloud v3 ADF]
+    API --> DC[DataCenter v2 wiki<br/>routes.rs ⇄ vendored WADL]
+    DC --> SPEC[(specs/datacenter/10.7.4)]
     SYNC --> PROJ[Filesystem projector<br/>files, renames, symlinks, groups]
     PROJ --> FS[Working copy .md + folders]
 ```
@@ -23,6 +24,25 @@ The linchpin is **`JiredAst`**, a single internal rich-text AST. ADF and wiki ma
 both parse into it; Markdown renders from it and parses back into it. Unrepresentable
 nodes become `Raw(id)` AST nodes whose payloads live in `state.db.raw_block`
 (see [format-conversion.md](format-conversion.md)).
+
+## The API description (D27)
+
+`specs/datacenter/10.7.4/` holds the three WADLs a Jira Data Center 10.7.4
+publishes of itself — the platform API, the Agile API and the session endpoints
+— recorded with the host replaced by a reserved name and otherwise byte for byte
+as the server sent them. `src/api/datacenter/routes.rs` names every REST route
+jired calls by the `method id` the description gives it, and
+`tests/dc_spec_contract.rs` checks the table against the files: a route that
+does not exist, a method spelled wrong, or a query parameter the server never
+declared fails the build. The Data Center fixtures replay the same two files, so
+what a test reads and what `fetch-spec` writes are one document.
+
+Written by hand rather than generated: the WADL carries an empty `<grammars/>`
+and no `element=` attributes, so it describes paths and parameters and not one
+payload. Two standing exceptions, both asserted rather than assumed — `expand`,
+which Jersey never declares per method though the server honours it, and the
+three things jired reaches that are not REST at all (the Move wizard, the
+attachment bytes, and the description endpoint itself).
 
 ## Data flows
 

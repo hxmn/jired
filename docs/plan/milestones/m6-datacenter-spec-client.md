@@ -12,17 +12,22 @@ which are the gates every task here runs through.
 
 ## Status
 
-Planned. Ships as **0.6.0** (Breaking: the floor, the `assign` op, the screen
-refusal). M6.1–M6.5 change no command surface and could go first as 0.5.1;
-M6.6–M6.9 ship together.
+Done, shipped as **0.6.0**.
 
-Where the code stands today: the Data Center calls live in the *shared*
-`Rest` (`src/api/rest.rs`) behind four `match self.deployment` branches
-(`projects`, `board_project`, `move_subtask_parent`, `search_users`); every
-path is a `format!` literal; `src/api/datacenter.rs` holds only the Move-wizard
-scrape, the WADL module list and two payload helpers. The only WADLs in the
-tree are hand-made Jira 9.12.4 stubs (nine methods, Jersey 1 shape) that
-exercise `fetch-spec`; nothing parses them.
+Where the code stood before: the Data Center calls lived in the *shared* `Rest`
+(`src/api/rest.rs`) behind four `match self.deployment` branches (`projects`,
+`board_project`, `move_subtask_parent`, `search_users`); every path was a
+`format!` literal; `src/api/datacenter.rs` held only the Move-wizard scrape, the
+WADL module list and two payload helpers. The only WADLs in the tree were
+hand-made Jira 9.12.4 stubs (nine methods, Jersey 1 shape) that exercised
+`fetch-spec`; nothing parsed them.
+
+Two things turned up that the audit had not predicted, both fixed here. The
+comment completion could not work until `fetch`/`pull`'s use of the raw payload
+was accounted for — and that turned out to be why the *worklog* completion,
+correct-looking since it was written, had never put a missing worklog in a file.
+And `schemas/push.json` had never gained `move_parent`, so a push that really
+moved a sub-task emitted `--json` that failed jired's own published schema.
 
 Auditing every path against the 10.7.4 description found:
 
@@ -53,16 +58,16 @@ Auditing every path against the 10.7.4 description found:
 
 ## Acceptance criteria
 
-- [ ] `tests/dc_spec_contract.rs` parses the vendored 10.7.4 WADLs and passes; a route with a wrong method or an undeclared query parameter fails it naming the route (verified once by breaking the table by hand)
-- [ ] `src/api/rest.rs` has no `match self.deployment` on control flow; every Data Center path is rendered by `Route::url` from `src/api/datacenter/routes.rs`
-- [ ] `jired assign --user` searches `user/assignable/search`, scoped to the issue, on both deployments
-- [ ] An issue whose payload pages its comments comes back complete on both deployments
-- [ ] An `assignee:` edit is its own `assign` op on `PUT /issue/{key}/assignee`, verified on the re-read like `parent`
-- [ ] A field the edit or create screen lacks is refused at plan time on Data Center, exit 2, naming the field
-- [ ] `MIN_DC_MAJOR == 10`; a 9.x server is refused at `init` with exit 10
-- [ ] Data Center worklogs are fetched in one call, with no paging parameters
-- [ ] README, `docs/plan/commands.md`, `docs/plan/architecture.md`, `docs/plan/README.md`, the `init-agents` prose, `schemas/push.json`, CHANGELOG 0.6.0 and `Cargo.toml`/`Cargo.lock` updated
-- [ ] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` and `cargo deny check` clean on Linux, macOS and Windows
+- [x] `tests/dc_spec_contract.rs` parses the vendored 10.7.4 WADLs and passes; a route with a wrong method or an undeclared query parameter fails it naming the route (verified once by breaking the table by hand)
+- [x] `src/api/rest.rs` has no `match self.deployment` on control flow; every Data Center path is rendered by `Route::url` from `src/api/datacenter/routes.rs`
+- [x] `jired assign --user` searches `user/assignable/search`, scoped to the issue, on both deployments
+- [x] An issue whose payload pages its comments comes back complete on both deployments
+- [x] An `assignee:` edit is its own `assign` op on `PUT /issue/{key}/assignee`, verified on the re-read like `parent`
+- [x] A field the edit or create screen lacks is refused at plan time on Data Center, exit 2, naming the field
+- [x] `MIN_DC_MAJOR == 10`; a 9.x server is refused at `init` with exit 10
+- [x] Data Center worklogs are fetched in one call, with no paging parameters
+- [x] README, `docs/plan/commands.md`, `docs/plan/architecture.md`, `docs/plan/README.md`, the `init-agents` prose, `schemas/push.json`, CHANGELOG 0.6.0 and `Cargo.toml`/`Cargo.lock` updated
+- [x] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets` and `cargo deny check` clean on Linux, macOS and Windows
 
 ## Design
 
@@ -366,8 +371,8 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** the three Data Center e2e tests pass and every Cloud test is unaffected.
 
 ### M6.10 Docs, plan, version
-- [ ] This file ticked; `docs/plan/README.md` status; `architecture.md`'s component graph names the route table and the vendored description, with a short "Specs" paragraph; README gets a "Specs" note under the `fetch-spec` section
-- [ ] `Cargo.toml` 0.6.0, `cargo build` for the lock; CHANGELOG 0.6.0 ordered **Breaking** (floor 10.0; the `assign` op; the screen refusal) → **Added** (assignable search; complete comments; the route table and its contract test; the vendored description) → **Fixed** (Data Center worklogs fetched in one call, as the API declares)
+- [x] This file ticked; `docs/plan/README.md` status; `architecture.md`'s component graph names the route table and the vendored description, with a short "Specs" paragraph; README gets a "Specs" note under the `fetch-spec` section
+- [x] `Cargo.toml` 0.6.0, `cargo build` for the lock; CHANGELOG 0.6.0 ordered **Breaking** (floor 10.0; the `assign` op; the screen refusal) → **Added** (assignable search; complete comments; the route table and its contract test; the vendored description) → **Fixed** (Data Center worklogs fetched in one call, as the API declares)
 - **Done when:** the verification list below passes on Linux, macOS and Windows CI.
 
 ## Verification

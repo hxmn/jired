@@ -31,13 +31,6 @@ version between the one you have and the one you are moving to.
   support floor. `init` refuses with exit 10 before writing anything, naming
   the version it found and the one it needs.
 
-### Fixed
-
-- **`move_parent` and `assign` are in the published `push` schema.** 0.4.0 added
-  the `move_parent` op without adding it to `schemas/push.json`, so a push that
-  actually moved a sub-task emitted `--json` that failed validation against
-  jired's own schema. Both op kinds are now in the enum.
-
 ### Added
 
 - **A field the screen does not carry is refused before the server sees it
@@ -60,12 +53,50 @@ version between the one you have and the one you are moving to.
   deployments. A name that no longer resolves is a name that could not have
   been assigned.
 
+- **Every Data Center route is checked against the server's own description in
+  CI.** `src/api/datacenter/routes.rs` names the thirty-two REST routes jired
+  calls by the `method id` Jira itself gives each one, and a contract test reads
+  the vendored WADLs and fails the build on a route that does not exist, a
+  method spelled wrong, or a query parameter the server never declared. The
+  three things jired reaches that are not REST at all — the Move wizard, the
+  attachment bytes, and the description endpoint itself — are listed beside the
+  table with a reason each, and the test asserts none of them has quietly become
+  a route.
+
 - **jired carries the API description its Data Center routes are checked
   against.** `specs/datacenter/10.7.4/` holds the three WADLs a Jira Data
   Center 10.7.4 publishes for itself, recorded with the host replaced by a
   reserved name and otherwise byte for byte as the server sent them. The
   recorded Data Center fixtures replay the same files, so the description a
   test reads and the description `fetch-spec` writes are one document.
+
+### Fixed
+
+- **`pull` writes every comment, and every worklog, not the first page.** An
+  issue payload carries the first 50 comments and 20 worklogs and states how
+  many there are; jired read the page and dropped the count, so a long
+  discussion produced a file showing fifty comments and no sign that seventy
+  were missing. The worklog half had looked correct since it was written and
+  never worked: the completed page was set on the parsed issue while `fetch`
+  stored, and `pull` re-read, the untouched server payload — so everything it
+  fetched was discarded on the way to disk. Both are now completed into the
+  payload itself.
+
+- **Data Center worklogs are fetched in one call, as the API declares.** The
+  description declares no paging on `issue/{key}/worklog` and the server answers
+  with all of them; jired had been sending `startAt` and `maxResults` and looping
+  on a total. Cloud's route does page, and keeps its loop.
+
+- **The scale benchmark runs again.** It looked for issue files by an unpadded
+  name and had found none since filenames started zero-padding the issue
+  number, so the suite CI runs on every push was failing on its own expectation
+  rather than on anything it measures. It now names files through the same
+  function the projector does. The numbers it records are unchanged.
+
+- **`move_parent` and `assign` are in the published `push` schema.** 0.4.0 added
+  the `move_parent` op without adding it to `schemas/push.json`, so a push that
+  actually moved a sub-task emitted `--json` that failed validation against
+  jired's own schema. Both op kinds are now in the enum.
 
 ## [0.5.1] — 2026-08-29
 

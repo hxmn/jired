@@ -167,7 +167,14 @@ fn a_large_workspace_stays_workable() {
     // Now dirty a tenth of the workspace and time the scan that has to notice.
     let dirty = ISSUES / 10;
     for i in 1..=dirty {
-        let name = format!("BIG-{i}. Issue number {i} with a reasonably long summary line.md");
+        // Built by the same function the projector names files with. Spelling
+        // it out here is how this stopped finding them: the number in a
+        // filename is zero-padded, and a literal `BIG-1.` has not matched a
+        // written file since that convention landed.
+        let name = jired::project::naming::file_name(
+            &format!("BIG-{i}"),
+            &format!("Issue number {i} with a reasonably long summary line"),
+        );
         let path = dir.path().join(&name);
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, text.replace("- scale", "- scale\n- touched")).unwrap();
