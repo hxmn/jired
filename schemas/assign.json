@@ -2,29 +2,47 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jired/assign/1",
   "title": "jired assign result",
-  "description": "Result of staging an assignee change",
+  "description": "Result of staging an assignee change across one or more issues",
   "type": "object",
   "required": [
     "schema",
-    "key",
-    "file",
+    "issues",
     "pushed"
   ],
   "properties": {
     "schema": {
       "const": "jired/assign/1"
     },
-    "key": {
-      "type": "string"
-    },
     "assignee": {
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "description": "As the files spell it: `@[Name](id)`; null when unassigning"
     },
-    "file": {
-      "type": "string"
+    "issues": {
+      "type": "array",
+      "description": "One entry per issue whose file was written",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the issue already had this assignee"
+          }
+        }
+      }
     },
     "pushed": {
       "type": "boolean"

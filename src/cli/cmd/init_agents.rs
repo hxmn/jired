@@ -657,9 +657,9 @@ pub fn render() -> String {
          call without sending it.\n\n",
     );
     s.push_str("```sh\n");
-    s.push_str("jired transition KEY --to STATUS [--field K=V]… [--push]\n");
+    s.push_str("jired transition KEY[,KEY…] --to STATUS [--field K=V]… [--push]\n");
     s.push_str("jired transition KEY --list      # the transitions available from here\n");
-    s.push_str("jired assign KEY --user NAME|--me|--none [--push]\n");
+    s.push_str("jired assign KEY[,KEY…] --user NAME|--me|--none [--push]\n");
     s.push_str("jired set --field FIELD --value VALUE KEY[,KEY…] [--push]\n");
     s.push_str("jired comment KEY -m TEXT [--push]\n");
     s.push_str("jired label add|remove|set LABEL KEY[,KEY…] [--push]\n");
@@ -669,13 +669,16 @@ pub fn render() -> String {
         "The status goes after `--to`, never as a bare word — `jired transition \
          PROJ-142 Done` is exit 2. `--list` is how to find the spelling this \
          issue's workflow accepts, and `--field` carries anything the transition \
-         screen demands. `jired set` is the general one: `--field` takes a \
+         screen demands. `transition` and `assign` take several issues, which is \
+         what `jired list --keys` pipes into; each issue is validated against \
+         its own workflow, and one that cannot move is a warning beside the \
+         ones that were staged. `jired set` is the general one: `--field` takes a \
          frontmatter name or a `customfield_*` id, an empty `--value` clears the \
          field, and a list value takes commas. `label set` replaces every label \
          at once and takes them comma-separated, where `add` and `remove` take \
          one and leave the rest alone. `assign --user` searches only the people \
-         who can be assigned that issue, so a name it does not find may exist on \
-         the instance without being assignable here.\n\n",
+         who can be assigned the first issue named, so a name it does not find \
+         may exist on the instance without being assignable here.\n\n",
     );
     s.push_str(
         "An operation Jira accepted is not an operation Jira performed — it \
@@ -1434,8 +1437,8 @@ mod tests {
             "--summary-contains",
             "--issue-type",
             "--keys",
-            "jired transition KEY --to STATUS",
-            "jired assign KEY --user NAME|--me|--none",
+            "jired transition KEY[,KEY…] --to STATUS",
+            "jired assign KEY[,KEY…] --user NAME|--me|--none",
             "jired set --field FIELD --value VALUE",
             "jired comment KEY -m TEXT",
             "pending_ops",

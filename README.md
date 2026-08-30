@@ -349,8 +349,8 @@ the filename you were just editing instead of retyping the key.
 | `logwork [ISSUE] [TIME]` | book time against an issue; fills in a form when either is missing |
 | `comment [ISSUE] [-m TEXT]` | stage a comment; without an issue, pick one from the list; without `-m` it opens `$VISUAL`/`$EDITOR`, or reads stdin when piped |
 | `create --summary S` | write a `NEW-<hex>. Summary.md`; push creates the issue and renames the file to the real key. `--assignee`, `--sprint`, `--labels`, `--priority`, `--component`, `--epic` and `--set field=value` fill it in; `--template NAME\|PATH` starts from a skeleton |
-| `transition ISSUE --to STATUS` | stage a workflow change; `--list` shows what is available, `--field k=v` fills a transition screen |
-| `assign ISSUE --me\|--user Q\|--none` | stage an assignee change; `--user` searches only the people who can be assigned that issue, not the whole directory |
+| `transition ISSUES… --to STATUS` | stage a workflow change across several issues, each validated against its own workflow; `--list` shows what one issue can do, `--field k=v` fills a transition screen |
+| `assign ISSUES… --me\|--user Q\|--none` | stage an assignee change across several issues; `--user` searches only the people who can be assigned the first one, not the whole directory |
 | `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues; `add`/`remove` keep the other labels, `set` replaces them |
 | `parent ISSUES… --to ISSUE` | move sub-tasks under a different parent — see [Sub-tasks](#sub-tasks) |
 | `set --field F --value V ISSUES…` | stage any editable field across issues, including `customfield_*` ids |

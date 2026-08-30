@@ -619,7 +619,7 @@ fn the_generated_docs_carry_the_flags_an_agent_scripts_with() {
         "--exit-code",
         "--summary-contains",
         "--issue-type",
-        "jired transition KEY --to STATUS",
+        "jired transition KEY[,KEY…] --to STATUS",
         "jired set --field FIELD --value VALUE",
         "jired push --resume",
         "--refresh-stale",
@@ -2428,7 +2428,10 @@ fn transition_stages_a_status_change_and_push_applies_it() {
 
     let report = ws.json(&["transition", "PROJ-142", "--to", "In Review"]);
     assert_eq!(report["to"], "In Review");
-    assert_eq!(report["transition_id"], "31");
+    let staged = &report["issues"][0];
+    assert_eq!(staged["key"], "PROJ-142");
+    assert_eq!(staged["transition_id"], "31");
+    assert_eq!(staged["changed"], true);
     assert!(ws.read(ISSUE_FILE).contains("status: In Review"));
 
     let status = ws.json(&["status"]);
@@ -2443,6 +2446,78 @@ fn transition_stages_a_status_change_and_push_applies_it() {
         .iter()
         .any(|o| o["kind"] == "transition" && o["status"] == "done"));
     assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// Closing out a sprint is a dozen tickets moving to one status, which is why
+/// `list --keys` documents itself as something to pipe — into this, mostly.
+/// One command, one push, and an issue whose workflow cannot get there is a
+/// warning beside the ones that moved rather than a reason none of them did.
+#[test]
+fn transition_moves_several_issues_and_a_stuck_one_does_not_stop_the_rest() {
+    let ws = Ws::new();
+    // PROJ-143's workflow position offers no route to Done.
+    ws.write_fixture(
+        "transitions-PROJ-143.json",
+        serde_json::json!([
+            { "id": "21", "name": "Start Progress", "to_status": "In Progress",
+              "to_status_id": "3", "required_fields": [] },
+        ]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&[
+        "transition",
+        "PROJ-142",
+        "PROJ-143",
+        "PROJ-150",
+        "--to",
+        "Done",
+    ]);
+    let staged = report["issues"].as_array().unwrap();
+    let keys: Vec<&str> = staged.iter().map(|s| s["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, ["PROJ-142", "PROJ-150"], "{report}");
+    assert!(staged.iter().all(|s| s["changed"] == true), "{report}");
+
+    let push = ws.json(&["push"]);
+    assert_eq!(push["summary"]["ok"], 2, "{push}");
+    for result in push["results"].as_array().unwrap() {
+        assert!(
+            result["ops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|o| o["kind"] == "transition" && o["status"] == "done"),
+            "{push}"
+        );
+    }
+    // The stuck one kept its status: nothing was staged for it.
+    assert!(ws
+        .read("PROJ-0143. Add integration test.md")
+        .contains("status: To Do"));
+}
+
+/// With every issue named unable to move, there is nothing to stage and the
+/// command fails the way the single-issue refusal always has.
+#[test]
+fn a_transition_no_issue_can_make_is_an_error_not_a_quiet_success() {
+    let ws = Ws::new();
+    ws.write_fixture(
+        "transitions.json",
+        serde_json::json!([
+            { "id": "21", "name": "Start Progress", "to_status": "In Progress",
+              "to_status_id": "3", "required_fields": [] },
+        ]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["transition", "PROJ-143", "PROJ-150", "--to", "Done"], 2);
+    assert_eq!(err["kind"], "usage", "{err}");
+    assert!(
+        err["message"].as_str().unwrap().contains("no transition"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -2484,7 +2559,40 @@ fn assign_me_uses_the_authenticated_account() {
 
     let report = ws.json(&["assign", "PROJ-142", "--me"]);
     assert_eq!(report["assignee"], "@[Ilya A](5b10a2ilya)");
+    assert_eq!(report["issues"][0]["key"], "PROJ-142");
     assert!(ws.read(ISSUE_FILE).contains("5b10a2ilya"));
+}
+
+/// Handing work over is rarely about one ticket, and `list --keys` pipes here.
+/// Staged like `label` across the lot: one entry per file written, an issue
+/// that already has the assignee reported rather than staged.
+#[test]
+fn assign_stages_several_issues_at_once() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let report = ws.json(&["assign", "PROJ-142", "PROJ-143", "--me"]);
+    let staged = report["issues"].as_array().unwrap();
+    assert_eq!(staged.len(), 2, "{report}");
+    // PROJ-142 is already Ilya's in the fixture: reported, not staged.
+    assert_eq!(staged[0]["key"], "PROJ-142");
+    assert_eq!(staged[0]["changed"], false, "{report}");
+    assert_eq!(staged[1]["key"], "PROJ-143");
+    assert_eq!(staged[1]["changed"], true, "{report}");
+    assert!(ws
+        .read("PROJ-0143. Add integration test.md")
+        .contains("5b10a2ilya"));
+
+    // Only the issue that moved is dirty.
+    let status = ws.json(&["status"]);
+    let dirty: Vec<&str> = status["dirty"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(dirty, ["PROJ-143"], "{status}");
 }
 
 /// Jira's field configuration is per project, per issue type and per screen, so

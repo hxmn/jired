@@ -2,30 +2,55 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jired/transition/1",
   "title": "jired transition result",
-  "description": "Result of staging a status change",
+  "description": "Result of staging a status change across one or more issues",
   "type": "object",
   "required": [
     "schema",
-    "key",
+    "issues",
     "to",
-    "file",
     "pushed"
   ],
   "properties": {
     "schema": {
       "const": "jired/transition/1"
     },
-    "key": {
-      "type": "string"
-    },
     "to": {
-      "type": "string"
+      "type": "string",
+      "description": "The target status as it was named on the command line"
     },
-    "transition_id": {
-      "type": "string"
-    },
-    "file": {
-      "type": "string"
+    "issues": {
+      "type": "array",
+      "description": "One entry per issue whose file was written",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed",
+          "to",
+          "transition_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the issue was already in the target status"
+          },
+          "to": {
+            "type": "string",
+            "description": "The status as the issue's workflow spells it"
+          },
+          "transition_id": {
+            "type": "string",
+            "description": "The matched transition; differs per issue even under one --to"
+          }
+        }
+      }
     },
     "pushed": {
       "type": "boolean"

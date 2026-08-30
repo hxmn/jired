@@ -512,22 +512,37 @@ reported here rather than in the next command. With no terminal at all: exit 7,
 pointing at `comment`, `transition`, `assign` and the file itself.
 JSON: `{"schema":"jired/edit/1","key":"PROJ-142","file":"…","changed":["status"]}`.
 
-### `jired transition ISSUE --to "In Review" [--list] [--field k=v…] [--push] [--dry-run]`
-Validates against cached/live transitions; missing required fields → exit 2 with a
-machine-readable list. The flag is `--field`, repeated (`--field k=v --field j=w`).
-Without `--to` and without `--list` it is a usage error and emits nothing on stdout.
-`--list` alone prints the transitions available from the current status, falling
-back to the cached list (with its age) when the network is down.
+### `jired transition ISSUES… --to "In Review" [--list] [--field k=v…] [--push] [--dry-run]`
+Takes several issues for the reason `label` and `set` do: closing out a sprint
+is a dozen tickets moving to one status, and `list --keys` exists to be piped
+into exactly this. Each issue is validated against cached/live transitions for
+*its* workflow position — the same `--to` can be a different transition id, or
+no transition at all, per issue — and one that cannot move is a warning beside
+the ones that were staged, not a reason none of them were; only every issue
+failing fails the command, with the first issue's error. Missing required
+fields → exit 2 with a machine-readable list. The flag is `--field`, repeated
+(`--field k=v --field j=w`). Without `--to` and without `--list` it is a usage
+error and emits nothing on stdout. `--list` reads one issue at a time — the
+listing is one issue's position in its workflow — and prints the transitions
+available from its current status, falling back to the cached list (with its
+age) when the network is down.
+JSON: `{"schema":"jired/transition/1","to":"Done","issues":[{"key","file","changed","to","transition_id"}],"pushed":false,"push":null}` —
+per-issue `to` as the workflow spells it, per-issue `transition_id` because one
+`--to` matches a different transition on each issue.
 
-### `jired assign ISSUE --me|--user Q|--none [--push] [--dry-run]`
+### `jired assign ISSUES… --me|--user Q|--none [--push] [--dry-run]`
 Exactly one of `--me`/`--user`/`--none` is required — clap enforces it, so the
 error arrives before any work. `--user` resolves against the users who can be
-assigned *this* issue (`user/assignable/search`, scoped by `issueKey`), which is
-a smaller set than the instance's directory: assignment is a permission held per
-project and per issue-security level, and searching everyone offered names the
-server would then refuse — a failure that arrives one push later. An ambiguous
+assigned the *first* issue named (`user/assignable/search`, scoped by
+`issueKey`), which is a smaller set than the instance's directory: assignment is
+a permission held per project and per issue-security level, and searching
+everyone offered names the server would then refuse — a failure that arrives one
+push later. One person is resolved once and written everywhere; an issue that
+person cannot hold gets the server's own refusal at push time. An ambiguous
 query lists the candidates and exits 2 rather than picking one. There is no
-picker: the TUI is M4 work and nothing in the tree draws one today.
+picker: the TUI is M4 work and nothing in the tree draws one today. Staged like
+`label` across the lot, and the JSON is the same shape:
+`{"schema":"jired/assign/1","assignee":"@[Jane D](jane)","issues":[{"key","file","changed"}],"pushed":false,"push":null}`.
 
 ### `jired attach ISSUE FILE…` / `jired attachments pull|list [ISSUES…] [--max-size N]`
 `attach` copies into the dot-folder and stages upload (cap 50 MiB default).
