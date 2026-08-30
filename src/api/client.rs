@@ -52,6 +52,24 @@ impl SearchPage {
     }
 }
 
+/// Who a user search may answer with.
+///
+/// Jira has two user searches and they are not interchangeable: one finds every
+/// user on the instance, the other finds the ones who can actually be assigned
+/// a given issue — which is a smaller set, because assignment is a permission
+/// held per project and per issue-security level. Asking the wrong one is how
+/// `assign` came to offer names the server would then refuse.
+#[derive(Debug, Clone, Copy)]
+pub enum UserScope<'a> {
+    /// Everyone the caller may see. For naming a person, not for assigning one.
+    Any,
+    /// Those who can be assigned this issue.
+    Issue(&'a str),
+    /// Those who can be assigned anything in this project — the answer when
+    /// there is no issue yet, as when creating one.
+    Project(&'a str),
+}
+
 /// One REST module a server publishes a machine-readable description of.
 ///
 /// There is no single document describing a Jira: Data Center runs on Jersey,
@@ -171,7 +189,8 @@ pub trait JiraApi: Send + Sync {
     ) -> Result<RemoteAttachment>;
     async fn download_attachment(&self, attachment: &RemoteAttachment) -> Result<Vec<u8>>;
 
-    async fn search_users(&self, query: &str) -> Result<Vec<UserRef>>;
+    /// Users matching `query`, restricted to those `scope` permits.
+    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>>;
 }
 
 /// Walk every page of a search, respecting both pagination styles.

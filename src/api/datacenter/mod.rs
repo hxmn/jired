@@ -9,16 +9,18 @@
 //! [`wizard`] drives the one operation Data Center offers as a web action
 //! rather than a route.
 
+pub mod client;
 pub mod routes;
 pub mod wizard;
 
+pub use client::DataCenter;
+
 use crate::api::client::SpecModule;
 use crate::api::http::HttpClient;
-use crate::api::rest::Rest;
 use serde_json::{json, Value};
 
-pub fn client(http: HttpClient) -> Rest {
-    Rest::new(http)
+pub fn client(http: HttpClient) -> DataCenter {
+    DataCenter::new(http)
 }
 
 /// What Jersey answers a WADL request with, and what it refuses.

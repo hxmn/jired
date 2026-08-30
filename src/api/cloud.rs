@@ -5,6 +5,7 @@
 //! in [`crate::api::rest`]; only the facts that differ live here.
 
 use crate::api::client::SpecModule;
+use crate::api::datacenter::routes::{Module, Route};
 use crate::api::http::HttpClient;
 use crate::api::rest::Rest;
 use serde_json::{json, Value};
@@ -12,6 +13,53 @@ use serde_json::{json, Value};
 pub fn client(http: HttpClient) -> Rest {
     Rest::new(http)
 }
+
+// The routes Cloud has and Data Center does not.
+//
+// They are `Route`s so that Cloud's paths are built the same way as everything
+// else, and they are here rather than in the shared table because the contract
+// test would look for them in a Data Center description and not find them.
+// Nothing checks these: Cloud publishes no description a test could read — see
+// `PUBLISHED_OPENAPI`, a document Atlassian hosts rather than one the site
+// serves.
+
+/// Cloud paginates its project listing; Data Center answers `project` with the
+/// whole array.
+pub const PROJECT_SEARCH: Route = Route {
+    id: "searchProjects",
+    method: "GET",
+    module: Module::Api,
+    path: "project/search",
+    query: &["startAt", "maxResults"],
+};
+
+/// Cloud's worklog endpoint pages, where Data Center's declares no paging and
+/// answers with every worklog at once.
+pub const GET_WORKLOGS: Route = Route {
+    id: "getIssueWorklog",
+    method: "GET",
+    module: Module::Api,
+    path: "issue/{issueIdOrKey}/worklog",
+    query: &["startAt", "maxResults"],
+};
+
+/// Cloud searches users by `query`, where Data Center takes a `username`.
+pub const FIND_USERS: Route = Route {
+    id: "findUsers",
+    method: "GET",
+    module: Module::Api,
+    path: "user/search",
+    query: &["query", "maxResults"],
+};
+
+/// The same difference on the assignable search: `query`, not `username`.
+pub const FIND_ASSIGNABLE_USERS: Route = Route {
+    id: "findAssignableUsers",
+    method: "GET",
+    module: Module::Api,
+    path: "user/assignable/search",
+    query: &["query", "project", "issueKey", "maxResults"],
+};
 
 /// Where Atlassian publishes the Cloud OpenAPI document.
 ///

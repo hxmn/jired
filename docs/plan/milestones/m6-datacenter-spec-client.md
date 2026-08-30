@@ -327,10 +327,10 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** the contract passes, and changing `ASSIGN.method` to `POST` or adding `"foo"` to `GET_ISSUE.query` fails it with a message naming the route.
 
 ### M6.4 The Data Center client, and `Rest` without deployment branches
-- [ ] `src/api/datacenter/client.rs`: `DataCenter { rest: Rest }` delegating the unchanged methods; overriding `projects`, `board_project`, `move_subtask_parent`, `search_users` (unscoped `findUsers` until M6.7) and `worklogs` (one call)
-- [ ] `Rest`: delete the `Source`-based branching; add `prefix(Module)` and `url(&Route, args, query)`; replace every `format!("{}/…", self.api())` and `/rest/agile/1.0/…` literal — `issue_id`, `issue_updated`, `changelog`, `transitions`, `boards`, `sprints`, `board_project_from` included
-- [ ] Unit tests: `worklogs_are_asked_for_in_one_call`, `projects_are_read_as_a_bare_array`, `cloud_paths_are_unchanged` (pins `/rest/api/3/issue/PROJ-1?fields=*all` and `/rest/agile/1.0/board?maxResults=50&projectKeyOrId=PROJ&startAt=0`, among others)
-- [ ] `src/api/mod.rs` header: "one trait, two implementations" is true again
+- [x] `src/api/datacenter/client.rs`: `DataCenter { rest: Rest }` delegating the unchanged methods; overriding `projects`, `board_project`, `move_subtask_parent`, `search_users` (unscoped `findUsers` until M6.7) and `worklogs` (one call)
+- [x] `Rest`: delete the `Source`-based branching; add `prefix(Module)` and `url(&Route, args, query)`; replace every `format!("{}/…", self.api())` and `/rest/agile/1.0/…` literal — `issue_id`, `issue_updated`, `changelog`, `transitions`, `boards`, `sprints`, `board_project_from` included
+- [x] Unit tests: `worklogs_are_asked_for_in_one_call`, `projects_are_read_as_a_bare_array`, `cloud_paths_are_unchanged` (pins `/rest/api/3/issue/PROJ-1?fields=*all` and `/rest/agile/1.0/board?maxResults=50&projectKeyOrId=PROJ&startAt=0`, among others)
+- [x] `src/api/mod.rs` header: "one trait, two implementations" is true again
 - **Done when:** green, and `grep -n 'match self.deployment' src/api/rest.rs` finds only `api()` and `markup()`.
 
 ### M6.5 Complete paged comments

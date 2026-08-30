@@ -8,7 +8,7 @@
 //!
 //! Set `JIRED_FIXTURES=<dir>` to activate it for any command.
 
-use crate::api::client::{ApiSpec, JiraApi, SearchPage, SearchQuery, SpecModule};
+use crate::api::client::{ApiSpec, JiraApi, SearchPage, SearchQuery, SpecModule, UserScope};
 use crate::api::model::*;
 use crate::api::normalize::{self, FieldMap};
 use crate::api::{Deployment, Markup};
@@ -859,8 +859,30 @@ impl JiraApi for FixtureClient {
             .map_err(|e| JiredError::network(format!("fixture attachment {}: {e}", path.display())))
     }
 
-    async fn search_users(&self, query: &str) -> Result<Vec<UserRef>> {
-        let users: Vec<UserRef> = read_json(&self.dir, "users.json")
+    /// The users a scope permits, from the narrowest recording that exists.
+    ///
+    /// `assignable-{key}.json`, then `assignable-{project}.json`, then
+    /// `users.json` — the same falling-back the sprints listing does. A fixture
+    /// that records only `users.json` therefore answers every scope with it,
+    /// which is what keeps a recording that predates the assignable search
+    /// working; a test that cares about the difference writes the narrower file.
+    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>> {
+        let mut names: Vec<String> = Vec::new();
+        match scope {
+            UserScope::Any => {}
+            UserScope::Issue(key) => {
+                names.push(format!("assignable-{key}.json"));
+                if let Some((project, _)) = key.rsplit_once('-') {
+                    names.push(format!("assignable-{project}.json"));
+                }
+            }
+            UserScope::Project(project) => names.push(format!("assignable-{project}.json")),
+        }
+        names.push("users.json".to_string());
+
+        let users: Vec<UserRef> = names
+            .iter()
+            .find_map(|name| read_json(&self.dir, name))
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         let q = query.to_lowercase();

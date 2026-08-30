@@ -1,11 +1,22 @@
-//! Shared REST implementation for both deployments.
+//! The REST implementation both deployments are built from.
 //!
 //! Cloud and Data Center differ in API version, rich-text format, user
-//! identifiers and search pagination — all of which are data, not control flow.
-//! Keeping one implementation parameterized by those facts means a fix lands on
-//! both products at once.
+//! identifiers and a handful of routes. The first three are data — the API
+//! prefix, [`Markup`], the user payload shape — and stay here, parameterized,
+//! so a fix lands on both products at once. The routes are not, and they live
+//! in [`crate::api::datacenter::client`], which wraps this and overrides them:
+//! this type is what a Cloud site gets, and the base a Data Center one is
+//! built on.
+//!
+//! Every path is rendered from [`crate::api::datacenter::routes`], the table
+//! the Data Center description is checked against. Cloud shares it wherever the
+//! two agree, which is everywhere but the three routes in
+//! [`crate::api::cloud`].
 
-use crate::api::client::{ApiSpec, FieldSet, JiraApi, SearchPage, SearchQuery, SpecModule};
+use crate::api::client::{
+    ApiSpec, FieldSet, JiraApi, SearchPage, SearchQuery, SpecModule, UserScope,
+};
+use crate::api::datacenter::routes::{self, Module, Route};
 use crate::api::http::HttpClient;
 use crate::api::model::*;
 use crate::api::normalize::{self, FieldMap};
@@ -17,7 +28,7 @@ use serde_json::{json, Value};
 use tokio::sync::OnceCell;
 
 pub struct Rest {
-    http: HttpClient,
+    pub(crate) http: HttpClient,
     deployment: Deployment,
     /// `/field` is instance-wide and stable within a run.
     field_map: OnceCell<FieldMap>,
@@ -26,7 +37,7 @@ pub struct Rest {
 /// Where a board's project can be read from. The two Jira deployments populate
 /// one each; see [`JiraApi::board_project`].
 #[derive(Debug, Clone, Copy)]
-enum Source {
+pub(crate) enum Source {
     /// `GET /board/{id}/configuration` → `location.projectKey` (Cloud).
     Configuration,
     /// `GET /board/{id}/project` → the projects the board's filter covers.
@@ -35,12 +46,15 @@ enum Source {
 
 impl Rest {
     /// The project key one of the two endpoints gives for a board, if it does.
-    async fn board_project_from(&self, board_id: &str, source: Source) -> Result<Option<String>> {
+    pub(crate) async fn board_project_from(
+        &self,
+        board_id: &str,
+        source: Source,
+    ) -> Result<Option<String>> {
         match source {
             Source::Configuration => {
                 let v = self
-                    .http
-                    .get_json(&format!("/rest/agile/1.0/board/{board_id}/configuration"))
+                    .get(&routes::BOARD_CONFIGURATION, &[("boardId", board_id)], &[])
                     .await?;
                 // Cloud spells it `projectKey` in the board listing and `key`
                 // in the configuration.
@@ -55,10 +69,11 @@ impl Rest {
             }
             Source::Listing => {
                 let v = self
-                    .http
-                    .get_json(&format!(
-                        "/rest/agile/1.0/board/{board_id}/project?maxResults=50"
-                    ))
+                    .get(
+                        &routes::BOARD_PROJECTS,
+                        &[("boardId", board_id)],
+                        &[("maxResults", "50")],
+                    )
                     .await?;
                 // A board is a filter, and a filter can span projects: one is
                 // an answer, several is genuinely not one, and naming the first
@@ -72,10 +87,13 @@ impl Rest {
     ///
     /// Asked for the cheapest field there is: what is wanted is beside it, in
     /// every payload, whatever was requested.
-    async fn issue_id(&self, key: &str) -> Result<String> {
+    pub(crate) async fn issue_id(&self, key: &str) -> Result<String> {
         let v = self
-            .http
-            .get_json(&format!("{}/issue/{key}?fields=summary", self.api()))
+            .get(
+                &routes::GET_ISSUE,
+                &[("issueIdOrKey", key)],
+                &[("fields", "summary")],
+            )
             .await?;
         v.get("id")
             .and_then(Value::as_str)
@@ -99,11 +117,40 @@ impl Rest {
         }
     }
 
-    fn markup(&self) -> Markup {
+    /// Where a module is mounted on this deployment. The platform API is the
+    /// one that moved between versions; the Agile API never did.
+    pub(crate) fn prefix(&self, module: Module) -> &'static str {
+        match module {
+            Module::Api => self.api(),
+            Module::Agile => "/rest/agile/1.0",
+        }
+    }
+
+    /// The path for one route on this deployment.
+    pub(crate) fn url(
+        &self,
+        route: &Route,
+        args: &[(&str, &str)],
+        query: &[(&str, &str)],
+    ) -> String {
+        route.url(self.prefix(route.module), args, query)
+    }
+
+    /// `GET` one route.
+    pub(crate) async fn get(
+        &self,
+        route: &Route,
+        args: &[(&str, &str)],
+        query: &[(&str, &str)],
+    ) -> Result<Value> {
+        self.http.get_json(&self.url(route, args, query)).await
+    }
+
+    pub(crate) fn markup(&self) -> Markup {
         self.deployment.markup()
     }
 
-    async fn field_map(&self) -> Result<&FieldMap> {
+    pub(crate) async fn field_map(&self) -> Result<&FieldMap> {
         self.field_map
             .get_or_try_init(|| async {
                 let fields = self.fields().await?;
@@ -155,10 +202,7 @@ impl JiraApi for Rest {
     }
 
     async fn server_info(&self) -> Result<ServerInfo> {
-        let v = self
-            .http
-            .get_json(&format!("{}/serverInfo", self.api()))
-            .await?;
+        let v = self.get(&routes::SERVER_INFO, &[], &[]).await?;
         // `deploymentType` is the server's own word for what it is; trust it
         // over any URL heuristic.
         let deployment = v
@@ -193,10 +237,7 @@ impl JiraApi for Rest {
     }
 
     async fn myself(&self) -> Result<Myself> {
-        let v = self
-            .http
-            .get_json(&format!("{}/myself", self.api()))
-            .await?;
+        let v = self.get(&routes::MYSELF, &[], &[]).await?;
         let account_id = ["accountId", "name", "key"]
             .iter()
             .find_map(|k| v.get(*k).and_then(Value::as_str))
@@ -220,53 +261,39 @@ impl JiraApi for Rest {
     }
 
     async fn projects(&self) -> Result<Vec<Project>> {
-        // Cloud paginates `/project/search`; Data Center returns `/project`
-        // as a bare array.
+        // Cloud paginates `/project/search`, which Data Center does not
+        // serve at all; there the whole listing is one array, and
+        // `datacenter::client` reads it that way.
         let mut out = Vec::new();
-        match self.deployment {
-            Deployment::Cloud => {
-                let mut start = 0usize;
-                loop {
-                    let v = self
-                        .http
-                        .get_json(&format!(
-                            "{}/project/search?startAt={start}&maxResults=50",
-                            self.api()
-                        ))
-                        .await?;
-                    let values = v
-                        .get("values")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    let n = values.len();
-                    out.extend(values.iter().filter_map(project_from));
-                    let is_last = v.get("isLast").and_then(Value::as_bool).unwrap_or(true);
-                    if is_last || n == 0 {
-                        break;
-                    }
-                    start += n;
-                }
+        let mut start = 0usize;
+        loop {
+            let v = self
+                .http
+                .get_json(&crate::api::cloud::PROJECT_SEARCH.url(
+                    self.api(),
+                    &[],
+                    &[("startAt", &start.to_string()), ("maxResults", "50")],
+                ))
+                .await?;
+            let values = v
+                .get("values")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let n = values.len();
+            out.extend(values.iter().filter_map(project_from));
+            let is_last = v.get("isLast").and_then(Value::as_bool).unwrap_or(true);
+            if is_last || n == 0 {
+                break;
             }
-            Deployment::DataCenter => {
-                let v = self
-                    .http
-                    .get_json(&format!("{}/project", self.api()))
-                    .await?;
-                out.extend(
-                    v.as_array()
-                        .unwrap_or(&vec![])
-                        .iter()
-                        .filter_map(project_from),
-                );
-            }
+            start += n;
         }
         out.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(out)
     }
 
     async fn fields(&self) -> Result<Vec<FieldMeta>> {
-        let v = self.http.get_json(&format!("{}/field", self.api())).await?;
+        let v = self.get(&routes::FIELDS, &[], &[]).await?;
         Ok(v.as_array()
             .unwrap_or(&vec![])
             .iter()
@@ -295,17 +322,16 @@ impl JiraApi for Rest {
     }
 
     async fn boards(&self, project: Option<&str>) -> Result<Vec<Board>> {
-        let mut path = "/rest/agile/1.0/board?maxResults=50".to_string();
-        if let Some(p) = project {
-            path.push_str(&format!("&projectKeyOrId={}", urlencoding::encode(p)));
-        }
         let mut out = Vec::new();
         let mut start = 0usize;
         loop {
-            let v = self
-                .http
-                .get_json(&format!("{path}&startAt={start}"))
-                .await?;
+            let mut query = vec![("maxResults", "50".to_string())];
+            if let Some(p) = project {
+                query.push(("projectKeyOrId", p.to_string()));
+            }
+            query.push(("startAt", start.to_string()));
+            let query: Vec<(&str, &str)> = query.iter().map(|(n, v)| (*n, v.as_str())).collect();
+            let v = self.get(&routes::BOARDS, &[], &query).await?;
             let values = v
                 .get("values")
                 .and_then(Value::as_array)
@@ -338,8 +364,7 @@ impl JiraApi for Rest {
 
     async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>> {
         let v = self
-            .http
-            .get_json(&format!("/rest/agile/1.0/board/{board_id}/configuration"))
+            .get(&routes::BOARD_CONFIGURATION, &[("boardId", board_id)], &[])
             .await?;
         Ok(v.get("columnConfig")
             .and_then(|c| c.get("columns"))
@@ -364,18 +389,17 @@ impl JiraApi for Rest {
     async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
         // Two endpoints answer this, one per deployment, and neither answers on
         // both: `location` in the board configuration is a Cloud field that
-        // Data Center omits entirely, and asking for it there spends a request
-        // to learn nothing. So each deployment asks the one that answers it
-        // first — and still falls back to the other, because which endpoint a
-        // given Jira version populates is not something to bet a null on.
-        let (first, second) = match self.deployment {
-            Deployment::Cloud => (Source::Configuration, Source::Listing),
-            Deployment::DataCenter => (Source::Listing, Source::Configuration),
-        };
-        if let Some(key) = self.board_project_from(board_id, first).await? {
+        // Data Center omits entirely, so Cloud asks that one first and
+        // `datacenter::client` reverses the order. Both still fall back to the
+        // other, because which endpoint a given Jira version populates is not
+        // something to bet a null on.
+        if let Some(key) = self
+            .board_project_from(board_id, Source::Configuration)
+            .await?
+        {
             return Ok(Some(key));
         }
-        self.board_project_from(board_id, second).await
+        self.board_project_from(board_id, Source::Listing).await
     }
 
     async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>> {
@@ -383,10 +407,11 @@ impl JiraApi for Rest {
         let mut start = 0usize;
         loop {
             let v = self
-                .http
-                .get_json(&format!(
-                    "/rest/agile/1.0/board/{board_id}/sprint?startAt={start}&maxResults=50"
-                ))
+                .get(
+                    &routes::BOARD_SPRINTS,
+                    &[("boardId", board_id)],
+                    &[("startAt", &start.to_string()), ("maxResults", "50")],
+                )
                 .await?;
             let values = v
                 .get("values")
@@ -406,7 +431,7 @@ impl JiraApi for Rest {
     async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint> {
         let v = self
             .http
-            .post_json("/rest/agile/1.0/sprint", input.to_body())
+            .post_json(&self.url(&routes::CREATE_SPRINT, &[], &[]), input.to_body())
             .await?;
         // The response is a sprint like any other, so it is read like any
         // other; only its id is beyond invention if the server omits it.
@@ -433,7 +458,7 @@ impl JiraApi for Rest {
 
         let v = self
             .http
-            .post_json(&format!("{}/search", self.api()), body)
+            .post_json(&self.url(&routes::SEARCH, &[], &[]), body)
             .await?;
 
         let mut issues = v
@@ -467,8 +492,11 @@ impl JiraApi for Rest {
     async fn issue(&self, key: &str) -> Result<RemoteIssue> {
         let map = self.field_map().await?.clone();
         let v = self
-            .http
-            .get_json(&format!("{}/issue/{key}?fields=*all", self.api()))
+            .get(
+                &routes::GET_ISSUE,
+                &[("issueIdOrKey", key)],
+                &[("fields", "*all")],
+            )
             .await?;
         let mut issue = normalize::issue_from_json(&v, self.markup(), &map)?;
         self.complete_worklogs(&mut issue).await;
@@ -477,8 +505,11 @@ impl JiraApi for Rest {
 
     async fn issue_updated(&self, key: &str) -> Result<DateTime<Utc>> {
         let v = self
-            .http
-            .get_json(&format!("{}/issue/{key}?fields=updated", self.api()))
+            .get(
+                &routes::GET_ISSUE,
+                &[("issueIdOrKey", key)],
+                &[("fields", "updated")],
+            )
             .await?;
         v.get("fields")
             .and_then(|f| f.get("updated"))
@@ -491,11 +522,11 @@ impl JiraApi for Rest {
 
     async fn changelog(&self, key: &str) -> Result<Vec<ChangelogEntry>> {
         let v = self
-            .http
-            .get_json(&format!(
-                "{}/issue/{key}?expand=changelog&fields=key",
-                self.api()
-            ))
+            .get(
+                &routes::GET_ISSUE,
+                &[("issueIdOrKey", key)],
+                &[("expand", "changelog"), ("fields", "key")],
+            )
             .await?;
         Ok(v.get("changelog")
             .and_then(|c| c.get("histories"))
@@ -547,11 +578,11 @@ impl JiraApi for Rest {
 
     async fn transitions(&self, key: &str) -> Result<Vec<Transition>> {
         let v = self
-            .http
-            .get_json(&format!(
-                "{}/issue/{key}/transitions?expand=transitions.fields",
-                self.api()
-            ))
+            .get(
+                &routes::TRANSITIONS,
+                &[("issueIdOrKey", key)],
+                &[("expand", "transitions.fields")],
+            )
             .await?;
         Ok(v.get("transitions")
             .and_then(Value::as_array)
@@ -596,7 +627,7 @@ impl JiraApi for Rest {
     async fn update_fields(&self, key: &str, fields: Value) -> Result<()> {
         self.http
             .put_json(
-                &format!("{}/issue/{key}", self.api()),
+                &self.url(&routes::EDIT_ISSUE, &[("issueIdOrKey", key)], &[]),
                 json!({ "fields": fields }),
             )
             .await?;
@@ -607,7 +638,7 @@ impl JiraApi for Rest {
         let v = self
             .http
             .post_json(
-                &format!("{}/issue", self.api()),
+                &self.url(&routes::CREATE_ISSUE, &[], &[]),
                 json!({ "fields": fields }),
             )
             .await?;
@@ -635,15 +666,18 @@ impl JiraApi for Rest {
             body["fields"] = f;
         }
         self.http
-            .post_json(&format!("{}/issue/{key}/transitions", self.api()), body)
+            .post_json(
+                &self.url(&routes::DO_TRANSITION, &[("issueIdOrKey", key)], &[]),
+                body,
+            )
             .await?;
         Ok(())
     }
 
     async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()> {
         let path = match sprint {
-            Some(id) => format!("/rest/agile/1.0/sprint/{id}/issue"),
-            None => "/rest/agile/1.0/backlog/issue".to_string(),
+            Some(id) => self.url(&routes::SPRINT_ISSUES, &[("sprintId", id)], &[]),
+            None => self.url(&routes::BACKLOG_ISSUES, &[], &[]),
         };
         self.http
             .post_json(&path, json!({ "issues": keys }))
@@ -652,21 +686,11 @@ impl JiraApi for Rest {
     }
 
     async fn move_subtask_parent(&self, key: &str, parent: &str) -> Result<()> {
-        match self.deployment {
-            // Cloud grew a REST route for this and Data Center never did, so
-            // Cloud's is the ordinary field edit every other field takes.
-            Deployment::Cloud => {
-                self.update_fields(key, json!({ "parent": { "key": parent } }))
-                    .await
-            }
-            // The wizard is addressed by the issue's id, not its key: it is a
-            // web action, and web actions predate the key ever being accepted.
-            Deployment::DataCenter => {
-                let id = self.issue_id(key).await?;
-                crate::api::datacenter::wizard::move_subtask_parent(&self.http, key, &id, parent)
-                    .await
-            }
-        }
+        // Cloud grew a REST route for this and Data Center never did, so
+        // Cloud's is the ordinary field edit every other field takes; the Move
+        // wizard `datacenter::client` drives instead is the other half of this.
+        self.update_fields(key, json!({ "parent": { "key": parent } }))
+            .await
     }
 
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {
@@ -676,9 +700,10 @@ impl JiraApi for Rest {
         loop {
             let v = self
                 .http
-                .get_json(&format!(
-                    "{}/issue/{key}/worklog?startAt={start}&maxResults=100",
-                    self.api()
+                .get_json(&crate::api::cloud::GET_WORKLOGS.url(
+                    self.api(),
+                    &[("issueIdOrKey", key)],
+                    &[("startAt", &start.to_string()), ("maxResults", "100")],
                 ))
                 .await?;
             let (page, total) = normalize::worklogs_from(Some(&v), markup);
@@ -696,7 +721,7 @@ impl JiraApi for Rest {
         let v = self
             .http
             .post_json(
-                &format!("{}/issue/{key}/worklog", self.api()),
+                &self.url(&routes::ADD_WORKLOG, &[("issueIdOrKey", key)], &[]),
                 worklog.to_body(),
             )
             .await?;
@@ -712,7 +737,11 @@ impl JiraApi for Rest {
         let v = self
             .http
             .put_json(
-                &format!("{}/issue/{key}/worklog/{id}", self.api()),
+                &self.url(
+                    &routes::UPDATE_WORKLOG,
+                    &[("issueIdOrKey", key), ("id", id)],
+                    &[],
+                ),
                 worklog.to_body(),
             )
             .await?;
@@ -721,7 +750,11 @@ impl JiraApi for Rest {
 
     async fn delete_worklog(&self, key: &str, id: &str) -> Result<()> {
         self.http
-            .delete(&format!("{}/issue/{key}/worklog/{id}", self.api()))
+            .delete(&self.url(
+                &routes::DELETE_WORKLOG,
+                &[("issueIdOrKey", key), ("id", id)],
+                &[],
+            ))
             .await
     }
 
@@ -729,7 +762,7 @@ impl JiraApi for Rest {
         let v = self
             .http
             .post_json(
-                &format!("{}/issue/{key}/comment", self.api()),
+                &self.url(&routes::ADD_COMMENT, &[("issueIdOrKey", key)], &[]),
                 json!({ "body": body.to_field_value() }),
             )
             .await?;
@@ -740,7 +773,11 @@ impl JiraApi for Rest {
         let v = self
             .http
             .put_json(
-                &format!("{}/issue/{key}/comment/{id}", self.api()),
+                &self.url(
+                    &routes::UPDATE_COMMENT,
+                    &[("issueIdOrKey", key), ("id", id)],
+                    &[],
+                ),
                 json!({ "body": body.to_field_value() }),
             )
             .await?;
@@ -749,7 +786,11 @@ impl JiraApi for Rest {
 
     async fn delete_comment(&self, key: &str, id: &str) -> Result<()> {
         self.http
-            .delete(&format!("{}/issue/{key}/comment/{id}", self.api()))
+            .delete(&self.url(
+                &routes::DELETE_COMMENT,
+                &[("issueIdOrKey", key), ("id", id)],
+                &[],
+            ))
             .await
     }
 
@@ -762,7 +803,7 @@ impl JiraApi for Rest {
         let v = self
             .http
             .post_multipart(
-                &format!("{}/issue/{key}/attachments", self.api()),
+                &self.url(&routes::ADD_ATTACHMENT, &[("issueIdOrKey", key)], &[]),
                 filename,
                 bytes,
             )
@@ -779,19 +820,10 @@ impl JiraApi for Rest {
         self.http.get_bytes(&attachment.content_url).await
     }
 
-    async fn search_users(&self, query: &str) -> Result<Vec<UserRef>> {
-        // Cloud searches by `query`; Data Center by `username`.
-        let param = match self.deployment {
-            Deployment::Cloud => "query",
-            Deployment::DataCenter => "username",
-        };
+    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>> {
         let v = self
             .http
-            .get_json(&format!(
-                "{}/user/search?{param}={}&maxResults=20",
-                self.api(),
-                urlencoding::encode(query)
-            ))
+            .get_json(&cloud_user_search(self.api(), query, scope))
             .await?;
         Ok(v.as_array()
             .unwrap_or(&vec![])
@@ -801,7 +833,32 @@ impl JiraApi for Rest {
     }
 }
 
-fn project_from(v: &Value) -> Option<Project> {
+/// Cloud's user search: `query`, and the assignable route wherever the caller
+/// named something to be assigned to.
+///
+/// Its own function so a test can read the URL without a server; Data Center's
+/// counterpart is [`crate::api::datacenter::client::user_search_url`].
+pub(crate) fn cloud_user_search(prefix: &str, query: &str, scope: UserScope<'_>) -> String {
+    match scope {
+        UserScope::Any => crate::api::cloud::FIND_USERS.url(
+            prefix,
+            &[],
+            &[("query", query), ("maxResults", "20")],
+        ),
+        UserScope::Issue(key) => crate::api::cloud::FIND_ASSIGNABLE_USERS.url(
+            prefix,
+            &[],
+            &[("query", query), ("issueKey", key), ("maxResults", "20")],
+        ),
+        UserScope::Project(project) => crate::api::cloud::FIND_ASSIGNABLE_USERS.url(
+            prefix,
+            &[],
+            &[("query", query), ("project", project), ("maxResults", "20")],
+        ),
+    }
+}
+
+pub(crate) fn project_from(v: &Value) -> Option<Project> {
     Some(Project {
         id: id_string(v.get("id")?)?,
         key: v.get("key")?.as_str()?.to_string(),
@@ -911,5 +968,80 @@ mod tests {
         let p = project_from(&json!({"id": 1, "key": "PROJ"})).unwrap();
         assert_eq!(p.key, "PROJ");
         assert_eq!(p.name, "");
+    }
+
+    /// Routing every path through the table was meant to change where the
+    /// strings come from and not the strings themselves. These are the URLs
+    /// Cloud has always been sent, pinned so a table edit made for Data
+    /// Center's sake cannot quietly move a Cloud request.
+    ///
+    /// The end-to-end suite runs against the fixture client, which never builds
+    /// a URL, so this is the only place the rendering is checked at all.
+    #[test]
+    fn cloud_paths_are_unchanged() {
+        let api = "/rest/api/3";
+        let agile = "/rest/agile/1.0";
+        let issue = [("issueIdOrKey", "PROJ-1")];
+
+        assert_eq!(
+            routes::SERVER_INFO.url(api, &[], &[]),
+            "/rest/api/3/serverInfo"
+        );
+        assert_eq!(routes::MYSELF.url(api, &[], &[]), "/rest/api/3/myself");
+        assert_eq!(routes::FIELDS.url(api, &[], &[]), "/rest/api/3/field");
+        assert_eq!(routes::SEARCH.url(api, &[], &[]), "/rest/api/3/search");
+        assert_eq!(
+            routes::GET_ISSUE.url(api, &issue, &[("fields", "*all")]),
+            "/rest/api/3/issue/PROJ-1?fields=*all"
+        );
+        assert_eq!(
+            routes::GET_ISSUE.url(api, &issue, &[("fields", "updated")]),
+            "/rest/api/3/issue/PROJ-1?fields=updated"
+        );
+        assert_eq!(
+            routes::GET_ISSUE.url(api, &issue, &[("expand", "changelog"), ("fields", "key")]),
+            "/rest/api/3/issue/PROJ-1?expand=changelog&fields=key"
+        );
+        assert_eq!(
+            routes::TRANSITIONS.url(api, &issue, &[("expand", "transitions.fields")]),
+            "/rest/api/3/issue/PROJ-1/transitions?expand=transitions.fields"
+        );
+        assert_eq!(
+            routes::ADD_COMMENT.url(api, &issue, &[]),
+            "/rest/api/3/issue/PROJ-1/comment"
+        );
+        assert_eq!(
+            routes::ADD_ATTACHMENT.url(api, &issue, &[]),
+            "/rest/api/3/issue/PROJ-1/attachments"
+        );
+        assert_eq!(
+            routes::BOARDS.url(
+                agile,
+                &[],
+                &[
+                    ("maxResults", "50"),
+                    ("projectKeyOrId", "PROJ"),
+                    ("startAt", "0")
+                ]
+            ),
+            "/rest/agile/1.0/board?maxResults=50&projectKeyOrId=PROJ&startAt=0"
+        );
+        assert_eq!(
+            routes::SPRINT_ISSUES.url(agile, &[("sprintId", "43")], &[]),
+            "/rest/agile/1.0/sprint/43/issue"
+        );
+        assert_eq!(
+            routes::BACKLOG_ISSUES.url(agile, &[], &[]),
+            "/rest/agile/1.0/backlog/issue"
+        );
+        // And the routes only Cloud has.
+        assert_eq!(
+            crate::api::cloud::GET_WORKLOGS.url(
+                api,
+                &issue,
+                &[("startAt", "0"), ("maxResults", "100")]
+            ),
+            "/rest/api/3/issue/PROJ-1/worklog?startAt=0&maxResults=100"
+        );
     }
 }

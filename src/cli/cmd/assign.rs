@@ -38,7 +38,7 @@ pub fn run(g: &GlobalArgs, args: &AssignArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let key = crate::project::naming::key_from_input(&args.issue);
 
-    let assignee = resolve_assignee(&mut ctx, args, out)?;
+    let assignee = resolve_assignee(&mut ctx, args, &key, out)?;
 
     ctx.lock()?;
     let value = assignee.clone();
@@ -84,7 +84,12 @@ pub fn run(g: &GlobalArgs, args: &AssignArgs, out: Out) -> Result<ExitCode> {
 }
 
 /// Work out the `@[Name](id)` value to write, or `None` to unassign.
-fn resolve_assignee(ctx: &mut Context, args: &AssignArgs, out: Out) -> Result<Option<String>> {
+fn resolve_assignee(
+    ctx: &mut Context,
+    args: &AssignArgs,
+    key: &str,
+    out: Out,
+) -> Result<Option<String>> {
     if args.none {
         return Ok(None);
     }
@@ -111,7 +116,11 @@ fn resolve_assignee(ctx: &mut Context, args: &AssignArgs, out: Out) -> Result<Op
 
     let engine = Engine::open(ctx)?;
     let client = engine.client(ctx)?;
-    let matches = crate::api::block_on(client.search_users(query))?;
+    // Scoped to the issue: the question is who can be assigned *this*, which is
+    // a smaller set than who exists, and offering a name the server will then
+    // refuse is worse than offering none.
+    let matches =
+        crate::api::block_on(client.search_users(query, crate::api::UserScope::Issue(key)))?;
 
     match matches.len() {
         0 => Err(JiredError::usage(format!("no user matches `{query}`"))
