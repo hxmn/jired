@@ -354,9 +354,9 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** the e2e passes, and fails when the scope is ignored (bob found).
 
 ### M6.8 The assignee route (Breaking)
-- [ ] `JiraApi::assign`, `assignee_body`, `Action::Assign`, the `assign` op, `perform`, `unapplied`, the fixture, `schemas/push.json`
-- [ ] e2e: `assign_none_clears_the_field_and_pushes_a_null` now reads `ops[0].kind == "assign"`, `request.path == "/issue/{key}/assignee"`, `request.body == {"accountId": null}`; new `an_assignee_edit_is_its_own_call_on_the_assignee_route` (both deployments; the journal shows `PUT /issue/{key}/assignee` and no `PUT` carrying `body.fields.assignee`), `an_assignee_the_server_did_not_apply_fails_the_push` (`ignored.json` → exit 10, "the assignee is still"), `a_mixed_edit_sends_the_fields_then_the_assignee` (kinds `["update_fields", "assign"]`)
-- [ ] Docs: `commands.md` push section after the `parent` paragraph; README push `--dry-run` paragraph and `assign` row; `init-agents` push prose; CHANGELOG **Breaking** — a script reading `--dry-run` for the assignee under `body.fields` must read the `assign` op
+- [x] `JiraApi::assign`, `assignee_body`, `Action::Assign`, the `assign` op, `perform`, `unapplied`, the fixture, `schemas/push.json`
+- [x] e2e: `assign_none_clears_the_field_and_pushes_a_null` now reads `ops[0].kind == "assign"`, `request.path == "/issue/{key}/assignee"`, `request.body == {"accountId": null}`; new `an_assignee_edit_is_its_own_call_on_the_assignee_route` (both deployments; the journal shows `PUT /issue/{key}/assignee` and no `PUT` carrying `body.fields.assignee`), `an_assignee_the_server_did_not_apply_fails_the_push` (`ignored.json` → exit 10, "the assignee is still"), `a_mixed_edit_sends_the_fields_then_the_assignee` (kinds `["update_fields", "assign"]`)
+- [x] Docs: `commands.md` push section after the `parent` paragraph; README push `--dry-run` paragraph and `assign` row; `init-agents` push prose; CHANGELOG **Breaking** — a script reading `--dry-run` for the assignee under `body.fields` must read the `assign` op
 - **Done when:** schema contract, e2e and unit tests are green and every `"assignee"` assertion in `tests/e2e.rs` points at the new op.
 
 ### M6.9 Screen checks

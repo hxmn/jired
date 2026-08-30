@@ -286,6 +286,12 @@ enum Action {
     /// Put a sub-task under a different parent. Its own operation because Data
     /// Center has no field update that does it; see
     /// [`crate::api::datacenter::wizard::move_subtask_parent`].
+    /// Set or clear the assignee, through the route Jira gives it.
+    Assign {
+        /// The user id, or `None` for nobody. Kept so the re-read can be asked
+        /// whether the server actually did it.
+        to: Option<String>,
+    },
     MoveParent {
         /// The parent it must be under when the issue is read back.
         to: String,
@@ -1347,6 +1353,20 @@ fn plan(
     // change leaves the field payload here and becomes a call of its own, so
     // what goes out is the operation that works rather than the one that is
     // quietly discarded.
+    // Assigning is not editing. Jira gives the assignee a route of its own
+    // because it is its own permission, and an instance whose edit screen does
+    // not carry `assignee` — a normal configuration — refuses the field update
+    // while accepting the route. Taken out here on both deployments: push plans
+    // one operation for both, and the client knows which spelling the body
+    // wants.
+    let assign = fields.remove("assignee").map(|payload| {
+        payload
+            .get("accountId")
+            .or_else(|| payload.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+
     let mut move_parent = None;
     if is_subtask(base_raw) && engine.account.deployment == crate::api::Deployment::DataCenter {
         if let Some(payload) = fields.remove("parent") {
@@ -1374,6 +1394,19 @@ fn plan(
             summary: field_names(&payload),
             request: json!({"method": "PUT", "path": "/issue/{key}", "body": {"fields": payload}}),
             action: Action::UpdateFields(payload),
+        });
+    }
+
+    if let Some(to) = assign {
+        let body = crate::api::assignee_body(engine.account.deployment, to.as_deref());
+        ops.push(Op {
+            kind: "assign",
+            summary: match &to {
+                Some(id) => id.clone(),
+                None => "nobody".to_string(),
+            },
+            request: json!({"method": "PUT", "path": "/issue/{key}/assignee", "body": body}),
+            action: Action::Assign { to },
         });
     }
 
@@ -1828,6 +1861,18 @@ fn unapplied(action: &Action, confirmed: &RemoteIssue) -> Option<String> {
                 (None, None) => unreachable!("equal parents are not a difference"),
             })
         }
+        // Checked like the parent, and for the same reason: assigning can be
+        // refused for a permission the account turns out not to have, and Jira
+        // does not always say so in the status line.
+        Action::Assign { to } => {
+            let now = confirmed.fields.assignee.as_ref().map(|u| u.id.as_str());
+            (!same(now, to.as_deref())).then(|| match (now, to) {
+                (Some(now), Some(to)) => format!("the assignee is still {now}, not {to}"),
+                (Some(now), None) => format!("the assignee is still {now}, not nobody"),
+                (None, Some(to)) => format!("the assignee is still unset, not {to}"),
+                (None, None) => unreachable!("equal assignees are not a difference"),
+            })
+        }
         // The wizard answers in HTML, and a page that renders is not a move
         // that happened — an upgrade that moves the form, a permission the
         // account turns out not to have, a step that quietly re-renders. This
@@ -2123,6 +2168,7 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                     .move_to_sprint(sprint.as_deref(), &[key.to_string()])
                     .await
             }
+            Action::Assign { to } => client.assign(key, to.as_deref()).await,
             Action::MoveParent { to } => client.move_subtask_parent(key, to).await,
             Action::CreateComment(body) => client.add_comment(key, body).await.map(|_| ()),
             Action::UpdateComment { id, body } => {

@@ -803,6 +803,16 @@ impl JiraApi for Rest {
             .await
     }
 
+    async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
+        self.http
+            .put_json(
+                &self.url(&routes::ASSIGN, &[("issueIdOrKey", key)], &[]),
+                crate::api::assignee_body(self.deployment, user_id),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Every comment, paged.
     ///
     /// Both deployments declare `startAt` and `maxResults` here — unlike the

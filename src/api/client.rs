@@ -177,6 +177,16 @@ pub trait JiraApi: Send + Sync {
     ) -> Result<RemoteWorklog>;
     async fn delete_worklog(&self, key: &str, id: &str) -> Result<()>;
 
+    /// Set or clear an issue's assignee.
+    ///
+    /// Its own route rather than a field edit. Jira offers `PUT
+    /// /issue/{key}/assignee` precisely because assigning is not editing: it is
+    /// its own permission, and an assignee missing from the edit screen — which
+    /// is a normal configuration — is still assignable through this. A field
+    /// update carrying `assignee` fails on those instances for a reason that
+    /// names a screen rather than a person.
+    async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()>;
+
     /// Every comment on an issue, for the case the issue payload paged them.
     async fn comments(&self, key: &str) -> Result<Vec<RemoteComment>>;
 

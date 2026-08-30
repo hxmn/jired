@@ -543,6 +543,48 @@ impl JiraApi for FixtureClient {
         Ok(())
     }
 
+    /// The dedicated assignee route, recorded under its own path.
+    ///
+    /// Its own recording is the point: a test can tell an assignee that was
+    /// sent through the route from one that was smuggled into a field payload,
+    /// and `ignored.json` can make this "server" answer it and do nothing,
+    /// which is the failure the real one is capable of.
+    async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
+        let path = format!("/issue/{key}/assignee");
+        let body = crate::api::assignee_body(self.deployment, user_id);
+        self.record("PUT", &path, body)?;
+        if !self.applies("PUT", &path) {
+            return Ok(());
+        }
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            if let Some(issue) = issues.get_mut(key) {
+                issue["fields"]["assignee"] = match user_id {
+                    Some(id) => {
+                        // The display name a recorded directory gives this user,
+                        // so the re-read renders the name a file would show.
+                        let users: Vec<UserRef> = read_json(&self.dir, "users.json")
+                            .and_then(|v| serde_json::from_value(v).ok())
+                            .unwrap_or_default();
+                        let display = users
+                            .iter()
+                            .find(|u| u.id == id)
+                            .map(|u| u.display_name.clone())
+                            .unwrap_or_else(|| id.to_string());
+                        let field = match self.deployment {
+                            Deployment::Cloud => "accountId",
+                            Deployment::DataCenter => "name",
+                        };
+                        json!({ field: id, "displayName": display })
+                    }
+                    None => Value::Null,
+                };
+            }
+        }
+        self.bump_updated(key);
+        Ok(())
+    }
+
     async fn create_issue(&self, fields: Value) -> Result<(String, String)> {
         self.record("POST", "/issue", json!({ "fields": fields }))?;
         let project = fields

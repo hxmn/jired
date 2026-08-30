@@ -12,6 +12,17 @@ version between the one you have and the one you are moving to.
 
 ### Breaking
 
+- **An `assignee:` edit is sent as its own operation, not as a field.**
+  `push --dry-run` now reports it as an `assign` op against
+  `/issue/{key}/assignee`, where it used to appear inside `update_fields` as
+  `body.fields.assignee` — a script reading the assignee out of the field
+  payload must read the `assign` op instead. Assigning is not editing: Jira
+  gives it a route because it is a permission of its own, and an instance whose
+  edit screen does not carry `assignee` — an ordinary configuration — refuses
+  the field update while accepting the route. Clearing puts the null on the id
+  (`{"accountId": null}`) rather than on the field. Verified on the re-read like
+  every other write that can be accepted and not performed.
+
 - **Jira Data Center older than 10.0 is refused, where 9.0 was the floor
   before.** jired's Data Center routes are now checked in CI against the API
   description a Jira 10.7.4 publishes of itself, and that is the version the
@@ -19,6 +30,13 @@ version between the one you have and the one you are moving to.
   so a 9.x instance would very likely still work — but "very likely" is not a
   support floor. `init` refuses with exit 10 before writing anything, naming
   the version it found and the one it needs.
+
+### Fixed
+
+- **`move_parent` and `assign` are in the published `push` schema.** 0.4.0 added
+  the `move_parent` op without adding it to `schemas/push.json`, so a push that
+  actually moved a sub-task emitted `--json` that failed validation against
+  jired's own schema. Both op kinds are now in the enum.
 
 ### Added
 

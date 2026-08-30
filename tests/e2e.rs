@@ -2364,6 +2364,135 @@ fn assign_me_uses_the_authenticated_account() {
     assert!(ws.read(ISSUE_FILE).contains("5b10a2ilya"));
 }
 
+/// Assigning is not editing: Jira gives the assignee a route of its own because
+/// it is its own permission, and an instance whose edit screen does not carry
+/// `assignee` — a normal configuration — refuses the field update while
+/// accepting the route. So the change travels as its own call on both
+/// deployments, and never inside a `fields` payload.
+#[test]
+fn an_assignee_edit_is_its_own_call_on_the_assignee_route() {
+    for deployment in [Deployment::Cloud, Deployment::DataCenter] {
+        let ws = Ws::of(deployment);
+        let (who, field) = match deployment {
+            Deployment::Cloud => ("5b1af9jane", "accountId"),
+            Deployment::DataCenter => ("jane", "name"),
+        };
+        ws.write_fixture(
+            "users.json",
+            serde_json::json!([{"id": who, "display_name": "Jane D"}]),
+        );
+        ws.init();
+        ws.json(&["pull"]);
+        let key = deployment.key();
+
+        ws.json(&["assign", key, "--user", who]);
+
+        let dry = ws.json(&["push", "--dry-run"]);
+        let op = &dry["results"][0]["ops"][0];
+        assert_eq!(op["kind"], "assign", "{deployment:?}: {dry}");
+        assert_eq!(op["request"]["method"], "PUT");
+        assert_eq!(op["request"]["path"], "/issue/{key}/assignee");
+        assert_eq!(op["request"]["body"][field], who);
+
+        let journal = ws.path().join("calls.jsonl");
+        let out = ws
+            .cmd(&["push", "--json"])
+            .env("JIRED_FIXTURE_JOURNAL", &journal)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{deployment:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let calls: Vec<Value> = std::fs::read_to_string(&journal)
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert!(
+            calls.iter().any(|c| c["method"] == "PUT"
+                && c["path"] == format!("/issue/{key}/assignee")
+                && c["body"][field] == who),
+            "{deployment:?}: no call to the assignee route in {calls:#?}"
+        );
+        // And it did not also travel as a field, which is the thing that fails
+        // on an instance whose edit screen has no assignee on it.
+        assert!(
+            !calls
+                .iter()
+                .any(|c| c["body"]["fields"].get("assignee").is_some()),
+            "{deployment:?}: the assignee was smuggled into a field payload: {calls:#?}"
+        );
+    }
+}
+
+/// A 2xx is not evidence. Jira answers success to writes it does not make, and
+/// an assignee is refused for a permission as readily as a parent is — so the
+/// re-read is asked, and a push that did not happen fails rather than reporting
+/// a change the file no longer shows.
+#[test]
+fn an_assignee_the_server_did_not_apply_fails_the_push() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "ignored.json",
+        serde_json::json!(["PUT /issue/DC-77/assignee"]),
+    );
+    ws.write_fixture(
+        "users.json",
+        serde_json::json!([{"id": "jane", "display_name": "Jane D"}]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    ws.json(&["assign", "DC-77", "--user", "jane"]);
+    let report = ws.json_code(&["push"], 10);
+
+    let result = &report["results"][0];
+    assert_eq!(result["ok"], false, "{report}");
+    let error = serde_json::to_string(result).unwrap();
+    assert!(
+        error.contains("the assignee is still"),
+        "the failure has to name what the server did not do: {error}"
+    );
+    // The edit stays in the file: it was never sent anywhere that kept it.
+    assert!(
+        ws.read(Deployment::DataCenter.issue_file())
+            .contains("jane"),
+        "{report}"
+    );
+}
+
+/// The fields go first and the assignee follows, because they are two calls and
+/// the order is the one `push` promises: everything an ordinary field update
+/// can carry is already sent when the separate routes start.
+#[test]
+fn a_mixed_edit_sends_the_fields_then_the_assignee() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "users.json",
+        serde_json::json!([{"id": "jane", "display_name": "Jane D"}]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+
+    let file = Deployment::DataCenter.issue_file();
+    let text = ws.read(file);
+    assert!(text.contains("priority: High"), "{text}");
+    ws.write(file, &text.replace("priority: High", "priority: Low"));
+    ws.json(&["assign", "DC-77", "--user", "jane"]);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let kinds: Vec<&str> = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["update_fields", "assign"], "{dry}");
+}
+
 /// Assignment is a permission, held per project and per issue-security level,
 /// so the users who can be assigned an issue are fewer than the users who
 /// exist. Searching the whole directory offered names the server would then
@@ -2406,9 +2535,15 @@ fn assign_none_clears_the_field_and_pushes_a_null() {
     assert!(!ws.read(ISSUE_FILE).contains("assignee:"));
 
     let push = ws.json(&["push", "--dry-run"]);
-    let body = &push["results"][0]["ops"][0]["request"]["body"]["fields"];
-    assert!(body.get("assignee").is_some());
-    assert_eq!(body["assignee"], Value::Null);
+    let op = &push["results"][0]["ops"][0];
+    // Its own route, and the null goes on the id rather than on the field: a
+    // bare `null` is what a `fields` payload clears with, and this is not one.
+    assert_eq!(op["kind"], "assign", "{push}");
+    assert_eq!(op["request"]["path"], "/issue/{key}/assignee");
+    assert_eq!(
+        op["request"]["body"],
+        serde_json::json!({"accountId": null})
+    );
 }
 
 #[test]

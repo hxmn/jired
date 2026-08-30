@@ -374,6 +374,21 @@ pub fn user_field_value(deployment: Deployment, user_id: Option<&str>) -> serde_
     }
 }
 
+/// The body the dedicated assignee route takes [M6.8].
+///
+/// Not [`user_field_value`], though it is the same field: inside a `fields`
+/// payload, clearing an assignee is the field set to `null`, while this route
+/// takes the user object itself and wants the *id* nulled. Sending a bare
+/// `null` here is a 400, and sending `{"name": null}` to the field payload
+/// would be one too, so the two spellings are kept apart rather than shared.
+pub fn assignee_body(deployment: Deployment, user_id: Option<&str>) -> serde_json::Value {
+    let key = match deployment {
+        Deployment::Cloud => "accountId",
+        Deployment::DataCenter => "name",
+    };
+    serde_json::json!({ key: user_id })
+}
+
 /// Run one async operation from a synchronous command handler.
 ///
 /// Commands are one-shot, so a single shared runtime keeps thread creation off

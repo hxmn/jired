@@ -200,6 +200,17 @@ move instead) rather than sent to a board call that answers 204 and does
 nothing. The refusal is made in `plan`, so `--dry-run` shows it before anything
 is sent, and it leaves the edit in the file: the issue fails, base does not
 advance, and nothing is overwritten.
+`assignee:` is an operation of its own on both deployments, an `assign` op
+against `PUT /issue/{key}/assignee`, never a key inside a `fields` payload.
+Assigning is not editing: Jira gives it a route because it is its own
+permission, and an instance whose edit screen does not carry `assignee` — a
+normal configuration — refuses the field update while accepting the route.
+Clearing it puts the null on the id (`{"accountId": null}`, `{"name": null}`)
+rather than on the field, which is the spelling this route takes. Like every
+write that can be accepted and not performed, it is verified on the re-read: an
+assignee that did not change fails the operation at exit 10 with the edit left
+in the file.
+
 A sub-task's `parent:` is an operation of its own on Data Center, not a field
 update: `PUT /issue` accepts the payload, answers success and ignores it, and
 the REST API offers no route at all (JRASERVER-68763). The change is taken out

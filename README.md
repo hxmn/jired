@@ -519,6 +519,13 @@ the issue afterwards, and a parent that did not actually move is a failed
 operation — exit 10, your edit still in the file, nothing overwritten — rather
 than a green push and a line quietly rewritten back.
 
+`assignee:` travels the same way, on both deployments: `push --dry-run` shows it
+as `assign` against `/issue/{key}/assignee` rather than folded into the field
+update. Assigning is not editing — Jira gives it a route because it is its own
+permission — and on an instance whose edit screen does not carry `assignee`,
+which is a perfectly ordinary configuration, the field update is refused while
+the route works. It is verified on the re-read like the parent is.
+
 **A page needs a credential Jira lets in the front door.** Data Center
 authenticates its web pages through Seraph, which knows about basic auth and
 about a session cookie — and not about a bearer token. A personal access token,

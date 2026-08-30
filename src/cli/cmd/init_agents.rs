@@ -585,6 +585,14 @@ pub fn render() -> String {
          and nothing is overwritten — the edit stays in the file.\n\n",
     );
     s.push_str(
+        "`assignee:` is sent as its own operation on both deployments, shown in \
+         `--dry-run` as `assign` against `/issue/{key}/assignee` rather than \
+         inside a field update — assigning is a permission of its own, and an \
+         instance whose edit screen has no assignee on it refuses the field and \
+         accepts the route. Read `body.accountId` or `body.name` for what is \
+         being sent, not `body.fields.assignee`.\n\n",
+    );
+    s.push_str(
         "`jired parent KEY… --to ISSUE` moves sub-tasks under a different parent, \
          and stages like `sprint add` does; editing `parent:` in the file is the \
          same change. Cloud sends a field update. Data Center has no REST call \
