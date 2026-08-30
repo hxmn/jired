@@ -1757,6 +1757,33 @@ fn every_comment_is_pulled_when_the_issue_payload_pages_them() {
     }
 }
 
+/// The support floor is a promise that has been tested, and what is tested is
+/// the 10.7.4 description every Data Center route is checked against. A server
+/// below that is refused where it costs nothing — before a workspace exists —
+/// rather than at the first call that happens to differ.
+#[test]
+fn a_data_center_below_ten_is_refused_before_anything_is_stored() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "serverInfo.json",
+        serde_json::json!({
+            "version": "9.12.4",
+            "versionNumbers": [9, 12, 4],
+            "deploymentType": "Server",
+            "serverTitle": "Fixture Data Center",
+        }),
+    );
+
+    let err = ws.json_err(&["init", "--no-pull"], 10);
+    assert_eq!(err["kind"], "unsupported_server");
+    assert_eq!(err["details"]["version"], "9.12.4");
+    assert_eq!(err["details"]["minimum"], "10.0");
+
+    // Nothing was written for a server jired will not talk to: no credential,
+    // and no workspace to mislead the next command.
+    assert!(!ws.path().join(".jired/session.db").exists(), "{err}");
+}
+
 #[test]
 fn init_detects_the_deployment_from_the_server_not_the_url() {
     let cloud = Ws::of(Deployment::Cloud);

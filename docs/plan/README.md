@@ -91,7 +91,7 @@ Full rationale lives with each decision ID in the reference docs.
 | D17 | Two DBs: `session.db` precious/0600, `state.db` deletable cache (+ push journal) |
 | D18 | Change detection by content hash + parsed field compare, never mtime alone |
 | D19 | JSON outputs carry `"schema": "jired/<name>/1"` |
-| D20 | DC floor: Jira ≥ 10.0 — settled by M6, which checks every Data Center route against the 10.7.4 description; 9.0 until M6.6 lands |
+| D20 | DC floor: Jira ≥ 10.0 — settled by M6, which checks every Data Center route against the server's own 10.7.4 description |
 | D22 | UTC RFC3339 in all serialized data; local TZ only for display |
 | D23 | Push order per issue: create → fields → description → transitions → comments → attachments; parents before children |
 | D25 | Hand-written wiki⇄AST converter sharing `JiredAst` with ADF |

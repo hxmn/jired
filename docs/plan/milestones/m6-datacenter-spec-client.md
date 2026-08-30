@@ -341,9 +341,9 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** the e2e fails without `complete_comments` and passes with it.
 
 ### M6.6 The floor: Data Center 10.0 (Breaking)
-- [ ] `MIN_DC_MAJOR = 10` in `src/api/mod.rs`; the hint says the routes are checked against the 10.x description; `old_data_center_is_refused_with_exit_10` refuses 9.4.0 and accepts 10.3.2
-- [ ] e2e `a_data_center_below_ten_is_refused_before_anything_is_stored`: `serverInfo.json` at 9.12.4 → `init --no-pull` exits 10, `kind == "unsupported_server"`, `details.minimum == "10.0"`, no `session.db`
-- [ ] README exit-10 row; `docs/plan/README.md` D20 and the open item; `grep -rn '9\.0' README.md docs src` names no floor
+- [x] `MIN_DC_MAJOR = 10` in `src/api/mod.rs`; the hint says the routes are checked against the 10.x description; `old_data_center_is_refused_with_exit_10` refuses 9.4.0 and accepts 10.3.2
+- [x] e2e `a_data_center_below_ten_is_refused_before_anything_is_stored`: `serverInfo.json` at 9.12.4 → `init --no-pull` exits 10, `kind == "unsupported_server"`, `details.minimum == "10.0"`, no `session.db`
+- [x] README exit-10 row; `docs/plan/README.md` D20 and the open item; `grep -rn '9\.0' README.md docs src` names no floor
 - **Done when:** unit and e2e pass and no document names 9.0 as the floor.
 
 ### M6.7 Assignable-user search

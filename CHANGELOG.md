@@ -10,6 +10,16 @@ version between the one you have and the one you are moving to.
 
 ## [0.6.0] — 2026-08-30
 
+### Breaking
+
+- **Jira Data Center older than 10.0 is refused, where 9.0 was the floor
+  before.** jired's Data Center routes are now checked in CI against the API
+  description a Jira 10.7.4 publishes of itself, and that is the version the
+  promise is made about. Nothing jired uses was removed between 9.12 and 10.7,
+  so a 9.x instance would very likely still work — but "very likely" is not a
+  support floor. `init` refuses with exit 10 before writing anything, naming
+  the version it found and the one it needs.
+
 ### Added
 
 - **jired carries the API description its Data Center routes are checked

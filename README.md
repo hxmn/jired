@@ -663,7 +663,7 @@ out of the way.
 | 6 | a read-only region was edited and its original markup cannot be rebuilt | `jired diff` to see it, restore the block, or `jired push --allow-lossy` |
 | 8 | another jired process holds the workspace lock (the message names its pid and start time) | wait — the lock is released when that process exits, including if it is killed |
 | 9 | a local database will not open or holds something unreadable | see "the databases" below |
-| 10 | Jira Data Center older than 9.0 (Cloud is always supported) | nothing jired can do; the older releases lack the PAT auth and v2 endpoints it depends on |
+| 10 | Jira Data Center older than 10.0 (Cloud is always supported) | nothing jired can do; jired's Data Center routes are checked against the API description a 10.x server publishes, and older releases are not tested against it |
 | 10 | `push` sent a change the server answered success to and did not make | the op says which, with the request it sent; your edit is still in the file — make the change in Jira and `jired pull` |
 
 ### TLS

@@ -174,9 +174,15 @@ pub struct Probe {
     pub server_version: Option<String>,
 }
 
-/// Minimum Data Center version jired supports (decision D20): PAT auth and the
-/// v2 endpoints jired relies on are only dependable from 9.0 onward.
-pub const MIN_DC_MAJOR: u32 = 9;
+/// Minimum Data Center version jired supports (decision D20).
+///
+/// 10, because that is what is verified rather than assumed: every Data Center
+/// route jired calls is checked in CI against the description a Jira 10.7.4
+/// publishes of itself (`specs/datacenter/10.7.4/`, and
+/// [`crate::api::datacenter::routes`]). Nothing jired uses was removed between
+/// 9.12 and 10.7, so a 9.x instance would very likely work — but "very likely"
+/// is not a support floor, and a floor is a promise that has been tested.
+pub const MIN_DC_MAJOR: u32 = 10;
 
 /// Verify credentials and detect the deployment before anything is persisted.
 pub fn probe(
@@ -230,8 +236,9 @@ fn check_supported(deployment: Deployment, version: Option<&str>) -> Result<()> 
         .with_detail("version", version.to_string())
         .with_detail("minimum", format!("{MIN_DC_MAJOR}.0"))
         .with_hint(
-            "ask whoever runs this Jira to upgrade; older releases lack the \
-             PAT auth and v2 endpoints jired depends on",
+            "ask whoever runs this Jira to upgrade; jired's Data Center routes \
+             are checked against the API description a 10.x server publishes, \
+             and older releases are not tested against it",
         ));
     }
     Ok(())
@@ -423,11 +430,18 @@ mod tests {
     fn old_data_center_is_refused_with_exit_10() {
         let err = check_supported(Deployment::DataCenter, Some("8.20.1")).unwrap_err();
         assert_eq!(err.exit_code().as_i32(), 10);
-        check_supported(Deployment::DataCenter, Some("9.4.0")).unwrap();
-        check_supported(Deployment::DataCenter, Some("10.3.2")).unwrap();
+        // 9.x was supported until the routes were checked against a
+        // description, and 10.7.4's is the one there is.
+        let err = check_supported(Deployment::DataCenter, Some("9.12.4")).unwrap_err();
+        assert_eq!(err.exit_code().as_i32(), 10);
+        assert_eq!(err.details["minimum"], "10.0");
+        check_supported(Deployment::DataCenter, Some("10.0.0")).unwrap();
+        check_supported(Deployment::DataCenter, Some("10.7.4")).unwrap();
         // An unparseable version must not lock the user out.
         check_supported(Deployment::DataCenter, Some("weird")).unwrap();
         check_supported(Deployment::DataCenter, None).unwrap();
+        // And Cloud is never version-checked.
+        check_supported(Deployment::Cloud, Some("8.0.0")).unwrap();
     }
 
     #[test]
