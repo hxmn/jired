@@ -894,20 +894,27 @@ fn check_gitignore(ctx: &Context, args: &DoctorArgs) -> Result<Check> {
 fn check_agents(ctx: &Context, args: &DoctorArgs) -> Result<Check> {
     use crate::cli::cmd::init_agents as agents;
 
+    let root = ctx.workspace.root();
     let docs = agents::render();
     let mut stale = Vec::new();
-    for name in ["CLAUDE.md", "AGENTS.md"] {
-        let path = ctx.workspace.root().join(name);
-        let current = std::fs::read_to_string(&path).unwrap_or_default();
-        if !current.contains(docs.trim()) {
-            stale.push(name);
-            if !args.dry_run {
-                agents::write_managed_block(&path, &docs)?;
-            }
+    // What each doc was written by, so the report can name the version an agent
+    // has been planning against rather than only that something differs.
+    let mut stamps = Vec::new();
+    for (name, state) in agents::doc_states(root) {
+        match state {
+            agents::DocState::Current => continue,
+            agents::DocState::Stale { generated_by } => stamps.push(format!(
+                "{name} was written by jired {}",
+                generated_by.as_deref().unwrap_or("an earlier version")
+            )),
+            agents::DocState::Missing => stamps.push(format!("{name} has no jired block")),
+        }
+        stale.push(name);
+        if !args.dry_run {
+            agents::write_managed_block(&root.join(name), &docs)?;
         }
     }
 
-    let root = ctx.workspace.root();
     let settings = std::fs::read_to_string(root.join(agents::CLAUDE_SETTINGS)).unwrap_or_default();
     let parsed: serde_json::Value =
         serde_json::from_str(&settings).unwrap_or(serde_json::Value::Null);
@@ -929,13 +936,19 @@ fn check_agents(ctx: &Context, args: &DoctorArgs) -> Result<Check> {
     }
 
     if stale.is_empty() {
-        return Ok(ok("agents", "instructions and permissions are current"));
+        return Ok(ok(
+            "agents",
+            format!(
+                "instructions and permissions are current (jired {})",
+                env!("CARGO_PKG_VERSION")
+            ),
+        ));
     }
-    Ok(repaired(
-        "agents",
-        args.dry_run,
-        format!("refreshing {}", stale.join(", ")),
-    ))
+    let mut detail = format!("refreshing {}", stale.join(", "));
+    if !stamps.is_empty() {
+        detail.push_str(&format!("; {}", stamps.join(", ")));
+    }
+    Ok(repaired("agents", args.dry_run, detail))
 }
 
 /// Grouping folders are views; rebuilding them from the database is always safe.

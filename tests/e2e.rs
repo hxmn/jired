@@ -507,6 +507,129 @@ fn init_creates_the_workspace_and_agent_files() {
     );
 }
 
+/// A stale agent doc is worse than no agent doc: it reads as authoritative and
+/// it is what an agent plans against. So the generated block carries the
+/// version that wrote it, `status` says when that is not this binary, and both
+/// `init-agents` and `doctor` put it right — in place, without stacking a
+/// second block under the first or losing the user's own notes around it.
+#[test]
+fn a_doc_written_by_another_jired_is_reported_and_replaced() {
+    let ws = Ws::new();
+    ws.init();
+
+    // Fresh from `init`, nothing is stale and the block names its version.
+    let status = ws.json(&["status"]);
+    assert!(
+        status["stale_agent_docs"].as_array().unwrap().is_empty(),
+        "{status:#}"
+    );
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(
+        ws.read("CLAUDE.md")
+            .contains(&format!("<!-- BEGIN jired v{version} -->")),
+        "the block records which jired wrote it"
+    );
+
+    // What an upgrade leaves behind: one file stamped by an older jired, one
+    // from before the stamp existed, and a note of the user's around each.
+    ws.write(
+        "CLAUDE.md",
+        "# My notes\n\nkeep me\n\n<!-- BEGIN jired v0.0.1 -->\nancient instructions\n<!-- END jired -->\n",
+    );
+    ws.write(
+        "AGENTS.md",
+        "<!-- BEGIN jired -->\nunstamped instructions\n<!-- END jired -->\n\nkeep me too\n",
+    );
+
+    let status = ws.json(&["status"]);
+    let stale = status["stale_agent_docs"].as_array().unwrap();
+    assert_eq!(stale.len(), 2, "{status:#}");
+    assert_eq!(stale[0]["file"], "CLAUDE.md");
+    assert_eq!(stale[0]["generated_by"], "0.0.1");
+    assert_eq!(stale[0]["expected"], version);
+    assert_eq!(stale[1]["file"], "AGENTS.md");
+    assert!(
+        stale[1]["generated_by"].is_null(),
+        "a block from before the stamp has no version to name"
+    );
+
+    // Doctor names the version rather than only reporting a difference.
+    let dry = ws.json(&["doctor", "--dry-run"]);
+    let agents = dry["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "agents")
+        .expect("an agents check")
+        .clone();
+    assert_eq!(agents["status"], "would_fix");
+    let detail = agents["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("CLAUDE.md was written by jired 0.0.1"),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("AGENTS.md was written by jired an earlier version"),
+        "{detail}"
+    );
+    assert!(
+        ws.read("CLAUDE.md").contains("ancient instructions"),
+        "a dry run changes nothing"
+    );
+
+    ws.json(&["doctor", "--yes"]);
+    for (name, note) in [("CLAUDE.md", "keep me"), ("AGENTS.md", "keep me too")] {
+        let text = ws.read(name);
+        assert!(
+            text.contains(note),
+            "{name} lost the user's own notes:\n{text}"
+        );
+        assert!(
+            !text.contains("instructions\n<!-- END"),
+            "{name} kept the old body"
+        );
+        assert_eq!(
+            text.matches("<!-- BEGIN jired").count(),
+            1,
+            "{name} has more than one block:\n{text}"
+        );
+        assert!(
+            text.contains(&format!("<!-- BEGIN jired v{version} -->")),
+            "{text}"
+        );
+    }
+    assert!(ws.json(&["status"])["stale_agent_docs"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+/// The flags a scripted caller reaches for first were in `--help` and in no
+/// generated table, which left parsing the whole `--json` document by hand
+/// looking like the only way through.
+#[test]
+fn the_generated_docs_carry_the_flags_an_agent_scripts_with() {
+    let ws = Ws::new();
+    ws.init();
+    let doc = ws.read("CLAUDE.md");
+    for needle in [
+        "--fields",
+        "--json-compact",
+        "jired diff --stat",
+        "--exit-code",
+        "--summary-contains",
+        "--issue-type",
+        "jired transition KEY --to STATUS",
+        "jired set --field FIELD --value VALUE",
+        "jired push --resume",
+        "--refresh-stale",
+        "stale_agent_docs",
+    ] {
+        assert!(doc.contains(needle), "CLAUDE.md never mentions {needle:?}");
+    }
+    assert_eq!(doc, ws.read("AGENTS.md"), "both files carry the same block");
+}
+
 #[test]
 fn init_agents_is_idempotent_and_leaves_other_permissions_alone() {
     let ws = Ws::new();

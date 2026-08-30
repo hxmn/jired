@@ -107,6 +107,13 @@ subcommand — `jired status --json` is covered, `jired --json status` is not.
 one half only), and `jired doctor` refreshes them when they fall behind the
 binary.
 
+The generated block in `CLAUDE.md` and `AGENTS.md` opens with the version that
+wrote it — `<!-- BEGIN jired v0.7.0 -->` — because a stale agent doc is worse
+than none: it reads as authoritative, and it is what an agent plans against
+before it runs anything. `jired status` names any file another version wrote in
+`stale_agent_docs` and says so on the way past; `jired init-agents` or `jired
+doctor` puts it right. Whatever you write outside the markers is kept.
+
 Timestamps in JSON documents, in issue files and on the wire are UTC, so they
 mean the same thing on every machine. Only the text jired prints to a terminal
 follows the reader's timezone — see [Times](#times).

@@ -201,9 +201,9 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
     if !args.no_agents {
         use crate::cli::cmd::init_agents as agents;
         let docs = agents::render();
-        for name in ["CLAUDE.md", "AGENTS.md"] {
+        for name in agents::DOCS {
             agents::write_managed_block(&ctx.workspace.root().join(name), &docs)?;
-            agent_files.push(name.to_string());
+            agent_files.push((*name).to_string());
         }
         // An agent that has to ask before every `jired status` is an agent
         // nobody lets near the workspace; granting the commands that cannot

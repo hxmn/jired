@@ -302,6 +302,14 @@ moves), conflicts, last fetch age, pending push journal, and a git-style trailer
 saying what to run next. `--all` additionally lists the unchanged issues. JSON
 mirrors it. Offline. Visible alias `st`.
 
+`stale_agent_docs` names any `CLAUDE.md`/`AGENTS.md` whose generated block was
+written by a different jired than the one running, with the version stamped in
+the file (`null` for a block predating the stamp) and the version expected. Only
+a file that already carries the block is reported: a workspace that never asked
+for one is not nagged about it. It does not make the workspace unclean — nothing
+is at risk — but a stale doc is what an agent plans against, so it is said out
+loud rather than left to be discovered.
+
 ### `jired log [ISSUE] [--limit N] [--refresh]`
 Changelog entries newest first, each tagged with its issue. With no `ISSUE` it
 covers the whole workspace, the way `git log` does; naming one narrows to it.
@@ -876,6 +884,14 @@ and the rules cannot disagree; the line it draws is "sends nothing to Jira and w
 nothing into the working copy", which lets `fetch` and `--dry-run` in and keeps every
 writing command out. Both systems match a command-line prefix, so global flags have to
 follow the subcommand.
+
+The Markdown block opens `<!-- BEGIN jired v0.7.0 -->`: the version that wrote it.
+The marker is *found* by its `<!-- BEGIN jired` prefix, so a block an older jired
+stamped is replaced in place rather than left with a second one appended under it,
+and the closing marker is looked for after the opening one so prose above the block
+cannot truncate it. A block whose stamp or body is not this build's is what
+`jired status` reports as `stale_agent_docs` and what `doctor`'s `agents` check
+repairs, naming the version that wrote it.
 JSON: `{"schema":"jired/init-agents/1","files":[…],"permissions":[…]}`.
 
 ### `jired schema [name]`

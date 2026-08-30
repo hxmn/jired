@@ -8,6 +8,46 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.7.0] — 2026-08-30
+
+### Added
+
+- **The generated agent instructions say which jired wrote them, and jired says
+  when that is not this one.** The block in `CLAUDE.md` and `AGENTS.md` now opens
+  `<!-- BEGIN jired v0.7.0 -->`. `jired status` reports every file whose block
+  another version wrote in a new `stale_agent_docs` array — the file, the version
+  stamped in it (`null` for a block written before the stamp existed), and the
+  version running — and says so on its way past; `doctor`'s `agents` check names
+  that version instead of only reporting that something differs. A stale agent
+  doc is worse than none: it reads as authoritative and it is what an agent plans
+  against before it runs anything, and until now nothing reported one. The marker
+  is *found* by its `<!-- BEGIN jired` prefix, so a block an older jired stamped
+  is replaced where it stands rather than left with a second one appended under
+  it, and the closing marker is looked for after the opening one so prose above
+  the block cannot truncate it.
+
+- **The generated docs carry the flags a scripted caller actually reaches for.**
+  Each of these was in `--help` and in no generated table, which left the long way
+  round looking like the only way through:
+
+  - `--fields` and `--json-compact` join the agent-flags table, with the dotted-path
+    rules and worked examples. Asking for `results.key,results.ops.summary` is the
+    difference between three values and parsing a whole `push --dry-run` document.
+  - `diff --stat` and `--exit-code` join the safe-workflow block. Confirming only
+    the intended changes is what `--stat` is for, and a script branching on whether
+    there is anything to send wants a status code, not an empty array.
+  - `jired list`'s filters — `--sprint`, `--status`, `--assignee`, `--label`,
+    `--issue-type`, `--summary-contains`, `--keys` — get a section and a table,
+    with `--keys` shown feeding the commands that take several issues. A test
+    renders the flag list from `ListArgs`, so a filter added later cannot go
+    undocumented.
+  - `transition`, `assign`, `set`, `comment`, `label` and `logwork` get full
+    signatures, the way `sprint` already had them. The status goes after `--to`;
+    `jired transition KEY Done` is exit 2, and guessing it was two wasted
+    round-trips on the most common write in the tool.
+  - `pending_ops`, `push --resume` and `push --refresh-stale` are described: what
+    the queue is, that the edit is still in the file, and how to clear it.
+
 ## [0.6.0] — 2026-08-30
 
 ### Breaking

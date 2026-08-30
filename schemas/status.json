@@ -9,7 +9,8 @@
     "dirty",
     "new_issues",
     "conflicts",
-    "pending_ops"
+    "pending_ops",
+    "stale_agent_docs"
   ],
   "properties": {
     "schema": {
@@ -204,6 +205,33 @@
               "string",
               "null"
             ]
+          }
+        }
+      }
+    },
+    "stale_agent_docs": {
+      "type": "array",
+      "description": "Generated instructions written by a different jired than the one running; rewrite with `jired init-agents`",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "generated_by",
+          "expected"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "generated_by": {
+            "description": "The version stamped in the file, or null for a block written before jired stamped one",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected": {
+            "type": "string"
           }
         }
       }

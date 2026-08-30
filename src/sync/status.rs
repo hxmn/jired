@@ -20,6 +20,8 @@ pub struct StatusReport {
     pub conflicts: Vec<crate::store::state::ConflictRow>,
     pub staged_transitions: Vec<StagedTransition>,
     pub pending_ops: Vec<crate::store::state::PendingOp>,
+    /// Generated instructions written by a different jired than this one.
+    pub stale_agent_docs: Vec<StaleAgentDoc>,
     pub warnings: Vec<Warning>,
     /// Issues with no local changes; only collected under `--all`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -32,6 +34,21 @@ pub struct UnchangedIssue {
     pub file: String,
     pub status: String,
     pub summary: String,
+}
+
+/// A `CLAUDE.md` or `AGENTS.md` whose generated block is not this build's.
+///
+/// Worth a line of its own because a stale one is worse than none: it reads as
+/// authoritative, and it is what an agent plans against before it runs
+/// anything.
+#[derive(Debug, Clone, Serialize)]
+pub struct StaleAgentDoc {
+    pub file: String,
+    /// The version stamped in the file; `null` for a block written before jired
+    /// started stamping one.
+    pub generated_by: Option<String>,
+    /// The version running now.
+    pub expected: String,
 }
 
 /// Something in a file that will be ignored unless the user fixes it.
@@ -249,6 +266,20 @@ impl StatusReport {
         }
         for w in &self.warnings {
             out.warn(format!("{}: {}", w.file, w.message));
+        }
+        // After the warnings and before the all-clear: it is not a reason to
+        // stop, but an agent reading instructions from an older jired is
+        // planning against a binary that is not here any more.
+        for d in &self.stale_agent_docs {
+            out.warn(format!(
+                "{} was written by jired {}, and this is {}",
+                d.file,
+                d.generated_by.as_deref().unwrap_or("an earlier version"),
+                d.expected
+            ));
+        }
+        if !self.stale_agent_docs.is_empty() {
+            out.hint("use \"jired init-agents\" to rewrite them, or \"jired doctor\"");
         }
         if self.is_clean() {
             out.say("\nnothing to push, no conflicts");
@@ -479,9 +510,30 @@ pub fn run(ctx: &mut Context, args: &StatusArgs) -> Result<StatusReport> {
         conflicts: engine.state.conflicts()?,
         staged_transitions: staged,
         pending_ops: engine.state.pending_ops()?,
+        stale_agent_docs: stale_agent_docs(ctx.workspace.root()),
         warnings,
         unchanged,
     })
+}
+
+/// Generated instructions in this workspace that another jired wrote.
+///
+/// Only a file that already carries the block is reported: a workspace that
+/// never had one asked for that, and `status` is not the place to sell it.
+fn stale_agent_docs(root: &std::path::Path) -> Vec<StaleAgentDoc> {
+    use crate::cli::cmd::init_agents::DocState;
+
+    crate::cli::cmd::init_agents::doc_states(root)
+        .into_iter()
+        .filter_map(|(file, state)| match state {
+            DocState::Stale { generated_by } => Some(StaleAgentDoc {
+                file: file.to_string(),
+                generated_by,
+                expected: env!("CARGO_PKG_VERSION").to_string(),
+            }),
+            DocState::Current | DocState::Missing => None,
+        })
+        .collect()
 }
 
 fn out_warn(ctx: &Context, message: &str) {
@@ -539,6 +591,7 @@ mod tests {
             conflicts: vec![],
             staged_transitions: vec![],
             pending_ops: vec![],
+            stale_agent_docs: vec![],
             warnings: vec![],
             unchanged: vec![],
         };

@@ -17,8 +17,24 @@ use crate::json::Out;
 use clap::{Args, CommandFactory};
 use std::path::Path;
 
-pub const BEGIN: &str = "<!-- BEGIN jired -->";
+/// The opening marker is located by this prefix, not by its full text: the
+/// version stamped after it changes with every release, and a block whose
+/// stamp no longer matches still has to be found before it can be replaced.
+pub const BEGIN_PREFIX: &str = "<!-- BEGIN jired";
 pub const END: &str = "<!-- END jired -->";
+
+/// The two files the managed block is written into.
+pub const DOCS: &[&str] = &["CLAUDE.md", "AGENTS.md"];
+
+/// The opening marker this build writes: `<!-- BEGIN jired v0.7.0 -->`.
+///
+/// A generated doc reads as authoritative whether or not it still is, so the
+/// block records which jired wrote it. That stamp is what lets `status` and
+/// `doctor` say "this was written by 0.5.1 and you are running 0.6.1" instead
+/// of leaving an agent to plan against instructions for a binary that is gone.
+pub fn begin() -> String {
+    format!("{BEGIN_PREFIX} v{} -->", env!("CARGO_PKG_VERSION"))
+}
 
 /// Sentinels for the Starlark rules file, whose comments start with `#`.
 pub const RULES_BEGIN: &str = "# BEGIN jired";
@@ -193,9 +209,9 @@ pub fn run(g: &GlobalArgs, args: &InitAgentsArgs, out: Out) -> Result<ExitCode> 
     let root = ctx.workspace.root();
     let mut written = Vec::new();
     if !args.no_docs {
-        for name in ["CLAUDE.md", "AGENTS.md"] {
+        for name in DOCS {
             write_managed_block(&root.join(name), &body)?;
-            written.push(name.to_string());
+            written.push((*name).to_string());
         }
     }
     if !args.no_permissions {
@@ -233,6 +249,7 @@ pub fn write_permissions(root: &Path) -> Result<bool> {
         &root.join(CODEX_RULES),
         &codex_rules(),
         RULES_BEGIN,
+        RULES_BEGIN,
         RULES_END,
     )?;
     Ok(claude || codex)
@@ -240,16 +257,87 @@ pub fn write_permissions(root: &Path) -> Result<bool> {
 
 /// Replace only our sentinel block so user-authored notes survive regeneration.
 pub fn write_managed_block(path: &Path, body: &str) -> Result<()> {
-    write_block(path, body, BEGIN, END)?;
+    write_block(path, body, &begin(), BEGIN_PREFIX, END)?;
     Ok(())
+}
+
+/// How the managed block in one workspace file compares with this build's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocState {
+    /// This build's block, word for word.
+    Current,
+    /// No managed block in the file: it was never written, or it was taken out.
+    Missing,
+    /// A block some other jired wrote, carrying its version where it had one.
+    /// `generated_by` is `None` for a block from before the stamp existed.
+    Stale { generated_by: Option<String> },
+}
+
+/// The version stamped into a file's opening marker, if it carries one.
+///
+/// `None` covers both "no block here" and "a block older than the stamp"; the
+/// caller separates those with [`DocState`].
+pub fn stamped_version(text: &str) -> Option<String> {
+    let start = text.find(BEGIN_PREFIX)?;
+    let line = text[start..].lines().next()?;
+    line.strip_prefix(BEGIN_PREFIX)?
+        .trim()
+        .strip_suffix("-->")?
+        .trim()
+        .strip_prefix('v')
+        .map(str::to_string)
+}
+
+/// Compare every generated doc under `root` with what this build would write.
+///
+/// Rendered once for both files, because [`render`] builds the whole document.
+pub fn doc_states(root: &Path) -> Vec<(&'static str, DocState)> {
+    let body = render();
+    let body = body.trim();
+    DOCS.iter()
+        .map(|name| {
+            let text = std::fs::read_to_string(root.join(name)).unwrap_or_default();
+            let state = if !text.contains(BEGIN_PREFIX) {
+                DocState::Missing
+            } else if text.contains(body)
+                && stamped_version(&text).as_deref() == Some(env!("CARGO_PKG_VERSION"))
+            {
+                DocState::Current
+            } else {
+                // Body drift counts as well as a stamp mismatch: a build from
+                // the same version with a changed template is still not what
+                // the file says it is.
+                DocState::Stale {
+                    generated_by: stamped_version(&text),
+                }
+            };
+            (*name, state)
+        })
+        .collect()
 }
 
 /// Rewrite the region between `begin` and `end`, leaving the rest of the file
 /// as it was. Returns whether anything on disk changed.
-pub fn write_block(path: &Path, body: &str, begin: &str, end: &str) -> Result<bool> {
+///
+/// The existing block is located by `begin_prefix` rather than by `begin`, so a
+/// block an older jired opened with a different version stamp is replaced in
+/// place instead of being left behind with a second one appended under it.
+pub fn write_block(
+    path: &Path,
+    body: &str,
+    begin: &str,
+    begin_prefix: &str,
+    end: &str,
+) -> Result<bool> {
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     let block = format!("{begin}\n{body}\n{end}\n");
-    let updated = match (existing.find(begin), existing.find(end)) {
+    // The closing marker is looked for after the opening one, so a file whose
+    // prose happens to mention `END jired` above the block cannot be cut at
+    // that mention instead — which would leave the tail of the old block
+    // orphaned below the new one.
+    let start = existing.find(begin_prefix);
+    let stop = start.and_then(|s| existing[s..].find(end).map(|e| s + e));
+    let updated = match (start, stop) {
         (Some(s), Some(e)) if e > s => {
             let e_end = e + end.len();
             let e_end = existing[e_end..]
@@ -404,9 +492,20 @@ pub fn render() -> String {
     s.push_str("#   `updated[].changes` says what each issue's pull brought in\n");
     s.push_str("#   ... edit the .md files ...\n");
     s.push_str("jired diff --json              # confirm only intended changes\n");
+    s.push_str("jired diff --stat              # the same, as one printed line per issue\n");
+    s.push_str("jired diff --exit-code         # exit 1 when there is anything to send\n");
     s.push_str("jired push --dry-run --json    # exact API calls, nothing sent\n");
     s.push_str("jired push --json              # apply\n");
     s.push_str("```\n\n");
+    s.push_str(
+        "`--stat` shortens what is *printed* to one line per issue — how many \
+         fields changed, how many lines were added and removed — and a total. It \
+         does not change the `--json` document, which carries those same totals \
+         in `stat` and is the same either way, so there is no reason to pass both. \
+         `--exit-code` turns \"is there anything to send\" into a status code, \
+         which is what a script should branch on rather than on whether some \
+         array came back empty.\n\n",
+    );
 
     s.push_str("## Files and folders\n\n");
     s.push_str("| Path | Meaning |\n|---|---|\n");
@@ -549,10 +648,34 @@ pub fn render() -> String {
         "Edit the `.md` file directly — that is the interface. `jired edit KEY` \
          opens the same fields in a form for a person at a terminal, and needs \
          one: it exits 7 without it. The key may also be a file name or a path, \
-         and with none given it searches. `comment`, `transition` and `assign` are \
-         the scriptable single-field equivalents. `assign --user` searches only \
-         the people who can be assigned that issue, so a name it does not find \
-         may exist on the instance without being assignable here.\n\n",
+         and with none given it searches.\n\n",
+    );
+    s.push_str(
+        "For a script, these write one field without a form. Each stages the \
+         change into the file, exactly as editing it by hand would, and `push` \
+         sends it; `--push` sends it at once, and `--push --dry-run` prints that \
+         call without sending it.\n\n",
+    );
+    s.push_str("```sh\n");
+    s.push_str("jired transition KEY --to STATUS [--field K=V]… [--push]\n");
+    s.push_str("jired transition KEY --list      # the transitions available from here\n");
+    s.push_str("jired assign KEY --user NAME|--me|--none [--push]\n");
+    s.push_str("jired set --field FIELD --value VALUE KEY[,KEY…] [--push]\n");
+    s.push_str("jired comment KEY -m TEXT [--push]\n");
+    s.push_str("jired label add|remove|set LABEL KEY[,KEY…] [--push]\n");
+    s.push_str("jired logwork KEY \"2h 30m\" -m NOTE\n");
+    s.push_str("```\n\n");
+    s.push_str(
+        "The status goes after `--to`, never as a bare word — `jired transition \
+         PROJ-142 Done` is exit 2. `--list` is how to find the spelling this \
+         issue's workflow accepts, and `--field` carries anything the transition \
+         screen demands. `jired set` is the general one: `--field` takes a \
+         frontmatter name or a `customfield_*` id, an empty `--value` clears the \
+         field, and a list value takes commas. `label set` replaces every label \
+         at once and takes them comma-separated, where `add` and `remove` take \
+         one and leave the rest alone. `assign --user` searches only the people \
+         who can be assigned that issue, so a name it does not find may exist on \
+         the instance without being assignable here.\n\n",
     );
     s.push_str(
         "An operation Jira accepted is not an operation Jira performed — it \
@@ -562,6 +685,47 @@ pub fn render() -> String {
          request that was sent, the issue is `\"ok\": false`, and base does not \
          advance: nothing is overwritten and the edit is still in the file for \
          the next `push`.\n\n",
+    );
+    s.push_str(
+        "Those operations stay on the queue afterwards, and `jired status` \
+         reports them in `pending_ops` — one entry per operation, with \
+         `\"status\": \"failed\"` and the error where there was one. They are the \
+         record of an interrupted or refused push, not a second copy of the \
+         work: the edit is still in the file. `jired push --resume` replays them \
+         and clears the queue; it re-plans from the file, so a queue whose edits \
+         you have since reset or pushed another way comes back empty. `jired \
+         reset` clears them too, along with the edits behind them.\n\n",
+    );
+    s.push_str(
+        "A push refused as stale — exit 5, the issue named in `stale` — is one \
+         the server changed since the last sync. `push --refresh-stale` re-fetches \
+         those issues and retries the ones that still merge, which is the right \
+         answer when somebody logged time against an issue whose labels you are \
+         sending. An incoming change touching a field you also changed is a real \
+         conflict and stays refused; `push --force` sends anyway and overwrites \
+         it.\n\n",
+    );
+
+    s.push_str("## Finding issues\n\n");
+    s.push_str(
+        "`jired list` matches the issue files already on disk — no network, and \
+         nothing is sent. Filters combine, and an issue has to match all of \
+         them.\n\n",
+    );
+    s.push_str("| Flag | Matches |\n|---|---|\n");
+    s.push_str("| `--sprint S` | issues whose *current* sprint is this one |\n");
+    s.push_str("| `--status S` | issues in this status |\n");
+    s.push_str("| `--assignee U` | any part of the name, or the id |\n");
+    s.push_str("| `--label L` | issues carrying this label |\n");
+    s.push_str("| `--issue-type T` | issues of this type |\n");
+    s.push_str("| `--summary-contains TEXT` | case-insensitive substring of the summary |\n");
+    s.push_str("| `--keys` | print only the keys, one per line |\n\n");
+    s.push_str(
+        "`--keys` is what makes the rest composable: `jired list --sprint \
+         \"Sprint 7\" --status \"To Do\" --keys` feeds `jired set`, `jired label` \
+         or `jired sprint add`, all of which take several keys. Use `--json` \
+         instead when you need more than the key. Searching the *server* rather \
+         than the working copy is `jired search JQL`.\n\n",
     );
 
     s.push_str("## Sprints\n\n");
@@ -666,6 +830,22 @@ pub fn render() -> String {
          changes — a filename shape, a section heading, a renamed setting — so run it \
          after upgrading jired. It exits 1 when something needs a human.\n\n",
     );
+    // The sentinels are deliberately not reproduced here. A body containing its
+    // own end marker would be cut short at the wrong place the next time the
+    // block is rewritten, leaving half of the old one behind it.
+    s.push_str(&format!(
+        "This section of `CLAUDE.md` and `AGENTS.md` is generated, between the \
+         `BEGIN jired` and `END jired` HTML comments that bracket it; anything \
+         written outside them survives a regeneration. The opening comment \
+         carries the version of the jired that wrote it — **{}** here. `jired \
+         status` reports a block written by some other version in \
+         `stale_agent_docs` and says so on the way past; `jired init-agents` \
+         rewrites it, and `jired doctor` does the same alongside its other \
+         repairs. Trust this document only while those agree: it describes the \
+         binary that generated it, not necessarily the one you are about to \
+         run.\n\n",
+        env!("CARGO_PKG_VERSION")
+    ));
 
     s.push_str("## Lossy regions\n\n");
     s.push_str(
@@ -754,10 +934,29 @@ pub fn render() -> String {
         "| `--no-input` | Never prompt; missing values fail with exit 7 naming the value. |\n",
     );
     s.push_str("| `--yes` | Accept confirmations. |\n");
-    s.push_str("| `--dry-run` (`-n`) | On `push`: the exact API calls, nothing sent. On `pull`: what would be written, nothing touched. |\n\n");
+    s.push_str("| `--dry-run` (`-n`) | On `push`: the exact API calls, nothing sent. On `pull`: what would be written, nothing touched. |\n");
+    s.push_str("| `--fields <PATHS>` | Keep only these dotted paths of the `--json` document: `results.key,results.ops.summary`. Cheaper than parsing the whole thing. |\n");
+    s.push_str("| `--json-compact` | Drop null and empty values from the `--json` document. |\n\n");
     s.push_str(
-        "Every JSON document carries a `schema` field such as `jired/pull/1`. \
-         Run `jired schema` to list the JSON Schemas and `jired schema pull` to print one.\n\n",
+        "A full document is a complete record, which is the wrong size when you \
+         wanted three values. `--fields` takes dotted paths, comma-separated or \
+         repeated; a path walks objects and *maps over* arrays, so `results.ok` \
+         keeps the `ok` of every result rather than needing an index. Both flags \
+         are opt-in because a projected or compacted document no longer matches \
+         its published schema — which is the point of asking for one.\n\n",
+    );
+    s.push_str("```sh\n");
+    s.push_str("jired status --json --fields dirty,new_issues\n");
+    s.push_str("jired push --json --fields summary,results.key,results.ok\n");
+    s.push_str("jired list --sprint \"Sprint 7\" --json --json-compact\n");
+    s.push_str("```\n\n");
+    s.push_str(
+        "Every JSON document carries a `schema` field such as `jired/pull/1`, and \
+         `schema` survives a projection. Run `jired schema` to list the JSON \
+         Schemas and `jired schema pull` to print one. `jired push --json` leads \
+         with `summary` — `{\"ok\": 5, \"failed\": 0, \"stale\": [\"PROJ-194\"]}` — so \
+         the outcome is one read rather than a walk over every operation of every \
+         issue.\n\n",
     );
 
     // The same list the permission files are built from, so an agent reading
@@ -1149,6 +1348,118 @@ mod tests {
         assert!(text.contains("keep me"));
         assert!(text.contains("second"));
         assert!(!text.contains("first"));
-        assert_eq!(text.matches(BEGIN).count(), 1);
+        assert_eq!(text.matches(&begin()).count(), 1);
+    }
+
+    /// The whole point of the stamp is telling an agent the instructions it is
+    /// reading are not this binary's, so every state has to be distinguishable:
+    /// a file this build wrote, one an older build wrote, one from before the
+    /// stamp existed, and one that was never generated at all.
+    #[test]
+    fn a_block_from_another_jired_is_reported_as_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let states = || -> Vec<DocState> { doc_states(root).into_iter().map(|(_, s)| s).collect() };
+
+        // Nothing written yet: missing, not stale. A workspace that never asked
+        // for instructions is not carrying wrong ones.
+        assert_eq!(states(), vec![DocState::Missing, DocState::Missing]);
+
+        for name in DOCS {
+            write_managed_block(&root.join(name), &render()).unwrap();
+        }
+        assert_eq!(states(), vec![DocState::Current, DocState::Current]);
+        assert_eq!(
+            stamped_version(&std::fs::read_to_string(root.join("CLAUDE.md")).unwrap()).as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+
+        // An older jired's stamp, and a block from before stamping.
+        std::fs::write(
+            root.join("CLAUDE.md"),
+            format!("{BEGIN_PREFIX} v0.0.1 -->\nold body\n{END}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("AGENTS.md"),
+            format!("<!-- BEGIN jired -->\nold body\n{END}\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            states(),
+            vec![
+                DocState::Stale {
+                    generated_by: Some("0.0.1".into())
+                },
+                DocState::Stale { generated_by: None },
+            ]
+        );
+
+        // And regenerating replaces the differently-stamped block in place
+        // rather than appending a second one under it.
+        let path = root.join("CLAUDE.md");
+        write_managed_block(&path, &render()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches(BEGIN_PREFIX).count(), 1);
+        assert!(!text.contains("old body"));
+        assert_eq!(doc_states(root)[0].1, DocState::Current);
+    }
+
+    /// The same version with a changed template is still not what the file
+    /// says it is, so the body is compared as well as the stamp.
+    #[test]
+    fn an_edited_block_is_stale_even_under_the_right_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CLAUDE.md");
+        std::fs::write(&path, format!("{}\nnot the docs\n{END}\n", begin())).unwrap();
+        assert_eq!(
+            doc_states(dir.path())[0].1,
+            DocState::Stale {
+                generated_by: Some(env!("CARGO_PKG_VERSION").into())
+            }
+        );
+    }
+
+    /// The flags a scripted caller reaches for first. Each was in `--help` and
+    /// in no generated table, which left the obvious move — parsing the whole
+    /// `--json` document by hand — looking like the only one.
+    #[test]
+    fn the_flags_a_scripted_caller_needs_are_documented() {
+        let doc = render();
+        for needle in [
+            "`--fields <PATHS>`",
+            "--json-compact",
+            "jired diff --stat",
+            "--exit-code",
+            "--summary-contains",
+            "--issue-type",
+            "--keys",
+            "jired transition KEY --to STATUS",
+            "jired assign KEY --user NAME|--me|--none",
+            "jired set --field FIELD --value VALUE",
+            "jired comment KEY -m TEXT",
+            "pending_ops",
+            "jired push --resume",
+            "--refresh-stale",
+        ] {
+            assert!(doc.contains(needle), "generated docs missing {needle:?}");
+        }
+    }
+
+    /// Every filter `jired list` takes has to appear, or an agent filters by
+    /// hand over the whole working copy the way it would with no filters at
+    /// all.
+    #[test]
+    fn every_list_filter_is_documented() {
+        use clap::Args;
+        let doc = render();
+        let cmd = crate::cli::cmd::list_issues::ListArgs::augment_args(clap::Command::new("list"));
+        for arg in cmd.get_arguments() {
+            let Some(long) = arg.get_long() else { continue };
+            assert!(
+                doc.contains(&format!("`--{long}")),
+                "`jired list --{long}` is missing from the generated docs"
+            );
+        }
     }
 }
