@@ -109,9 +109,7 @@ fn the_vendored_specs_are_scanned() {
         "expected the vendored descriptions and the fixture copies, found {specs:?}"
     );
     assert!(
-        specs
-            .iter()
-            .any(|p| p.starts_with(repo().join("specs"))),
+        specs.iter().any(|p| p.starts_with(repo().join("specs"))),
         "the specs directory was not walked: {specs:?}"
     );
 }
@@ -204,10 +202,7 @@ fn walk(root: &Path) -> Vec<PathBuf> {
         let path = entry.path();
         if path.is_dir() {
             out.extend(walk(&path));
-        } else if path
-            .extension()
-            .is_some_and(|e| e == "json" || e == "wadl")
-        {
+        } else if path.extension().is_some_and(|e| e == "json" || e == "wadl") {
             out.push(path);
         }
     }

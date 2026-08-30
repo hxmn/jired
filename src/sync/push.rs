@@ -285,7 +285,7 @@ enum Action {
     },
     /// Put a sub-task under a different parent. Its own operation because Data
     /// Center has no field update that does it; see
-    /// [`crate::api::datacenter::move_subtask_parent`].
+    /// [`crate::api::datacenter::wizard::move_subtask_parent`].
     MoveParent {
         /// The parent it must be under when the issue is read back.
         to: String,

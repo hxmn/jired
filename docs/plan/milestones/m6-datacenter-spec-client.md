@@ -316,8 +316,8 @@ Each task lands green: `cargo test --all-targets`, `cargo fmt --check`,
 - **Done when:** `cargo test --test e2e fetch_spec` and `cargo test --test no_secrets` pass with the real WADLs in place.
 
 ### M6.2 Split `datacenter.rs` into a module
-- [ ] `git mv src/api/datacenter.rs src/api/datacenter/mod.rs`; the wizard and its tests move to `wizard.rs` as `pub(crate)`; `mod.rs` keeps `client()`, `spec_modules()`, `WADL_ACCEPT`, `user_field_value`, `mention_markup` and their tests
-- [ ] Fix the call in `rest.rs` and the doc link in `push.rs`
+- [x] `git mv src/api/datacenter.rs src/api/datacenter/mod.rs`; the wizard and its tests move to `wizard.rs` as `pub(crate)`; `mod.rs` keeps `client()`, `spec_modules()`, `WADL_ACCEPT`, `user_field_value`, `mention_markup` and their tests
+- [x] Fix the call in `rest.rs` and the doc link in `push.rs`
 - **Done when:** `cargo test api::datacenter` runs the same tests; no behaviour change.
 
 ### M6.3 The route table and the contract test

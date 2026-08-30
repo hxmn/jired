@@ -663,7 +663,8 @@ impl JiraApi for Rest {
             // web action, and web actions predate the key ever being accepted.
             Deployment::DataCenter => {
                 let id = self.issue_id(key).await?;
-                crate::api::datacenter::move_subtask_parent(&self.http, key, &id, parent).await
+                crate::api::datacenter::wizard::move_subtask_parent(&self.http, key, &id, parent)
+                    .await
             }
         }
     }
