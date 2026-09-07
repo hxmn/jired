@@ -757,9 +757,13 @@ pub fn render() -> String {
          `summary`, `sprint`, `labels` and `file`, in any order, and is \
          tab-separated whenever stdout is not a terminal — `jired list \
          --columns key,type | grep -P '\\tBug$'` needs no JSON parser. The \
-         values are the ones `--json` carries, except that `assignee` is the \
-         name out of `@[Name](id)`; reach for `--json` when you need the id, a \
-         field no column offers, or a document rather than a table.\n\n",
+         values are the ones `--json` carries, except for the two the table \
+         shortens: `assignee` is the name out of `@[Name](id)`, and `sprint` is \
+         the *last* of the sprints the issue has been in — where it is now — \
+         while `--json` carries the whole history as an array, the way the file \
+         has it. Splitting carry-over from new work is that array, so reach for \
+         `--json` for it, for the assignee id, for a field no column offers, or \
+         when you want a document rather than a table.\n\n",
     );
 
     s.push_str("## Sprints\n\n");
@@ -839,6 +843,33 @@ pub fn render() -> String {
          needed when the project has more than one; the dates are read in the local \
          timezone unless they name one, and Jira takes both or neither. `--issues` \
          moves those issues into it as `sprint add` would.\n\n",
+    );
+    s.push_str(
+        "`jired sprint start SPRINT`, `jired sprint edit SPRINT` and `jired sprint \
+         close SPRINT` are the rest of a sprint's life, and go straight to the \
+         server for the same reason, with the same `-n`. They are one endpoint \
+         underneath and it *merges*: only the flags you pass are sent, and what is \
+         not sent is what the sprint keeps. `edit --goal TEXT` is the only way to \
+         set a goal after the sprint exists — `create --goal` sets one at creation \
+         and nothing else reaches the field — and `--goal ''` clears it; \
+         `--name`, `--start` and `--end` change the rest. `SPRINT` is a name or an \
+         id, matched like `--sprint` is.\n\n",
+    );
+    s.push_str(
+        "Two refusals happen before anything is sent, as exit 2 rather than a 400 \
+         that names nothing: a sprint with no dates cannot be started (pass \
+         `--start` and `--end` to set them and start it in one call), and a board \
+         runs one sprint at a time, so a second is refused naming the one in the \
+         way.\n\n",
+    );
+    s.push_str(
+        "`jired sprint close SPRINT` always names the issues it would leave \
+         unfinished — the ones that would otherwise point at a closed sprint with \
+         nothing carried over — and `--move-incomplete-to SPRINT` moves them into \
+         the next sprint first, pushing the moves before the close, because an \
+         issue cannot be got out of a sprint that is already closed. \"Unfinished\" \
+         is the status *category* rather than a status name, so it reads the same \
+         on a workflow that says `Done` and one that does not.\n\n",
     );
     s.push_str(
         "`jired boards --json` names the project a board is filed under in \
@@ -1105,7 +1136,11 @@ mod tests {
                 "fetch-spec",
                 "writes specification files into a directory the caller names",
             ),
-            ("sprint", "stages a sprint move"),
+            (
+                "sprint",
+                "stages a sprint move, and creates, starts, edits or closes a \
+                 sprint on the server",
+            ),
         ];
 
         let cli = crate::cli::Cli::command();

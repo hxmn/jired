@@ -263,6 +263,37 @@ impl FixtureClient {
         *n += 1;
         n.to_string()
     }
+
+    /// Which of Jira's three buckets a transition's target status falls in,
+    /// declared beside the transition in the fixture's `transitions.json`.
+    ///
+    /// Read off the raw file rather than through [`Transition`], which carries
+    /// no category: the model has no use for one, and a fixture does.
+    fn status_category(&self, transition_id: &str) -> String {
+        read_json(&self.dir, "transitions.json")
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .find(|t| t.get("id").and_then(Value::as_str) == Some(transition_id))
+            .and_then(|t| t.get("to_status_category").and_then(Value::as_str))
+            .unwrap_or("indeterminate")
+            .to_string()
+    }
+
+    /// The sprint pool as it stands, including anything this run has written.
+    fn stored_sprints(&self) -> Vec<Sprint> {
+        read_json(&self.dir, "sprints.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default()
+    }
+
+    /// Put the pool back on disk, so the next `jired` process in the same test
+    /// sees what this one did rather than the recording it started from.
+    fn save_sprints(&self, sprints: &[Sprint]) {
+        if let Ok(text) = serde_json::to_string_pretty(sprints) {
+            let _ = std::fs::write(self.dir.join("sprints.json"), text);
+        }
+    }
 }
 
 /// Which custom field this fixture's issues keep their sprint in.
@@ -444,10 +475,51 @@ impl JiraApi for FixtureClient {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         all.push(sprint.clone());
-        if let Ok(text) = serde_json::to_string_pretty(&all) {
-            let _ = std::fs::write(self.dir.join("sprints.json"), text);
-        }
+        self.save_sprints(&all);
         Ok(sprint)
+    }
+
+    async fn sprint(&self, id: &str) -> Result<Sprint> {
+        self.stored_sprints()
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| {
+                JiredError::usage(format!("no sprint with id {id}")).with_hint(FIXTURE_HINT)
+            })
+    }
+
+    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint> {
+        let path = format!("/rest/agile/1.0/sprint/{id}");
+        self.record("POST", &path, update.to_body())?;
+
+        let mut all = self.stored_sprints();
+        let found = all.iter_mut().find(|s| s.id == id).ok_or_else(|| {
+            JiredError::usage(format!("no sprint with id {id}")).with_hint(FIXTURE_HINT)
+        })?;
+        if !self.applies("POST", &path) {
+            return Ok(found.clone());
+        }
+        // Merged, not replaced, exactly as the endpoint behind it merges: a
+        // fixture that overwrote the unmentioned fields would let a caller that
+        // forgot to send one pass here and lose it against a real server.
+        if let Some(name) = &update.name {
+            found.name = name.clone();
+        }
+        if let Some(goal) = &update.goal {
+            found.goal = Some(goal.clone()).filter(|g| !g.is_empty());
+        }
+        if update.start.is_some() {
+            found.start_date = update.start;
+        }
+        if update.end.is_some() {
+            found.end_date = update.end;
+        }
+        if let Some(state) = &update.state {
+            found.state = state.clone();
+        }
+        let updated = found.clone();
+        self.save_sprints(&all);
+        Ok(updated)
     }
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -734,6 +806,12 @@ impl JiraApi for FixtureClient {
                 issue["fields"]["status"] = json!({
                     "name": t.to_status,
                     "id": t.to_status_id.unwrap_or_default(),
+                    // A real server never returns a status without its category,
+                    // and the category is what jired reads for "is this
+                    // finished" — `list --category`, `sprint close`. Leaving it
+                    // off would let a transitioned issue pass here in a shape no
+                    // server sends, and only those two commands would notice.
+                    "statusCategory": { "key": self.status_category(&t.id) },
                 });
             }
         }

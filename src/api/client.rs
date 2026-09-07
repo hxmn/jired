@@ -132,6 +132,17 @@ pub trait JiraApi: Send + Sync {
     async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>>;
     /// Create a sprint on a board. Returns it as the server now holds it.
     async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint>;
+    /// One sprint by id, asked of the server rather than of the local cache.
+    ///
+    /// The cache carries a name and a state and no dates, and the checks a
+    /// `sprint start` makes before sending — has it dates, is it already
+    /// running — are checks against what the server holds *now*.
+    async fn sprint(&self, id: &str) -> Result<Sprint>;
+    /// Change a sprint that exists: its name, goal, dates, or state.
+    ///
+    /// A merge rather than a replacement, so a caller only names what it means
+    /// to change. Returns the sprint as the server now holds it.
+    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint>;
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage>;
     async fn issue(&self, key: &str) -> Result<RemoteIssue>;

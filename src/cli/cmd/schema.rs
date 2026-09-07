@@ -74,12 +74,20 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("search", include_str!("../../../schemas/search.json")),
     ("set", include_str!("../../../schemas/set.json")),
     (
+        "sprint-close",
+        include_str!("../../../schemas/sprint-close.json"),
+    ),
+    (
         "sprint-create",
         include_str!("../../../schemas/sprint-create.json"),
     ),
     (
         "sprint-move",
         include_str!("../../../schemas/sprint-move.json"),
+    ),
+    (
+        "sprint-update",
+        include_str!("../../../schemas/sprint-update.json"),
     ),
     ("show", include_str!("../../../schemas/show.json")),
     ("sprints", include_str!("../../../schemas/sprints.json")),

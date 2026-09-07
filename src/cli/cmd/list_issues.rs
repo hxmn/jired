@@ -99,8 +99,15 @@ struct Match {
     issue_type: String,
     labels: Vec<String>,
     assignee: Option<String>,
-    /// The sprint it is in now, which is the last of the ones it has been in.
-    sprint: Option<String>,
+    /// Every sprint it has been in, oldest first, exactly as `sprint:` has it.
+    ///
+    /// The whole list rather than the last of it, because the difference
+    /// between the two is what splits carry-over from new work — and answering
+    /// that from `--json` was the one question that still meant parsing the
+    /// `.md` files. The listing's own column shows the last entry, which is
+    /// where the issue is now, the way the `assignee` column shows a name out
+    /// of the `@[Name](id)` this carries.
+    sprint: Vec<String>,
 }
 
 pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
@@ -139,7 +146,7 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
             issue_type: fm.issue_type,
             labels: fm.labels,
             assignee: fm.assignee,
-            sprint: fm.sprint.last().cloned(),
+            sprint: fm.sprint,
         });
     }
 
@@ -210,7 +217,9 @@ fn cell(m: &Match, column: Column) -> String {
             .map(crate::doc::frontmatter::display_name)
             .unwrap_or_default(),
         Column::Summary => m.summary.clone(),
-        Column::Sprint => m.sprint.clone().unwrap_or_default(),
+        // Where it is now, which is the last of the ones it has been in: a cell
+        // wide enough for a whole history is a cell nobody can read across.
+        Column::Sprint => m.sprint.last().cloned().unwrap_or_default(),
         Column::Labels => m.labels.join(","),
         Column::File => m.file.clone(),
     }
@@ -278,7 +287,7 @@ fn rows(matched: &[Match], columns: &[Column], tabs: bool) -> Vec<String> {
 /// every status a workflow actually uses is on some issue jired has pulled. A
 /// status on no snapshot — typed into a file by hand, say — has no category,
 /// and `--category` does not claim it.
-fn status_categories(
+pub(crate) fn status_categories(
     rows: &[crate::store::state::IssueRow],
 ) -> std::collections::BTreeMap<String, String> {
     let mut map = std::collections::BTreeMap::new();
@@ -496,7 +505,7 @@ mod tests {
                 issue_type: fm.issue_type.clone(),
                 labels: fm.labels.clone(),
                 assignee: fm.assignee.clone(),
-                sprint: fm.sprint.last().cloned(),
+                sprint: fm.sprint.clone(),
             },
             Match {
                 key: "TSK-102".into(),
@@ -506,7 +515,7 @@ mod tests {
                 issue_type: "Sub-task".into(),
                 labels: Vec::new(),
                 assignee: None,
-                sprint: None,
+                sprint: Vec::new(),
             },
         ]
     }

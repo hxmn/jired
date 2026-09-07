@@ -254,21 +254,29 @@ pub fn run_sprints(g: &GlobalArgs, args: &SprintsArgs, out: Out) -> Result<ExitC
         }
     }
     for s in &shown {
-        // A sprint's state is the same three-way reading as an issue's status —
-        // not started, running, finished — so it gets the same three colours.
-        let state = match s.state.as_str() {
-            "active" => "indeterminate",
-            "closed" => "done",
-            "future" => "new",
-            _ => "",
-        };
-        out.say(format!(
-            "{} {} {}",
-            style::out(CYAN, format!("{:<8}", s.id)),
-            style::status(&format!("{:<10}", s.state), state),
-            s.name
-        ));
+        out.say(sprint_row(s));
     }
     out.emit("sprints", &serde_json::json!({ "sprints": sprints }));
     Ok(ExitCode::Success)
+}
+
+/// One sprint as a row: its id, its state, its name.
+///
+/// Shared, so a sprint reads the same wherever it appears — in the listing, in
+/// the one `sprint create` just made, in the one `sprint start` just started.
+/// A sprint's state is the same three-way reading as an issue's status — not
+/// started, running, finished — so it gets the same three colours.
+pub(crate) fn sprint_row(s: &crate::api::Sprint) -> String {
+    let category = match s.state.as_str() {
+        "active" => "indeterminate",
+        "closed" => "done",
+        "future" => "new",
+        _ => "",
+    };
+    format!(
+        "{} {} {}",
+        style::out(CYAN, format!("{:<8}", s.id)),
+        style::status(&format!("{:<10}", s.state), category),
+        s.name
+    )
 }

@@ -419,6 +419,18 @@ route!(
     "state",
 );
 route!(CREATE_SPRINT, "createSprint", "POST", Agile, "sprint");
+route!(GET_SPRINT, "getSprint", "GET", Agile, "sprint/{sprintId}");
+route!(
+    /// Starting, closing, renaming and re-goaling a sprint are all this one
+    /// call: the endpoint merges, so what is not sent is what the sprint keeps.
+    /// `PUT updateSprint` beside it replaces instead, which would silently drop
+    /// the fields a caller did not know to resend.
+    UPDATE_SPRINT,
+    "partiallyUpdateSprint",
+    "POST",
+    Agile,
+    "sprint/{sprintId}",
+);
 route!(
     /// Moving an issue into a sprint is a board call, not a field edit: the Sprint
     /// field is read-only on most instances.
@@ -471,6 +483,8 @@ pub const ALL: &[&Route] = &[
     &BOARD_PROJECTS,
     &BOARD_SPRINTS,
     &CREATE_SPRINT,
+    &GET_SPRINT,
+    &UPDATE_SPRINT,
     &SPRINT_ISSUES,
     &BACKLOG_ISSUES,
 ];
@@ -600,20 +614,22 @@ mod tests {
             "getProjects",
             "getAllSprints",
             "createSprint",
+            "getSprint",
+            "partiallyUpdateSprint",
             "moveIssuesToSprint",
             "moveIssuesToBacklog",
         ] {
             assert!(listed.contains(&id), "{id} is missing from ALL");
         }
-        assert_eq!(ALL.len(), 35, "a route was added without a test naming it");
+        assert_eq!(ALL.len(), 37, "a route was added without a test naming it");
 
         // `getIssue` is a method id in both modules, so nothing may key on the
         // id alone — the contract test keys on (method, path).
         assert_eq!(
             ALL.iter().filter(|r| r.module == Module::Agile).count(),
-            7,
+            9,
             "the Agile routes: boards, configuration, projects, sprints, \
-             create, sprint issues, backlog issues"
+             create, get one, update one, sprint issues, backlog issues"
         );
     }
 }

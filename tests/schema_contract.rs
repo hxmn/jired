@@ -245,6 +245,13 @@ fn command_output_matches_its_published_schema() {
         // other repair; `clean --regroup` used to shadow clean's own purpose.
         vec!["doctor", "--regroup"],
         vec!["init-agents"],
+        vec!["list"],
+        vec!["sprints"],
+        // In this order because Jira's own rules are in this order: one running
+        // sprint per board, so 42 has to finish before 43 can start.
+        vec!["sprint", "close", "Sprint 42"],
+        vec!["sprint", "start", "Sprint 43"],
+        vec!["sprint", "edit", "Sprint 43", "--goal", "Ship SSO."],
     ];
 
     let mut checked = 0;

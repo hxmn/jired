@@ -59,11 +59,11 @@
             "description": "As the file spells it: `@[Name](id)`"
           },
           "sprint": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The sprint it is in now, the last of the ones it has been in"
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every sprint it has been in, oldest first, as `sprint:` has it; the last entry is where it is now"
           }
         }
       }

@@ -1,7 +1,7 @@
 [
-  { "id": "11", "name": "To Do", "to_status": "To Do", "to_status_id": "1", "required_fields": [] },
-  { "id": "21", "name": "Start Progress", "to_status": "In Progress", "to_status_id": "3", "required_fields": [] },
-  { "id": "31", "name": "In Review", "to_status": "In Review", "to_status_id": "4", "required_fields": [] },
-  { "id": "41", "name": "Done", "to_status": "Done", "to_status_id": "5", "required_fields": [] },
-  { "id": "51", "name": "Close", "to_status": "Closed", "to_status_id": "6", "required_fields": ["resolution"] }
+  { "id": "11", "name": "To Do", "to_status": "To Do", "to_status_id": "1", "to_status_category": "new", "required_fields": [] },
+  { "id": "21", "name": "Start Progress", "to_status": "In Progress", "to_status_id": "3", "to_status_category": "indeterminate", "required_fields": [] },
+  { "id": "31", "name": "In Review", "to_status": "In Review", "to_status_id": "4", "to_status_category": "indeterminate", "required_fields": [] },
+  { "id": "41", "name": "Done", "to_status": "Done", "to_status_id": "5", "to_status_category": "done", "required_fields": [] },
+  { "id": "51", "name": "Close", "to_status": "Closed", "to_status_id": "6", "to_status_category": "done", "required_fields": ["resolution"] }
 ]

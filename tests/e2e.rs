@@ -5340,6 +5340,297 @@ fn a_sprint_can_be_created_and_seeded_in_one_go() {
     );
 }
 
+/// Starting a sprint is one merging POST, and the fields it does not name are
+/// the ones the sprint keeps.
+#[test]
+fn starting_a_sprint_sets_its_state_and_leaves_the_rest_alone() {
+    let ws = Ws::new();
+    ws.init();
+    // The sprint cache is what resolves a name to an id.
+    ws.json(&["fetch"]);
+
+    // Sprint 42 is the one running; Jira allows one per board.
+    ws.json(&["sprint", "close", "Sprint 42"]);
+
+    let out = ws.json(&["sprint", "start", "Sprint 43", "--goal", "Ship SSO."]);
+    assert_eq!(out["schema"], "jired/sprint-update/1");
+    assert_eq!(out["dry_run"], false);
+    assert_eq!(out["request"]["path"], "/rest/agile/1.0/sprint/43");
+    assert_eq!(out["request"]["body"]["state"], "active");
+    assert_eq!(out["request"]["body"]["goal"], "Ship SSO.");
+    // The dates were already on the sprint, so they are not resent: what is not
+    // sent is what the sprint keeps.
+    assert!(out["request"]["body"].get("startDate").is_none(), "{out}");
+    assert_eq!(out["sprint"]["state"], "active");
+    assert_eq!(out["sprint"]["goal"], "Ship SSO.");
+    assert_eq!(out["sprint"]["start_date"], "2026-08-24T09:00:00Z");
+
+    let listed = ws.json(&["sprints", "--board", "12"]);
+    let started = listed["sprints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "43")
+        .unwrap()
+        .clone();
+    assert_eq!(started["state"], "active");
+}
+
+/// Both of the 400s Jira answers without saying why, caught while the command
+/// is still on screen.
+#[test]
+fn a_sprint_jira_would_refuse_to_start_is_refused_here() {
+    let ws = Ws::new();
+    ws.init();
+    // The sprint cache is what resolves a name to an id.
+    ws.json(&["fetch"]);
+
+    // One running sprint per board, and the one in the way is named.
+    let err = ws.json_err(&["sprint", "start", "Sprint 43"], 2);
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("already running Sprint 42"),
+        "{err}"
+    );
+    assert!(err["hint"].as_str().unwrap().contains("sprint close"));
+
+    ws.json(&["sprint", "close", "Sprint 42"]);
+
+    // A sprint with no dates cannot be started, and the missing half is named.
+    let made = ws.json(&["sprint", "create", "Hardening week"]);
+    let id = made["sprint"]["id"].as_str().unwrap().to_string();
+    let err = ws.json_err(&["sprint", "start", &id], 2);
+    assert!(
+        err["message"].as_str().unwrap().contains("no start or end"),
+        "{err}"
+    );
+
+    // Passing the dates sets them and starts it in the one call.
+    let out = ws.json(&[
+        "sprint",
+        "start",
+        &id,
+        "--start",
+        "2026-09-01T09:00:00Z",
+        "--end",
+        "2026-09-15T09:00:00Z",
+    ]);
+    assert_eq!(out["request"]["body"]["startDate"], "2026-09-01T09:00:00Z");
+    assert_eq!(out["sprint"]["state"], "active");
+
+    // And one that is already running says so rather than sending again.
+    let err = ws.json_err(&["sprint", "start", &id], 2);
+    assert!(err["message"].as_str().unwrap().contains("already running"));
+    assert_eq!(err["details"]["sprint_id"], id);
+}
+
+/// The field the report could not reach at all: a goal on a sprint that exists.
+#[test]
+fn a_sprints_goal_and_dates_can_be_changed_after_it_is_made() {
+    let ws = Ws::new();
+    ws.init();
+    // The sprint cache is what resolves a name to an id.
+    ws.json(&["fetch"]);
+
+    let out = ws.json(&["sprint", "edit", "Sprint 43", "--goal", "Ship the fluids."]);
+    assert_eq!(out["schema"], "jired/sprint-update/1");
+    assert_eq!(out["request"]["path"], "/rest/agile/1.0/sprint/43");
+    assert_eq!(out["request"]["body"]["goal"], "Ship the fluids.");
+    // A goal alone changes nothing else, because nothing else is sent.
+    assert!(out["request"]["body"].get("state").is_none(), "{out}");
+    assert_eq!(out["sprint"]["goal"], "Ship the fluids.");
+    assert_eq!(
+        out["sprint"]["state"], "future",
+        "editing does not start it"
+    );
+
+    // An empty goal is how one is taken back off; `create` has no such reading.
+    let cleared = ws.json(&["sprint", "edit", "43", "--goal", ""]);
+    assert_eq!(cleared["request"]["body"]["goal"], "");
+    assert_eq!(cleared["sprint"]["goal"], Value::Null);
+
+    let renamed = ws.json(&["sprint", "edit", "43", "--name", "Sprint 43a"]);
+    assert_eq!(renamed["sprint"]["name"], "Sprint 43a");
+
+    // An empty name is refused where an empty goal is not: a sprint without a
+    // goal is an ordinary sprint, one without a name is nothing to point at.
+    let err = ws.json_err(&["sprint", "edit", "43", "--name", ""], 2);
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("cannot be renamed to nothing"));
+
+    // Nothing to change is a mistake about the command, made before any request.
+    let err = ws.json_err(&["sprint", "edit", "43"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("nothing to change"));
+
+    // The same date checks `create` makes, against what the sprint would have.
+    let err = ws.json_err(&["sprint", "edit", "43", "--end", "2026-01-01"], 2);
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("ends before it starts"));
+}
+
+/// Closing a sprint in the UI left nine issues pointing at a closed sprint with
+/// no carry-over, and no way to see it. This is both halves of that.
+#[test]
+fn closing_a_sprint_names_what_it_would_strand_and_can_carry_it_over() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    // Two issues in the running sprint, one of which gets finished.
+    ws.json(&[
+        "sprint",
+        "add",
+        "PROJ-150",
+        "--sprint",
+        "Sprint 42",
+        "--push",
+    ]);
+    ws.json(&["transition", "PROJ-150", "--to", "Done", "--push"]);
+    ws.json(&["pull"]);
+
+    // Without the flag: closed, and the unfinished issue named rather than
+    // quietly stranded.
+    let seen = ws.json(&["sprint", "close", "Sprint 42", "--dry-run"]);
+    assert_eq!(seen["schema"], "jired/sprint-close/1");
+    assert_eq!(seen["dry_run"], true);
+    assert_eq!(seen["closed"], false);
+    assert_eq!(seen["carried_to"], Value::Null);
+    let stranded: Vec<&str> = seen["incomplete"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        stranded,
+        ["PROJ-142"],
+        "the issue that is Done is finished and stays put"
+    );
+    assert_eq!(seen["request"]["path"], "/rest/agile/1.0/sprint/42");
+    assert_eq!(seen["request"]["body"]["state"], "closed");
+    // A dry run sends nothing at all.
+    assert_eq!(
+        ws.json(&["sprints", "--board", "12"])["sprints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "42")
+            .unwrap()["state"],
+        "active"
+    );
+
+    let out = ws.json(&[
+        "sprint",
+        "close",
+        "Sprint 42",
+        "--move-incomplete-to",
+        "Sprint 43",
+    ]);
+    assert_eq!(out["closed"], true);
+    assert_eq!(out["sprint"]["state"], "closed");
+    assert_eq!(out["carried_to"]["name"], "Sprint 43");
+    assert_eq!(out["issues"][0]["key"], "PROJ-142");
+    assert_eq!(out["push"]["results"][0]["ops"][0]["kind"], "move_sprint");
+    assert_eq!(out["push"]["results"][0]["ops"][0]["status"], "done");
+
+    // The carry-over is a real move, not a staged one: the file holds what the
+    // push wrote back, which is where the "server" now says the issue is.
+    let text = ws.read(ISSUE_FILE);
+    assert_eq!(out["issues"][0]["changed"], true);
+    assert!(text.contains("sprint: Sprint 43"), "{text}");
+    // The finished one stayed where it was.
+    assert!(ws
+        .read("PROJ-0150. Rotate IdP certificate.md")
+        .contains("sprint: Sprint 42"));
+}
+
+/// The states a close cannot be asked for, and the sprints it cannot carry into.
+#[test]
+fn a_sprint_that_cannot_be_closed_says_so_before_sending() {
+    let ws = Ws::new();
+    ws.init();
+    // The sprint cache is what resolves a name to an id.
+    ws.json(&["fetch"]);
+
+    let err = ws.json_err(&["sprint", "close", "Sprint 43"], 2);
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("has not been started"),
+        "{err}"
+    );
+    let err = ws.json_err(&["sprint", "close", "Sprint 41"], 2);
+    assert!(err["message"].as_str().unwrap().contains("already closed"));
+
+    // Carrying into a closed sprint would strand the issues just as thoroughly.
+    let err = ws.json_err(
+        &[
+            "sprint",
+            "close",
+            "Sprint 42",
+            "--move-incomplete-to",
+            "Sprint 41",
+        ],
+        2,
+    );
+    assert!(
+        err["message"].as_str().unwrap().contains("is closed"),
+        "{err}"
+    );
+
+    let err = ws.json_err(
+        &[
+            "sprint",
+            "close",
+            "Sprint 42",
+            "--move-incomplete-to",
+            "Sprint 42",
+        ],
+        2,
+    );
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("cannot carry its own issues over to itself"));
+}
+
+/// The same escape hatch `create` offers, for the same reason: neither of these
+/// can be reviewed with `diff` first.
+#[test]
+fn start_and_edit_print_the_call_under_a_dry_run() {
+    let ws = Ws::new();
+    ws.init();
+    // The sprint cache is what resolves a name to an id.
+    ws.json(&["fetch"]);
+
+    let out = ws.json(&["sprint", "edit", "43", "--goal", "Ship SSO.", "-n"]);
+    assert_eq!(out["dry_run"], true);
+    assert_eq!(out["sprint"], Value::Null);
+    assert_eq!(out["request"]["body"]["goal"], "Ship SSO.");
+
+    // Nothing was sent: the sprint still has no goal.
+    let listed = ws.json(&["sprints", "--board", "12"]);
+    let s = listed["sprints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "43")
+        .unwrap()
+        .clone();
+    assert_eq!(s["goal"], Value::Null);
+    assert_eq!(s["state"], "future");
+}
+
 /// One key that is not here does not cost the others their move.
 #[test]
 fn an_issue_the_workspace_does_not_have_is_reported_and_the_rest_still_move() {
@@ -5637,6 +5928,42 @@ fn list_selects_issues_from_the_working_copy() {
     // Filters are a conjunction.
     let none = ws.json(&["list", "--label", "auth", "--status", "Done"]);
     assert_eq!(none["count"], 0);
+}
+
+/// `sprint` in the JSON is the whole history the file carries, not the last of
+/// it: the difference between the two is what splits carry-over from new work,
+/// and answering that used to mean parsing the `.md` files instead.
+#[test]
+fn list_reports_the_sprint_history_the_file_carries() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("sprint: Sprint 42", "sprint:\n- Sprint 41\n- Sprint 42");
+    ws.write(ISSUE_FILE, &text);
+
+    let listed = ws.json(&["list", "--sprint", "Sprint 42"]);
+    assert_eq!(listed["count"], 1);
+    assert_eq!(
+        listed["issues"][0]["sprint"],
+        serde_json::json!(["Sprint 41", "Sprint 42"])
+    );
+    // An issue in none of them gets an empty list rather than a null.
+    let backlog = ws.json(&["list", "--summary-contains", "IdP"]);
+    assert_eq!(backlog["issues"][0]["sprint"], serde_json::json!([]));
+
+    // The column is where it is *now*, the way `assignee` shows a name out of
+    // the `@[Name](id)` the JSON carries.
+    let out = ws
+        .cmd(&["list", "--columns", "key,sprint", "--sprint", "Sprint 42"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "PROJ-142\tSprint 42"
+    );
 }
 
 /// "Everything in this sprint that isn't finished yet" had no expression:

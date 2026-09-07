@@ -101,6 +101,56 @@ impl SprintInput {
     }
 }
 
+/// A change to a sprint that already exists.
+///
+/// Every field is optional because the endpoint behind it merges: what is not
+/// sent is what the sprint keeps. That is also why clearing a goal is
+/// `Some(String::new())` and leaving it alone is `None` — the two are different
+/// requests, and only the caller knows which was meant.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SprintUpdate {
+    pub name: Option<String>,
+    pub goal: Option<String>,
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+    /// `active` to start the sprint, `closed` to finish it.
+    pub state: Option<String>,
+}
+
+impl SprintUpdate {
+    /// Nothing to send. A caller that has this has been given no flags at all.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The request body, carrying only the fields that were actually set.
+    pub fn to_body(&self) -> serde_json::Value {
+        // A map built in order rather than `json!` with nulls stripped: an
+        // absent key and a null are different to this endpoint, and `null` on
+        // `goal` is how a sprint loses one by accident.
+        let mut body = serde_json::Map::new();
+        if let Some(name) = &self.name {
+            body.insert("name".into(), serde_json::json!(name));
+        }
+        if let Some(goal) = &self.goal {
+            body.insert("goal".into(), serde_json::json!(goal));
+        }
+        if let Some(start) = &self.start {
+            body.insert(
+                "startDate".into(),
+                serde_json::json!(format_timestamp(start)),
+            );
+        }
+        if let Some(end) = &self.end {
+            body.insert("endDate".into(), serde_json::json!(format_timestamp(end)));
+        }
+        if let Some(state) = &self.state {
+            body.insert("state".into(), serde_json::json!(state));
+        }
+        serde_json::Value::Object(body)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardColumn {
     pub name: String,
@@ -624,6 +674,41 @@ mod tests {
     fn a_worklog_start_time_carries_milliseconds_and_a_bare_offset() {
         let dt = parse_timestamp("2026-08-15T09:00:00Z").unwrap();
         assert_eq!(format_worklog_started(&dt), "2026-08-15T09:00:00.000+0000");
+    }
+
+    /// The endpoint merges, so a key that is not in the body is a field the
+    /// sprint keeps — and a `null` is a field it loses. Only what was asked for
+    /// may appear.
+    #[test]
+    fn a_sprint_update_sends_only_the_fields_it_was_given() {
+        let body = SprintUpdate {
+            state: Some("active".to_string()),
+            ..Default::default()
+        }
+        .to_body();
+        assert_eq!(body, serde_json::json!({ "state": "active" }));
+
+        let body = SprintUpdate {
+            name: Some("Sprint 44".to_string()),
+            start: parse_timestamp("2026-09-01T09:00:00Z"),
+            ..Default::default()
+        }
+        .to_body();
+        assert_eq!(
+            body,
+            serde_json::json!({ "name": "Sprint 44", "startDate": "2026-09-01T09:00:00Z" })
+        );
+
+        // An empty goal is a goal being taken off, which is a different request
+        // from one being left alone — so it is sent, and the other is not.
+        let cleared = SprintUpdate {
+            goal: Some(String::new()),
+            ..Default::default()
+        };
+        assert_eq!(cleared.to_body(), serde_json::json!({ "goal": "" }));
+        assert!(!cleared.is_empty());
+        assert!(SprintUpdate::default().is_empty());
+        assert_eq!(SprintUpdate::default().to_body(), serde_json::json!({}));
     }
 
     #[test]

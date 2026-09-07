@@ -793,6 +793,59 @@ as `sprint add` would — creating one is almost always followed by filling it. 
 moves are ordinary file edits and stage like any other; `--push` sends them in the
 same command. `-n` names the issues it would move and creates nothing.
 
+### `jired sprint start SPRINT [--goal T] [--start TS] [--end TS] [-n]` · `jired sprint edit SPRINT [--goal T] [--name T] [--start TS] [--end TS] [-n]`
+The other two writes onto a sprint. `create` set a goal only at creation and
+nothing moved a sprint out of `future`, so both were the one step in starting a
+sprint that had to go through the web UI: `set` writes issue frontmatter, and a
+sprint has no file to stage an edit in. These have none either, so like `create`
+they send there and then and `-n` prints the call.
+
+One endpoint under both, `POST /rest/agile/1.0/sprint/{id}`, which *merges* —
+what is not sent is what the sprint keeps. So only the flags that were given go
+into the body, and `--goal ''` is how a goal is taken back off, an empty string
+being a different request from an absent key. `--name` renames; issue files spell
+a sprint by name, so a rename ends with a hint to `jired pull` and bring `sprint:`
+in line. `edit` with no flags at all is exit 7 before anything is fetched.
+
+`SPRINT` is a name or an id, matched the way `sprint add` matches it — against the
+cached sprints, preferring an open one where a name repeats. A bare number that
+the cache has never seen is still taken as an id, because the sprint is fetched
+from the server either way and it is the server that says whether the id is real.
+
+Two things Jira refuses with a 400 that names nothing, refused here at plan time
+as exit 2 instead. A sprint with no dates cannot be started — the message names
+which half is missing, and passing `--start`/`--end` sets them and starts it in
+the one call. And a board runs one sprint at a time, so a second is refused with
+the name of the one in the way. A sprint already `active`, or `closed`, says so
+rather than sending. The dates are read in the reader's own timezone unless they
+name one, and are checked against what the sprint *would* have rather than only
+against each other, so a `--start` after an end that is already set is caught.
+JSON: `{"schema":"jired/sprint-update/1","dry_run":false,"sprint":{…}|null,"request":{"method","path","body"}}`.
+
+### `jired sprint close SPRINT [--move-incomplete-to SPRINT] [-n]`
+The other half of a sprint's life, and the half that strands issues. Closing one
+in the UI leaves everything unfinished pointing at a closed sprint with no
+carry-over, and jired had no view of that beyond reading `jired list --sprint` and
+comparing it against the board by eye. So this always names them — `9 issue(s) are
+not done and stay in the closed sprint: TSK-181, TSK-198, …` — and
+`--move-incomplete-to` carries them into the next sprint first.
+
+"Not done" is the status *category* the last fetch recorded, not a status name: a
+workflow's `Done` is `Готово` on the next instance, and the category is Jira's own
+three-way reading of any of them. A status jired has never seen counts as
+unfinished, because carrying an issue that was already done is a move somebody can
+undo and stranding one is what this exists to prevent. The set is read off the
+working copy, like `list` reads it, so the issues that move are the issues listed.
+
+The carry-over goes first and the close is abandoned if it fails: an issue cannot
+be rescued out of a sprint that is already closed, so the order that leaves a
+recoverable state is moves, then close. The moves themselves are ordinary
+`sprint add` edits, pushed in the same command rather than staged — a close that
+left them staged would be the stranding again, one step removed. A target that is
+itself closed, or is the sprint being closed, is exit 2; so is closing a `future`
+sprint, or one already closed.
+JSON: `{"schema":"jired/sprint-close/1","dry_run":false,"closed":true,"sprint":{…}|null,"request":{…},"incomplete":[{"key","file","status"}],"carried_to":{"id","name"}|null,"issues":[{"key","file","changed"}],"push":{…}|null}`.
+
 ### `jired create` — the field flags
 `--assignee`, `--sprint`, `--labels`, `--priority`, `--component` (repeatable),
 `--epic`, and `--set field=value` (repeatable) for everything else, including an
@@ -878,9 +931,16 @@ stdout is a terminal and separated by a single tab when it is not, so
 `jired list --columns key,type,assignee | cut -f2` works without a JSON parser.
 An issue with nothing in a column gets an empty cell, never a placeholder, and a
 tab or newline inside a value is flattened to a space rather than being allowed
-to forge a column boundary. `assignee` is the name out of `@[Name](id)`; the id
-is in `--json`, which is also where anything no column offers lives.
-JSON: `{"schema":"jired/list/1","count":2,"issues":[{"key","file","summary","status","type","labels","assignee","sprint"}]}`.
+to forge a column boundary. `assignee` is the name out of `@[Name](id)` and
+`sprint` is where the issue is *now*, the last of the ones it has been in; the
+id and the whole history are in `--json`, which is also where anything no column
+offers lives.
+
+`sprint` in the JSON is that whole history, oldest first, exactly as the file's
+`sprint:` has it — and not the last of it, the way the filter and the column read
+it. The difference between the two is what splits carry-over from new work, and
+answering that used to mean parsing the `.md` files instead of using `--json`.
+JSON: `{"schema":"jired/list/1","count":2,"issues":[{"key","file","summary","status","type","labels","assignee","sprint":["Sprint 42","Sprint 43"]}]}`.
 
 ### `jired label add|remove|set LABEL ISSUES… [--push] [--dry-run]`
 Labels are a list, so there are three verbs: `add` and `remove` touch one label

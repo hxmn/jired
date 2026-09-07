@@ -505,6 +505,36 @@ impl JiraApi for Rest {
         })
     }
 
+    async fn sprint(&self, id: &str) -> Result<Sprint> {
+        let v = self
+            .get(&routes::GET_SPRINT, &[("sprintId", id)], &[])
+            .await?;
+        // No board to fall back on: this endpoint is asked by sprint id, and
+        // the payload's own `originBoardId` is the only board there is.
+        sprint_from_json(&v, "").ok_or_else(|| {
+            JiredError::generic(format!(
+                "sprint {id} came back in a shape jired cannot read"
+            ))
+            .with_detail("response", v)
+        })
+    }
+
+    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint> {
+        let v = self
+            .http
+            .post_json(
+                &self.url(&routes::UPDATE_SPRINT, &[("sprintId", id)], &[]),
+                update.to_body(),
+            )
+            .await?;
+        sprint_from_json(&v, "").ok_or_else(|| {
+            JiredError::generic(format!(
+                "sprint {id} came back in a shape jired cannot read"
+            ))
+            .with_detail("response", v)
+        })
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         let map = self.field_map().await?.clone();
         let markup = self.markup();

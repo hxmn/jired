@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/sprint-close/1",
+  "title": "jired sprint close result",
+  "description": "A sprint closed, and what it left behind or carried over",
+  "type": "object",
+  "required": [
+    "schema",
+    "dry_run",
+    "closed",
+    "sprint",
+    "request",
+    "incomplete",
+    "carried_to",
+    "issues"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/sprint-close/1"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "True when --dry-run was given: nothing was sent"
+    },
+    "closed": {
+      "type": "boolean",
+      "description": "False on a dry run, and when a carry-over failed and the close was abandoned so the issues could still be got out"
+    },
+    "sprint": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The sprint as the server now holds it; null when `closed` is false",
+      "required": [
+        "id",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "board_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "end_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "goal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "description": "The closing call, sent unless dry_run",
+      "required": [
+        "method",
+        "path",
+        "body"
+      ],
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "body": {
+          "type": "object"
+        }
+      }
+    },
+    "incomplete": {
+      "type": "array",
+      "description": "The issues in the sprint this workspace has that are not in a `done` status — the ones a close strands unless they are carried over",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "status"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "carried_to": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The sprint --move-incomplete-to named; null without it",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "description": "One entry per issue file the carry-over wrote; empty without --move-incomplete-to",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document for the carry-over, when there was one"
+    }
+  }
+}

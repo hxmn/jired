@@ -193,6 +193,14 @@ impl JiraApi for DataCenter {
         self.rest.create_sprint(input).await
     }
 
+    async fn sprint(&self, id: &str) -> Result<Sprint> {
+        self.rest.sprint(id).await
+    }
+
+    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint> {
+        self.rest.update_sprint(id, update).await
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         self.rest.search(query).await
     }

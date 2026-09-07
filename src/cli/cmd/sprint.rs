@@ -8,15 +8,23 @@
 //! them there are three rungs, in the order the terminal can support them: the
 //! full-screen form, line prompts, and exit 7 naming what is missing.
 //!
+//! `start`, `edit` and `close` are `create`'s neighbours: a sprint that exists
+//! still has no file, so they too post there and then and print the call under
+//! `-n`. All three are the same endpoint — `POST …/sprint/{id}`, which merges,
+//! so what is not sent is what the sprint keeps — and what they add over that
+//! endpoint is the two refusals Jira answers 400 to without saying why: a
+//! sprint started with no dates, and a second running sprint on one board.
+//!
 //! `add` and `remove` are the opposite: an issue's sprint *is* a file field, so
 //! they behave like `transition` and `assign` — write the frontmatter, let it
 //! show up in `status` and `diff`, and go out through the normal `push`, or
 //! immediately with `--push`. What they save is knowing where `sprint:` goes in
 //! the key order and that its last entry is the one a move can act on.
 
-use crate::api::{Board, JiraApi, Sprint, SprintInput};
+use crate::api::{Board, JiraApi, Sprint, SprintInput, SprintUpdate};
 use crate::cli::cmd::edit::{push_these, report_push};
-use crate::cli::cmd::list::{board_names, pick_board};
+use crate::cli::cmd::list::{board_names, pick_board, sprint_row};
+use crate::cli::cmd::list_issues::status_categories;
 use crate::cli::cmd::prompt::Ui;
 use crate::cli::cmd::stage::{self, Staged, Wording};
 use crate::cli::context::Context;
@@ -25,6 +33,7 @@ use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::store::state::SprintRow;
 use crate::style::{self, CYAN};
+use crate::sync::Engine;
 use crate::tui::sprint::{BoardSprint, KnownBoard, NewSprint, Seed, SprintScreen};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
@@ -33,6 +42,12 @@ use clap::{Args, Subcommand};
 pub enum SprintCmd {
     /// Create a sprint on a board
     Create(CreateArgs),
+    /// Start a sprint that has not been started yet
+    Start(StartArgs),
+    /// Change a sprint's goal, name or dates
+    Edit(EditArgs),
+    /// Close a running sprint, optionally carrying its unfinished issues over
+    Close(CloseArgs),
     /// Move issues into a sprint
     Add(AddArgs),
     /// Move issues out of every sprint, back to the backlog
@@ -70,6 +85,71 @@ pub struct RemoveArgs {
 
     /// With --push, show the API call without sending it
     #[arg(long, requires = "push")]
+    pub dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct StartArgs {
+    /// The sprint to start: a name, or an id
+    #[arg(value_name = "SPRINT")]
+    pub sprint: String,
+
+    /// What the sprint is for, set on the way in
+    #[arg(long, value_name = "TEXT")]
+    pub goal: Option<String>,
+
+    /// When it starts — required when the sprint has no date yet
+    #[arg(long, value_name = "TIMESTAMP")]
+    pub start: Option<String>,
+
+    /// When it ends — required when the sprint has no date yet
+    #[arg(long, value_name = "TIMESTAMP")]
+    pub end: Option<String>,
+
+    /// Show the API call without sending it
+    #[arg(long, short = 'n')]
+    pub dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct EditArgs {
+    /// The sprint to change: a name, or an id
+    #[arg(value_name = "SPRINT")]
+    pub sprint: String,
+
+    /// What the sprint is for; `--goal ''` clears it
+    #[arg(long, value_name = "TEXT")]
+    pub goal: Option<String>,
+
+    /// Rename it
+    #[arg(long, value_name = "TEXT")]
+    pub name: Option<String>,
+
+    /// When it starts
+    #[arg(long, value_name = "TIMESTAMP")]
+    pub start: Option<String>,
+
+    /// When it ends
+    #[arg(long, value_name = "TIMESTAMP")]
+    pub end: Option<String>,
+
+    /// Show the API call without sending it
+    #[arg(long, short = 'n')]
+    pub dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct CloseArgs {
+    /// The sprint to close: a name, or an id
+    #[arg(value_name = "SPRINT")]
+    pub sprint: String,
+
+    /// Carry the issues that are not done into this sprint before closing
+    #[arg(long = "move-incomplete-to", value_name = "SPRINT")]
+    pub move_incomplete_to: Option<String>,
+
+    /// Show the API calls without sending them
+    #[arg(long, short = 'n')]
     pub dry_run: bool,
 }
 
@@ -120,6 +200,9 @@ pub struct CreateArgs {
 pub fn run(g: &GlobalArgs, cmd: &SprintCmd, out: Out) -> Result<ExitCode> {
     match cmd {
         SprintCmd::Create(args) => create(g, args, out),
+        SprintCmd::Start(args) => start(g, args, out),
+        SprintCmd::Edit(args) => edit(g, args, out),
+        SprintCmd::Close(args) => close(g, args, out),
         SprintCmd::Add(args) => {
             let mut ctx = Context::open(g, out)?;
             ctx.lock()?;
@@ -255,12 +338,519 @@ fn finish(
     Ok(outcome.exit)
 }
 
+// ---- start, edit, close --------------------------------------------------
+//
+// The three writes onto a sprint that already exists. None of them has a file
+// to stage into, so each sends immediately and `-n` prints the call — the same
+// bargain `create` makes, and the reason they are here rather than in `push`.
+
+fn start(g: &GlobalArgs, args: &StartArgs, out: Out) -> Result<ExitCode> {
+    let mut ctx = Context::open(g, out)?;
+    ctx.lock()?;
+    let client = api_client(&mut ctx)?;
+    let sprint = live_sprint(&ctx, client.as_ref(), &args.sprint)?;
+    match sprint.state.as_str() {
+        "active" => return Err(already(&sprint, "is already running")),
+        "closed" => {
+            return Err(already(
+                &sprint,
+                "is closed, and a closed sprint cannot be restarted",
+            ))
+        }
+        _ => {}
+    }
+
+    // Only the dates that were given go out — the endpoint merges, and resending
+    // what the sprint already has is a chance to send it wrong. What the sprint
+    // will *have* is a different question, and it is the one Jira checks.
+    let given_start = checked_date(args.start.as_deref(), "--start")?;
+    let given_end = checked_date(args.end.as_deref(), "--end")?;
+    let (start, end) = (
+        given_start.or(sprint.start_date),
+        given_end.or(sprint.end_date),
+    );
+    // Jira refuses `state: active` on a sprint with no dates and answers 400
+    // naming nothing, so the missing half is named here instead.
+    if start.is_none() || end.is_none() {
+        return Err(JiredError::usage(format!(
+            "{} has no {} date, and Jira will not start a sprint without both",
+            sprint.name,
+            match (start.is_none(), end.is_none()) {
+                (true, true) => "start or end",
+                (true, false) => "start",
+                _ => "end",
+            }
+        ))
+        .with_detail("sprint", sprint.name.clone())
+        .with_hint("pass --start and --end, which set the dates and start it in one call"));
+    }
+    check_order(start, end)?;
+    if let Some(board) = &sprint.board_id {
+        check_one_running(client.as_ref(), board, &sprint)?;
+    }
+
+    send(
+        &ctx,
+        client.as_ref(),
+        &sprint,
+        SprintUpdate {
+            goal: args.goal.clone(),
+            start: given_start,
+            end: given_end,
+            state: Some("active".to_string()),
+            ..Default::default()
+        },
+        args.dry_run,
+        out,
+    )
+}
+
+fn edit(g: &GlobalArgs, args: &EditArgs, out: Out) -> Result<ExitCode> {
+    let update = SprintUpdate {
+        // An empty name is refused where an empty goal is not: a sprint without
+        // a goal is an ordinary sprint, and one without a name is nothing
+        // anybody can point at again.
+        name: match args.name.as_deref().map(str::trim) {
+            Some("") => {
+                return Err(JiredError::usage("a sprint cannot be renamed to nothing")
+                    .with_hint("pass the new name — `jired sprint edit 44 --name \"Sprint 44a\"`"))
+            }
+            other => other.map(str::to_string),
+        },
+        // Not filtered for emptiness the way `create` filters it: `--goal ''`
+        // on a sprint that has one is the only way to take it back off.
+        goal: args.goal.clone(),
+        start: checked_date(args.start.as_deref(), "--start")?,
+        end: checked_date(args.end.as_deref(), "--end")?,
+        state: None,
+    };
+    // Checked before anything is opened: a command with no flags is a mistake
+    // about the command, and a sprint fetched to find that out is a wasted trip.
+    if update.is_empty() {
+        return Err(JiredError::missing_value("nothing to change").with_hint(
+            "pass --goal, --name, --start or --end — \
+                 `jired sprint edit \"Sprint 44\" --goal \"Ship SSO.\"`",
+        ));
+    }
+
+    let mut ctx = Context::open(g, out)?;
+    ctx.lock()?;
+    let client = api_client(&mut ctx)?;
+    let sprint = live_sprint(&ctx, client.as_ref(), &args.sprint)?;
+    let (start, end) = (
+        update.start.or(sprint.start_date),
+        update.end.or(sprint.end_date),
+    );
+    if start.is_none() && end.is_some() {
+        return Err(needs_a_start());
+    }
+    check_order(start, end)?;
+
+    let renamed = update.name.is_some();
+    let exit = send(&ctx, client.as_ref(), &sprint, update, args.dry_run, out);
+    if renamed && !args.dry_run && exit.is_ok() {
+        // Issue files spell the sprint by name, so a rename leaves every
+        // `sprint:` that mentions it one release behind the board.
+        out.hint("run `jired pull` to bring `sprint:` in the issue files up to the new name");
+    }
+    exit
+}
+
+fn close(g: &GlobalArgs, args: &CloseArgs, out: Out) -> Result<ExitCode> {
+    let mut ctx = Context::open(g, out)?;
+    ctx.lock()?;
+    let client = api_client(&mut ctx)?;
+    let sprint = live_sprint(&ctx, client.as_ref(), &args.sprint)?;
+    match sprint.state.as_str() {
+        "closed" => return Err(already(&sprint, "is already closed")),
+        "future" => {
+            return Err(already(
+                &sprint,
+                "has not been started, so there is nothing to close",
+            )
+            .with_hint("`jired sprint start` runs it; deleting one is a job for Jira"))
+        }
+        _ => {}
+    }
+
+    let carry_to = args
+        .move_incomplete_to
+        .as_deref()
+        .map(|wanted| carry_target(&ctx, client.as_ref(), wanted, &sprint))
+        .transpose()?;
+
+    // Read off the working copy, not the snapshot: these are the files a
+    // carry-over edits, so the set that moves is the set that is listed.
+    let incomplete = incomplete_in(&mut ctx, &sprint.name)?;
+    let keys: Vec<String> = incomplete.iter().map(|i| i.key.clone()).collect();
+    let request = close_request(&sprint);
+    // Said before anything moves or closes, in both paths: which issues a close
+    // is about to strand is the thing worth reading, and reading it afterwards
+    // is reading it too late.
+    report_incomplete(&incomplete, carry_to.as_ref(), out);
+
+    if args.dry_run {
+        if let (Some(target), false) = (&carry_to, keys.is_empty()) {
+            out.say(format!("POST /rest/agile/1.0/sprint/{}/issue", target.id));
+            out.say(serde_json::to_string_pretty(
+                &serde_json::json!({ "issues": keys }),
+            )?);
+        }
+        out.say(format!(
+            "POST {}",
+            request["path"].as_str().unwrap_or_default()
+        ));
+        out.say(serde_json::to_string_pretty(&request["body"])?);
+        out.emit(
+            "sprint-close",
+            &serde_json::json!({
+                "dry_run": true,
+                "closed": false,
+                "sprint": serde_json::Value::Null,
+                "request": request,
+                "incomplete": incomplete,
+                "carried_to": carry_to.as_ref().map(brief),
+                "issues": [],
+            }),
+        );
+        return Ok(ExitCode::Success);
+    }
+
+    // Carried first, and the close abandoned if the carry-over fails: an issue
+    // cannot be rescued out of a sprint that is already closed, so the order
+    // that leaves a recoverable state is moves, then close.
+    let mut moved: Vec<Staged> = Vec::new();
+    let mut pushed = None;
+    if let (Some(target), false) = (&carry_to, keys.is_empty()) {
+        let row = SprintRow {
+            id: target.id.clone(),
+            board_id: target.board_id.clone(),
+            name: target.name.clone(),
+            state: target.state.clone(),
+        };
+        moved = stage_moves(&mut ctx, &keys, Some(&row), out)?;
+        let changed: Vec<String> = moved
+            .iter()
+            .filter(|m| m.changed)
+            .map(|m| m.key.clone())
+            .collect();
+        if !changed.is_empty() {
+            let report = push_these(&mut ctx, &changed, false)?;
+            report_push(&report, out);
+            if !report.results.iter().all(|r| r.ok) {
+                out.say(format!(
+                    "{} was left open — the carry-over did not go through",
+                    sprint.name
+                ));
+                out.hint("fix the cause, run `jired push`, then close the sprint again");
+                out.emit(
+                    "sprint-close",
+                    &serde_json::json!({
+                        "dry_run": false,
+                        "closed": false,
+                        "sprint": serde_json::Value::Null,
+                        "request": request,
+                        "incomplete": incomplete,
+                        "carried_to": Some(brief(target)),
+                        "issues": moved,
+                        "push": report,
+                    }),
+                );
+                return Ok(report.exit_code());
+            }
+            out.say(format!(
+                "carried {} issue(s) over to {}",
+                changed.len(),
+                target.name
+            ));
+            pushed = Some(report);
+        }
+    }
+
+    let closed = crate::api::block_on(client.update_sprint(
+        &sprint.id,
+        &SprintUpdate {
+            state: Some("closed".to_string()),
+            ..Default::default()
+        },
+    ))?;
+    remember(&ctx, &closed, out);
+    out.say(sprint_row(&closed));
+    // The closed sprint drops out of `sprints/` on the next pull, and until then
+    // its folder reads like a sprint that is still running.
+    out.hint("run `jired pull` to refresh the grouping folders");
+
+    out.emit(
+        "sprint-close",
+        &serde_json::json!({
+            "dry_run": false,
+            "closed": true,
+            "sprint": closed,
+            "request": request,
+            "incomplete": incomplete,
+            "carried_to": carry_to.as_ref().map(brief),
+            "issues": moved,
+            "push": pushed,
+        }),
+    );
+    Ok(ExitCode::Success)
+}
+
+/// One issue a close would leave behind, as the working copy has it.
+#[derive(Debug, Clone, serde::Serialize)]
+struct Incomplete {
+    key: String,
+    file: String,
+    status: String,
+}
+
+/// The issues this workspace has in a sprint that are not finished.
+///
+/// "Finished" is the status category the last fetch recorded, because a
+/// workflow's own names mean nothing across instances — `Done` on one is
+/// `Готово` on the next. A status jired has never seen counts as unfinished:
+/// carrying an issue that was already done is a move somebody can undo, and
+/// stranding one in a closed sprint is the thing this exists to prevent.
+fn incomplete_in(ctx: &mut Context, sprint: &str) -> Result<Vec<Incomplete>> {
+    let engine = Engine::open(ctx)?;
+    let categories = status_categories(&engine.state.issues()?);
+    let mut out = Vec::new();
+    for (key, file) in engine.projector.scan()? {
+        // A file that will not parse is not a reason to fail a close: `doctor`
+        // is where a broken file gets reported.
+        let Ok(doc) = engine.projector.read(&file.relative) else {
+            continue;
+        };
+        let fm = doc.frontmatter;
+        // Where the issue is *now* is the last entry; an earlier one is history.
+        if !fm
+            .sprint
+            .last()
+            .is_some_and(|s| s.eq_ignore_ascii_case(sprint))
+        {
+            continue;
+        }
+        if categories
+            .get(&fm.status.trim().to_lowercase())
+            .is_some_and(|c| c == "done")
+        {
+            continue;
+        }
+        out.push(Incomplete {
+            key,
+            file: file.relative,
+            status: fm.status,
+        });
+    }
+    Ok(out)
+}
+
+/// Say which issues a close leaves unfinished — the view that otherwise means
+/// reading `jired list --sprint` and comparing it against the board by eye.
+fn report_incomplete(incomplete: &[Incomplete], carried_to: Option<&Sprint>, out: Out) {
+    if incomplete.is_empty() {
+        return;
+    }
+    let keys: Vec<&str> = incomplete.iter().map(|i| i.key.as_str()).collect();
+    match carried_to {
+        Some(target) => out.say(format!(
+            "{} issue(s) are not done and go to {}: {}",
+            keys.len(),
+            target.name,
+            keys.join(", ")
+        )),
+        None => {
+            out.warn(format!(
+                "{} issue(s) are not done and stay in the closed sprint: {}",
+                keys.len(),
+                keys.join(", ")
+            ));
+            out.hint("--move-incomplete-to \"the next sprint\" carries them over instead");
+        }
+    }
+}
+
+/// The sprint a `--move-incomplete-to` names, checked for the two ways it can
+/// be the wrong one.
+fn carry_target(
+    ctx: &Context,
+    client: &dyn JiraApi,
+    wanted: &str,
+    closing: &Sprint,
+) -> Result<Sprint> {
+    let target = live_sprint(ctx, client, wanted)?;
+    if target.id == closing.id {
+        return Err(JiredError::usage(format!(
+            "{} cannot carry its own issues over to itself",
+            closing.name
+        ))
+        .with_hint("name the sprint they should go to, or leave the flag off"));
+    }
+    if target.state == "closed" {
+        return Err(
+            already(&target, "is closed, so nothing can be carried into it")
+                .with_hint("carry them into a running or future sprint"),
+        );
+    }
+    Ok(target)
+}
+
+/// The client every one of these commands needs, opened the one way.
+fn api_client(ctx: &mut Context) -> Result<Box<dyn JiraApi>> {
+    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
+    let account = session.require_account()?;
+    crate::api::build_client(ctx, &account)
+}
+
+/// The sprint a name or an id points at, as the server holds it *now*.
+///
+/// The local cache carries a name and a state and no dates, and every check
+/// these commands make before sending — has it dates, is it already running, is
+/// something else running on its board — is a question about the server. So the
+/// cache resolves the name and the server answers the question.
+fn live_sprint(ctx: &Context, client: &dyn JiraApi, wanted: &str) -> Result<Sprint> {
+    let id = match resolve_sprint(ctx, wanted) {
+        Ok(row) => row.id,
+        // A bare number is an id whatever the cache knows. These commands ask
+        // the server for the sprint regardless, so it is the server that says
+        // whether the id is real, and refusing it here would make a workspace
+        // that has not fetched a dead end.
+        Err(_) if is_id(wanted) => wanted.trim().to_string(),
+        Err(e) => return Err(e),
+    };
+    crate::api::block_on(client.sprint(&id))
+}
+
+fn is_id(wanted: &str) -> bool {
+    let wanted = wanted.trim();
+    !wanted.is_empty() && wanted.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Send one change to a sprint, or print the call it would have been.
+fn send(
+    ctx: &Context,
+    client: &dyn JiraApi,
+    sprint: &Sprint,
+    update: SprintUpdate,
+    dry_run: bool,
+    out: Out,
+) -> Result<ExitCode> {
+    let request = serde_json::json!({
+        "method": "POST",
+        "path": format!("/rest/agile/1.0/sprint/{}", sprint.id),
+        "body": update.to_body(),
+    });
+    if dry_run {
+        out.say(format!(
+            "POST {}",
+            request["path"].as_str().unwrap_or_default()
+        ));
+        out.say(serde_json::to_string_pretty(&request["body"])?);
+        out.emit(
+            "sprint-update",
+            &serde_json::json!({
+                "dry_run": true,
+                "sprint": serde_json::Value::Null,
+                "request": request,
+            }),
+        );
+        return Ok(ExitCode::Success);
+    }
+
+    let updated = crate::api::block_on(client.update_sprint(&sprint.id, &update))?;
+    remember(ctx, &updated, out);
+    out.say(sprint_row(&updated));
+    if let (Some(start), Some(end)) = (&updated.start_date, &updated.end_date) {
+        out.say(format!(
+            "{} → {}",
+            crate::api::model::format_local(start),
+            crate::api::model::format_local(end)
+        ));
+    }
+    if let Some(goal) = updated.goal.as_deref().filter(|g| !g.trim().is_empty()) {
+        out.say(format!("goal: {goal}"));
+    }
+    out.emit(
+        "sprint-update",
+        &serde_json::json!({
+            "dry_run": false,
+            "sprint": updated,
+            "request": request,
+        }),
+    );
+    Ok(ExitCode::Success)
+}
+
+fn close_request(sprint: &Sprint) -> serde_json::Value {
+    serde_json::json!({
+        "method": "POST",
+        "path": format!("/rest/agile/1.0/sprint/{}", sprint.id),
+        "body": { "state": "closed" },
+    })
+}
+
+/// A sprint as the two things another command needs to address it by.
+fn brief(sprint: &Sprint) -> serde_json::Value {
+    serde_json::json!({ "id": sprint.id, "name": sprint.name })
+}
+
+/// "`Sprint 44` is already running" — the same shape for every state refusal,
+/// so the id is always there for whoever is reading the JSON.
+fn already(sprint: &Sprint, what: &str) -> JiredError {
+    JiredError::usage(format!("{} {what}", sprint.name))
+        .with_detail("sprint", sprint.name.clone())
+        .with_detail("sprint_id", sprint.id.clone())
+        .with_detail("state", sprint.state.clone())
+}
+
+/// Jira allows one running sprint per board and answers 400 for the second,
+/// naming nothing. Asking first is what turns that into the sprint's name.
+///
+/// Best-effort: a board that will not answer is not a reason to refuse, because
+/// the server makes this check too and its answer is the one that counts.
+fn check_one_running(client: &dyn JiraApi, board: &str, starting: &Sprint) -> Result<()> {
+    let Ok(sprints) = crate::api::block_on(client.sprints(board)) else {
+        return Ok(());
+    };
+    // Boards over one backlog commonly share a sprint pool, so a running sprint
+    // in the answer is only in the way when it is this board's own.
+    let running = sprints.iter().find(|s| {
+        s.state == "active"
+            && s.id != starting.id
+            && s.board_id.as_deref().is_none_or(|b| b == board)
+    });
+    let Some(running) = running else {
+        return Ok(());
+    };
+    Err(
+        JiredError::usage(format!("board {board} is already running {}", running.name))
+            .with_detail("sprint", running.name.clone())
+            .with_detail("sprint_id", running.id.clone())
+            .with_detail("board", board.to_string())
+            .with_hint(format!(
+                "close it first: `jired sprint close \"{}\"`",
+                running.name
+            )),
+    )
+}
+
+/// What the sprint's dates would be after this change, checked the way
+/// `create` checks the ones it is about to set.
+fn check_order(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Result<()> {
+    match (start, end) {
+        (Some(start), Some(end)) if end <= start => {
+            Err(JiredError::usage("the sprint ends before it starts")
+                .with_detail("start", crate::api::model::format_timestamp(&start))
+                .with_detail("end", crate::api::model::format_timestamp(&end)))
+        }
+        _ => Ok(()),
+    }
+}
+
 fn create(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
-    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
-    let account = session.require_account()?;
-    let client = crate::api::build_client(&mut ctx, &account)?;
+    let client = api_client(&mut ctx)?;
     let project: Option<String> = ctx.resolver.get_quiet("workspace.project")?;
 
     // Boards are what a sprint hangs off, so they are worth a request whichever
@@ -317,12 +907,7 @@ fn create(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
 
     // The same row shape `jired sprints` prints, so the sprint that was just
     // made reads as one of the list it has joined.
-    out.say(format!(
-        "{} {} {}",
-        style::out(CYAN, format!("{:<8}", sprint.id)),
-        style::status(&format!("{:<10}", sprint.state), "new"),
-        sprint.name
-    ));
+    out.say(sprint_row(&sprint));
     out.say(format!("created on {board_name}"));
 
     // Creating a sprint is almost always followed by filling it, and the moves
@@ -587,16 +1172,15 @@ fn parse(text: &str, flag: &str) -> Result<DateTime<Utc>> {
 
 /// What Jira would refuse, or accept and quietly ignore.
 fn check_dates(input: &SprintInput) -> Result<()> {
-    match (input.start, input.end) {
-        (None, Some(_)) => Err(JiredError::usage("an end date needs a start date")
-            .with_hint("pass --start too, or leave both off and set the dates in Jira")),
-        (Some(start), Some(end)) if end <= start => {
-            Err(JiredError::usage("the sprint ends before it starts")
-                .with_detail("start", crate::api::model::format_timestamp(&start))
-                .with_detail("end", crate::api::model::format_timestamp(&end)))
-        }
-        _ => Ok(()),
+    if input.start.is_none() && input.end.is_some() {
+        return Err(needs_a_start());
     }
+    check_order(input.start, input.end)
+}
+
+fn needs_a_start() -> JiredError {
+    JiredError::usage("an end date needs a start date")
+        .with_hint("pass --start too, or leave both off and set the dates in Jira")
 }
 
 /// Put the new sprint in the local cache, so the issue form offers it and a
@@ -608,10 +1192,76 @@ fn remember(ctx: &Context, sprint: &Sprint, out: Out) {
     let saved = crate::store::state::StateStore::open(&ctx.workspace)
         .and_then(|state| state.save_sprints(std::slice::from_ref(sprint)));
     if let Err(e) = saved {
+        // The server has the change either way, so this is a stale cache and
+        // not a failed command; saying which is the difference between running
+        // `fetch` and running the whole thing again.
         out.warn(format!(
-            "{} was created, but the local sprint cache could not be updated ({e}) — \
-             run `jired fetch` to refresh it",
+            "{}: the change went through, but the local sprint cache could not be \
+             updated ({e}) — run `jired fetch` to refresh it",
             sprint.name
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(text: &str) -> Option<DateTime<Utc>> {
+        crate::api::model::parse_timestamp(text)
+    }
+
+    /// The list is a history, so a move appends — and an issue coming back to a
+    /// sprint it has been in before is one entry, not two.
+    #[test]
+    fn a_move_appends_and_never_names_a_sprint_twice() {
+        let mut sprints = vec!["Sprint 41".to_string(), "Sprint 42".to_string()];
+        assert!(set_current_sprint(&mut sprints, Some("Sprint 43")));
+        assert_eq!(sprints, ["Sprint 41", "Sprint 42", "Sprint 43"]);
+
+        // Already there is not a change, and must not stage one.
+        assert!(!set_current_sprint(&mut sprints, Some("sprint 43")));
+
+        assert!(set_current_sprint(&mut sprints, Some("Sprint 41")));
+        assert_eq!(sprints, ["Sprint 42", "Sprint 43", "Sprint 41"]);
+
+        // No sprint at all is what the backlog looks like in a file.
+        assert!(set_current_sprint(&mut sprints, None));
+        assert!(sprints.is_empty());
+        assert!(!set_current_sprint(&mut sprints, None));
+    }
+
+    /// A sprint with dates that do not make sense is refused before it is sent,
+    /// whether the dates are being set or were already there.
+    #[test]
+    fn dates_out_of_order_are_refused_and_a_half_pair_is_named() {
+        assert!(check_order(at("2026-09-01T09:00:00Z"), at("2026-09-15T09:00:00Z")).is_ok());
+        assert!(check_order(at("2026-09-15T09:00:00Z"), at("2026-09-01T09:00:00Z")).is_err());
+        // The same instant twice is a sprint of no length, which Jira takes and
+        // nobody means.
+        assert!(check_order(at("2026-09-01T09:00:00Z"), at("2026-09-01T09:00:00Z")).is_err());
+        // Half a pair is somebody else's problem: `check_dates` decides whether
+        // a missing half is allowed, and this only compares the two.
+        assert!(check_order(at("2026-09-01T09:00:00Z"), None).is_ok());
+        assert!(check_order(None, None).is_ok());
+
+        let err = check_dates(&SprintInput {
+            end: at("2026-09-15T09:00:00Z"),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(err.message.contains("needs a start date"));
+    }
+
+    /// A name resolves against the cache; a bare number does not have to,
+    /// because the server is about to be asked either way.
+    #[test]
+    fn an_id_is_a_run_of_digits_and_nothing_else() {
+        assert!(is_id("43"));
+        assert!(is_id(" 43 "));
+        assert!(!is_id("Sprint 43"));
+        assert!(!is_id("43a"));
+        assert!(!is_id(""));
+        assert!(!is_id("   "));
     }
 }

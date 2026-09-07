@@ -390,7 +390,7 @@ the filename you were just editing instead of retyping the key.
 | `whoami` | which account, which server, and where the credential is kept |
 | `fetch-spec [-o DIR]` | write the server's own description of its REST API into a directory, one file per module, named for the server and its version — see [The server's own API reference](#the-servers-own-api-reference) |
 | `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and is needed only when the project's boards would answer differently; `boards` says which project each board is filed under |
-| `sprint create [NAME]` / `sprint add ISSUES… --sprint S` / `sprint remove ISSUES…` | make a sprint, and move issues in and out of one — see [Sprints](#sprints) |
+| `sprint create [NAME]` / `sprint start\|edit\|close SPRINT` / `sprint add ISSUES… --sprint S` / `sprint remove ISSUES…` | make a sprint, run it, and move issues in and out of one; `close --move-incomplete-to S` carries the unfinished ones over — see [Sprints](#sprints) |
 | `doctor` | check the workspace over and repair it — see below |
 | `config get\|set\|unset\|list\|path\|edit` | read and write settings |
 | `completion <shell>` | print a completion script |
@@ -456,8 +456,9 @@ named something local.
 
 ### Sprints
 
-`jired sprints` lists what a board has, `jired sprint create` adds one, and
-`jired sprint add`/`remove` move issues in and out.
+`jired sprints` lists what a board has, `jired sprint create` adds one,
+`start`/`edit`/`close` run it, and `jired sprint add`/`remove` move issues in and
+out.
 
 ```sh
 jired sprints                                  # the board's sprints, open ones only
@@ -466,6 +467,11 @@ jired sprints --board "Platform Board" --all   # by name, closed ones too
 jired sprint create                            # fill in a form
 jired sprint create "Sprint 44" --start 2026-09-01 --end 2026-09-15
 jired sprint create "Sprint 44" --dry-run      # the exact API call, nothing sent
+
+jired sprint edit "Sprint 44" --goal "Ship SSO."          # a goal after the fact
+jired sprint start "Sprint 44"                            # future → active
+jired sprint start 44 --start 2026-09-01 --end 2026-09-15 # dates and go, in one
+jired sprint close "Sprint 43" --move-incomplete-to "Sprint 44"   # carry the rest over
 
 jired sprint add PROJ-142 PROJ-150 --sprint "Sprint 44"   # stage the move
 jired sprint add PROJ-142 --sprint 44 --push              # and send it
@@ -492,6 +498,26 @@ alone once you type over it — and offers the dates a sprint usually runs
 between: next Monday, and one to four weeks after whatever the start says.
 Without a terminal, `--board` and a name are all it needs; without either, it
 exits 7 naming what is missing.
+
+`sprint start`, `sprint edit` and `sprint close` are the rest of a sprint's life,
+and have no file to stage into either, so they send immediately and take the same
+`-n`. They are one endpoint underneath, and it *merges*: only the flags you give
+are sent, and what is not sent is what the sprint keeps. `edit` is how a goal gets
+set after the sprint exists — `create --goal` only sets one at creation — and
+`--goal ''` takes it back off. `--name` renames, and since issue files spell a
+sprint by name, jired then reminds you to `pull`.
+
+The two things Jira refuses with a 400 that names nothing are refused here first,
+with the reason: a sprint has no dates to run between (pass `--start`/`--end` and
+it sets them and starts it in one call), and the board already has a sprint
+running (named, with the command to close it).
+
+`sprint close` is the half that strands issues. Closing a sprint leaves everything
+unfinished pointing at a closed sprint, so this always names them, and
+`--move-incomplete-to` carries them into the next sprint first — moved and pushed
+before the close, because an issue cannot be got out of a sprint that is already
+closed. "Unfinished" is Jira's own status *category* rather than a status name, so
+it means the same thing on a workflow that says `Done` and one that says `Готово`.
 
 `sprint add` and `sprint remove` are the scriptable single-field commands for an
 issue's sprint, alongside `transition`, `assign` and `comment`: they write the

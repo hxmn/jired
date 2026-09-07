@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/sprint-update/1",
+  "title": "jired sprint start|edit result",
+  "description": "A sprint started, or one whose name, goal or dates changed",
+  "type": "object",
+  "required": [
+    "schema",
+    "dry_run",
+    "sprint",
+    "request"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/sprint-update/1"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "True when --dry-run was given: nothing was sent and `sprint` is null"
+    },
+    "sprint": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The sprint as the server now holds it; null on a dry run",
+      "required": [
+        "id",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "description": "`future`, `active` or `closed`"
+        },
+        "board_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO-8601 in UTC"
+        },
+        "end_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO-8601 in UTC"
+        },
+        "goal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "description": "The API call, sent unless dry_run. The endpoint merges, so the body carries only the fields being changed",
+      "required": [
+        "method",
+        "path",
+        "body"
+      ],
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "body": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

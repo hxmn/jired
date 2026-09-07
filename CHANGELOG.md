@@ -8,6 +8,60 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.12.0] — 2026-09-07
+
+### Breaking
+
+- **`list --json` reports `sprint` as an array, not a string.** It was the
+  current sprint — the last of the ones the issue has been in — while the
+  file's own `sprint:` carries the whole history, so splitting carry-over from
+  new work meant parsing the `.md` files instead of using `--json`. It is now
+  the history, oldest first, exactly as the file has it; an issue in no sprint
+  gets `[]` rather than `null`. A consumer that wants the current sprint takes
+  the last entry. Nothing else moved: `--sprint` still filters on where the
+  issue *is*, and the `sprint` column still prints that, the way the
+  `assignee` column prints a name out of the `@[Name](id)` the JSON carries.
+
+### Added
+
+- **`jired sprint start SPRINT [--goal T] [--start TS] [--end TS]`** moves a
+  sprint from `future` to `active`. Nothing did: `sprint` had `create`, `add`
+  and `remove`, so starting a sprint that already existed with its dates and
+  its issues — every other step of it scriptable — went through the Jira web
+  UI. Like `create`, a sprint has no file to stage into, so this sends
+  immediately and `-n/--dry-run` prints the call.
+- **`jired sprint edit SPRINT [--goal T] [--name T] [--start TS] [--end TS]`**
+  changes a sprint that exists. `create --goal` set a goal only at creation,
+  and after that the field was unreachable — `set` writes issue frontmatter,
+  and a sprint has no file. The endpoint merges, so only the flags given are
+  sent and what is not sent is what the sprint keeps; `--goal ''` is how a goal
+  is taken back off. `--name` renames, and says to `pull` afterwards, since
+  issue files spell a sprint by name.
+- **`jired sprint close SPRINT [--move-incomplete-to SPRINT]`** finishes one,
+  and is the half that strands issues: closing a sprint in the UI leaves
+  everything unfinished pointing at a closed sprint with no carry-over, and
+  jired had no view of that beyond reading `jired list --sprint` and comparing
+  it against the board by eye. It now always names them, and
+  `--move-incomplete-to` carries them into the next sprint — moved and pushed
+  *before* the close, since an issue cannot be got out of a sprint that is
+  already closed, and the close is abandoned if the carry-over fails.
+  "Unfinished" is Jira's own status category rather than a status name, so it
+  means the same on a workflow that says `Done` and one that says `Готово`.
+- **The two 400s Jira answers without saying why are refused at plan time**, as
+  exit 2 with the reason: a sprint with no dates cannot be started — the
+  message names which half is missing, and passing `--start`/`--end` sets them
+  and starts it in one call — and a board runs one sprint at a time, so a
+  second is refused naming the one in the way, with the command to close it.
+  A sprint already `active`, already `closed`, or not yet started says so
+  instead of sending.
+
+### Fixed
+
+- **A status a fixture transitioned to carried no category.** No server sends
+  one, and the category is what `list --category` and `sprint close` read for
+  "is this finished", so an issue moved to `Done` under `JIRED_FIXTURES` looked
+  unfinished to both. Only recordings were affected, never a real instance.
+
 ## [0.11.0] — 2026-09-07
 
 ### Added
