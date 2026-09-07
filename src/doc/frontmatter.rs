@@ -334,6 +334,16 @@ pub fn format_user(user: Option<&crate::api::UserRef>) -> Option<String> {
     user.map(|u| format!("@[{}]({})", u.display_name, u.id))
 }
 
+/// The readable half of `@[Ilya A](5b10a2)`, for output a person reads.
+///
+/// The complement of [`parse_user`], which recovers the half a request needs.
+pub fn display_name(mention: &str) -> String {
+    let name = mention
+        .strip_prefix("@[")
+        .and_then(|rest| rest.split_once("](").map(|(name, _)| name));
+    name.unwrap_or(mention).to_string()
+}
+
 /// Recover the account id from `@[Name](id)`; a bare string is taken as an id.
 pub fn parse_user(value: &str) -> Option<String> {
     let value = value.trim();
@@ -498,5 +508,11 @@ jired:
         // A hand-typed bare id must keep working.
         assert_eq!(parse_user("5b10a2").as_deref(), Some("5b10a2"));
         assert_eq!(parse_user("  "), None);
+
+        assert_eq!(display_name(&text), "Ilya A");
+        // Everything else is passed through: a file edited by hand may hold a
+        // bare name, and showing it is better than showing nothing.
+        assert_eq!(display_name("Ilya A"), "Ilya A");
+        assert_eq!(display_name(""), "");
     }
 }

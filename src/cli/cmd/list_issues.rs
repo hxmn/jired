@@ -51,13 +51,41 @@ pub struct ListArgs {
     #[arg(long, value_name = "USER")]
     pub assignee: Option<String>,
 
-    /// Issues of this type
+    /// Issues of exactly this type, ignoring case — not a substring, so
+    /// `sub-task` does not match `Analytics sub-task`
     #[arg(long, value_name = "TYPE")]
     pub issue_type: Option<String>,
+
+    /// Print these fields, in this order, instead of the default line:
+    /// aligned on a terminal, tab-separated anywhere else
+    #[arg(
+        long,
+        value_name = "COLUMNS",
+        value_delimiter = ',',
+        conflicts_with = "keys"
+    )]
+    pub columns: Vec<Column>,
 
     /// Print only the keys, one per line, for piping into another command
     #[arg(long)]
     pub keys: bool,
+}
+
+/// A field `--columns` can ask for.
+///
+/// Deliberately the fields of a [`Match`] and nothing else: what the human
+/// listing can show is what `--json` already carries, so the two never disagree
+/// about what an issue is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Column {
+    Key,
+    Type,
+    Status,
+    Assignee,
+    Summary,
+    Sprint,
+    Labels,
+    File,
 }
 
 /// One matching issue, as both things a caller might want to address it by.
@@ -121,6 +149,16 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
         for m in &matched {
             out.say(&m.key);
         }
+    } else if !args.columns.is_empty() {
+        let tabs = tab_separated();
+        for line in rows(&matched, &args.columns, tabs) {
+            out.say(line);
+        }
+        // The note that nothing matched is for a person, and a person is at a
+        // terminal — into a pipe it would be a row `cut` cannot tell from data.
+        if matched.is_empty() && !tabs {
+            out.say("no issue in this workspace matches");
+        }
     } else {
         for m in &matched {
             out.say(format!(
@@ -141,6 +179,96 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
         &serde_json::json!({ "issues": matched, "count": matched.len() }),
     );
     Ok(ExitCode::Success)
+}
+
+/// Whether the listing should be tab-separated rather than lined up.
+///
+/// Decided by the stream and not by a flag: columns that line up are for
+/// somebody reading them, and a delimiter `cut -f2` can name is for whatever is
+/// on the other end of the pipe. Neither caller should have to say which they
+/// are, and the padding that helps the first breaks the second.
+fn tab_separated() -> bool {
+    use is_terminal::IsTerminal;
+    !std::io::stdout().is_terminal()
+}
+
+/// The value one column takes for one issue.
+///
+/// Empty where the issue has nothing — an unassigned issue prints a blank cell
+/// rather than a placeholder, because a placeholder is a value a script would
+/// have to know to throw away.
+fn cell(m: &Match, column: Column) -> String {
+    match column {
+        Column::Key => m.key.clone(),
+        Column::Type => m.issue_type.clone(),
+        Column::Status => m.status.clone(),
+        // The name, out of the file's `@[Name](id)`: this is the column a
+        // person reads, and `--json` still carries the id for addressing them.
+        Column::Assignee => m
+            .assignee
+            .as_deref()
+            .map(crate::doc::frontmatter::display_name)
+            .unwrap_or_default(),
+        Column::Summary => m.summary.clone(),
+        Column::Sprint => m.sprint.clone().unwrap_or_default(),
+        Column::Labels => m.labels.join(","),
+        Column::File => m.file.clone(),
+    }
+}
+
+/// One line per issue, in the columns that were asked for.
+fn rows(matched: &[Match], columns: &[Column], tabs: bool) -> Vec<String> {
+    let cells: Vec<Vec<String>> = matched
+        .iter()
+        .map(|m| {
+            columns
+                .iter()
+                // A tab or a newline inside a summary would forge a column
+                // boundary in the output, which is worse than losing it.
+                .map(|&c| cell(m, c).replace(['\t', '\n', '\r'], " "))
+                .collect()
+        })
+        .collect();
+    if tabs {
+        return cells.iter().map(|row| row.join("\t")).collect();
+    }
+    // Measured in characters rather than bytes: a Cyrillic summary is half as
+    // many characters as it is bytes, and a byte width would over-pad it.
+    let widths: Vec<usize> = (0..columns.len())
+        .map(|i| {
+            cells
+                .iter()
+                .map(|row| row[i].chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    cells
+        .iter()
+        .map(|row| {
+            let mut line = String::new();
+            for (i, value) in row.iter().enumerate() {
+                let last = i + 1 == row.len();
+                // Padded before painting, like the default listing: an escape
+                // counts towards a format width and would knock the following
+                // columns out of line. The last column is not padded at all.
+                let text = match last {
+                    true => value.clone(),
+                    false => format!("{value:<width$}", width = widths[i]),
+                };
+                line.push_str(&match columns[i] {
+                    Column::Key => style::out(CYAN, text),
+                    _ => text,
+                });
+                if !last {
+                    line.push(' ');
+                }
+            }
+            // An empty trailing cell leaves the separator behind it, and a line
+            // ending in spaces is invisible until something copies it back out.
+            line.trim_end().to_string()
+        })
+        .collect()
 }
 
 /// The status names this workspace has seen, each with the category the server
@@ -355,6 +483,88 @@ mod tests {
         // It has been in 5; it is not in 5.
         a.sprint = Some("TSK Спринт 5".into());
         assert!(!matches(&issue(), &a, None));
+    }
+
+    fn found() -> Vec<Match> {
+        let fm = issue();
+        vec![
+            Match {
+                key: "TSK-1".into(),
+                file: "TSK-1.md".into(),
+                summary: fm.summary.clone(),
+                status: fm.status.clone(),
+                issue_type: fm.issue_type.clone(),
+                labels: fm.labels.clone(),
+                assignee: fm.assignee.clone(),
+                sprint: fm.sprint.last().cloned(),
+            },
+            Match {
+                key: "TSK-102".into(),
+                file: "TSK-102.md".into(),
+                summary: "Fix\tthe login".into(),
+                status: "Done".into(),
+                issue_type: "Sub-task".into(),
+                labels: Vec::new(),
+                assignee: None,
+                sprint: None,
+            },
+        ]
+    }
+
+    /// Into a pipe the columns are a record `cut -f2` can read, so nothing is
+    /// padded and nothing but a tab separates two values.
+    #[test]
+    fn columns_are_tab_separated_off_a_terminal() {
+        let columns = [Column::Key, Column::Type, Column::Assignee];
+        let lines = rows(&found(), &columns, true);
+        assert_eq!(lines[0], "TSK-1\tTask\tMaria Nilsson");
+        // An issue with nothing there keeps its cell: a row of a fixed width is
+        // what makes the field after it addressable by number.
+        assert_eq!(lines[1], "TSK-102\tSub-task\t");
+    }
+
+    /// On a terminal the same values line up, which is the whole reason a
+    /// person asked for a column rather than for `--json`.
+    ///
+    /// No `key` column here on purpose: it is the one that is painted, and the
+    /// colour mode is process-global, so asserting on it would race whichever
+    /// other test set it last.
+    #[test]
+    fn columns_line_up_on_a_terminal() {
+        let columns = [Column::Type, Column::Status, Column::Summary];
+        let lines = rows(&found(), &columns, false);
+        assert_eq!(lines[0], "Task     In Progress [ALL] Реализовать иерархию");
+        assert_eq!(lines[1], "Sub-task Done        Fix the login");
+    }
+
+    /// A tab inside a summary would forge a column boundary, which is worse
+    /// than losing it; a trailing empty cell must not leave whitespace behind.
+    #[test]
+    fn a_value_cannot_forge_a_column_boundary() {
+        let columns = [Column::Type, Column::Summary, Column::Assignee];
+        assert_eq!(
+            rows(&found(), &columns, true)[1],
+            "Sub-task\tFix the login\t"
+        );
+        let aligned = rows(&found(), &columns, false);
+        assert!(aligned[1].ends_with("Fix the login"), "{:?}", aligned[1]);
+    }
+
+    /// The nine type names on the instance this came from differ by a prefix,
+    /// so a substring match would answer a different question: `sub-task` is
+    /// not `Analytics sub-task`, and the docs promise as much.
+    #[test]
+    fn a_type_matches_the_whole_name_ignoring_case() {
+        let mut a = args();
+        a.issue_type = Some("TASK".into());
+        assert!(matches(&issue(), &a, None));
+
+        let mut sub = issue();
+        sub.issue_type = "Analytics sub-task".into();
+        a.issue_type = Some("sub-task".into());
+        assert!(!matches(&sub, &a, None));
+        a.issue_type = Some("analytics sub-task".into());
+        assert!(matches(&sub, &a, None));
     }
 
     #[test]

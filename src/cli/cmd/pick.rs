@@ -12,6 +12,7 @@
 //! priority:asc` and `^s` in the picker are two spellings of one thing.
 
 use crate::cli::context::Context;
+use crate::doc::frontmatter::display_name;
 use crate::error::{JiredError, Result};
 use crate::project::Projector;
 use crate::store::state::StateStore;
@@ -183,26 +184,4 @@ fn issues(ctx: &mut Context, listing: Listing) -> Result<Vec<KnownIssue>> {
         });
     }
     Ok(issues)
-}
-
-/// The readable half of the `@[Ilya A](5b10a2)` spelling a file carries.
-fn display_name(mention: &str) -> String {
-    let name = mention
-        .strip_prefix("@[")
-        .and_then(|rest| rest.split_once("](").map(|(name, _)| name));
-    name.unwrap_or(mention).to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_mention_reads_as_the_name_inside_it() {
-        assert_eq!(display_name("@[Ilya A](5b10a2)"), "Ilya A");
-        // Everything else is passed through: a file edited by hand may hold a
-        // bare name, and showing it is better than showing nothing.
-        assert_eq!(display_name("Ilya A"), "Ilya A");
-        assert_eq!(display_name(""), "");
-    }
 }

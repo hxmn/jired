@@ -5700,6 +5700,55 @@ fn list_keys_pipes_into_the_commands_that_edit() {
     assert!(ws.read(ISSUE_FILE).contains("- picked"));
 }
 
+/// The default line is key, status and summary, which cannot answer "which of
+/// these are Tasks, and who has them" on an instance whose type names differ by
+/// a prefix. That question was being answered by piping `--json` through a
+/// parser; `--columns` answers it with `cut`.
+#[test]
+fn list_columns_pick_the_fields_and_tab_separate_them_off_a_terminal() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws
+        .cmd(&["list", "--columns", "key,type,assignee", "--label", "auth"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    // stdout here is a pipe, so the row is a record: one tab per boundary and
+    // no padding, which is what makes the second field addressable by number.
+    let fields: Vec<&str> = text.trim_end().split('\t').collect();
+    assert_eq!(fields[0], "PROJ-142", "{text:?}");
+    assert_eq!(
+        fields[1],
+        ws.json(&["list", "--label", "auth"])["issues"][0]["type"]
+    );
+    // The name out of `@[Name](id)`: the id stays in `--json`.
+    assert_eq!(fields[2], "Ilya A", "{text:?}");
+
+    // Order is the caller's, and a column can be left out.
+    let only = ws
+        .cmd(&["list", "--columns", "status,key", "--label", "auth"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(only.stdout).unwrap().trim_end(),
+        "In Progress\tPROJ-142"
+    );
+
+    // A column jired has no field for is refused where the typo is on screen,
+    // rather than printing a listing that quietly lacks it.
+    let bad = ws.cmd(&["list", "--columns", "asignee"]).output().unwrap();
+    assert_eq!(bad.status.code(), Some(2));
+    // `--keys` is the same choice made differently, so asking for both is not a
+    // question with an answer.
+    let both = ws
+        .cmd(&["list", "--keys", "--columns", "key"])
+        .output()
+        .unwrap();
+    assert_eq!(both.status.code(), Some(2));
+}
+
 /// "Raise an issue in a sprint" was three steps and a YAML edit: create the
 /// file, edit the frontmatter by hand, push. With the create call sending every
 /// field, it is one command.

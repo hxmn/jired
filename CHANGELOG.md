@@ -8,6 +8,38 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.11.0] — 2026-09-07
+
+### Added
+
+- **`list --columns key,type,status,assignee,summary`** prints the fields it
+  names, in the order it names them, out of `key`, `type`, `status`,
+  `assignee`, `summary`, `sprint`, `labels` and `file`. The default line — key,
+  status, summary — could not say which of 64 issues were `Task`s or who had
+  them on an instance whose nine type names differ by a prefix, and the answer
+  was `--json` through a parser. The layout follows the stream rather than a
+  flag: padded to line up when stdout is a terminal, one tab per boundary when
+  it is not, so `jired list --columns key,type | cut -f2` needs no JSON parser.
+  An issue with nothing in a column gets an empty cell rather than a
+  placeholder, and a tab inside a summary is flattened rather than allowed to
+  forge a column boundary. `assignee` is the readable half of `@[Name](id)`;
+  the id is still in `--json`. Nothing about the default listing changed.
+
+### Documentation
+
+- **`--issue-type` says that it matches the whole name.** It was documented as
+  "issues of this type", which reads as a substring next to `--assignee` ("any
+  part of the name, or the id") one row above it — and under a substring
+  `--issue-type sub-task` would have swept up `Analytics sub-task`,
+  `(АБВ) sub-task` and `Sub-task bug`. It is exact and case-insensitive, in
+  `--help`, in the generated workspace docs and in the specification, and there
+  is now a test holding it to that.
+- **The generated workspace docs say what bare `jired list` prints.** They
+  described `--keys` and `--json` and never the table in between, which left
+  parsing the whole JSON document looking like the only structured option.
+- `--issue-type` is spelled that way in `README.md` and `docs/plan/commands.md`,
+  both of which advertised a `--type` the CLI has never taken.
+
 ## [0.10.0] — 2026-08-31
 
 ### Breaking

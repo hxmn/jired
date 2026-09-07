@@ -725,7 +725,9 @@ pub fn render() -> String {
     s.push_str(
         "`jired list` matches the issue files already on disk — no network, and \
          nothing is sent. Filters combine, and an issue has to match all of \
-         them.\n\n",
+         them. Bare, it prints a line per matching issue — key, status, \
+         summary; `--columns` picks the fields instead, `--keys` prints the key \
+         alone, and `--json` the lot.\n\n",
     );
     s.push_str("| Flag | Matches |\n|---|---|\n");
     s.push_str("| `--sprint S` | issues whose *current* sprint is this one |\n");
@@ -734,8 +736,9 @@ pub fn render() -> String {
     s.push_str("| `--category new\\|indeterminate\\|done` | Jira's own bucket behind the status, the same across renamed workflows |\n");
     s.push_str("| `--assignee U` | any part of the name, or the id |\n");
     s.push_str("| `--label L` | issues carrying this label |\n");
-    s.push_str("| `--issue-type T` | issues of this type |\n");
+    s.push_str("| `--issue-type T` | issues of exactly this type, ignoring case — *not* a substring, so `sub-task` does not match `Analytics sub-task` |\n");
     s.push_str("| `--summary-contains TEXT` | case-insensitive substring of the summary |\n");
+    s.push_str("| `--columns key,type,status,assignee,summary` | print these fields, in this order, instead of the default line |\n");
     s.push_str("| `--keys` | print only the keys, one per line |\n\n");
     s.push_str(
         "\"Not finished yet\" is `--category new` plus `--category indeterminate` \
@@ -746,8 +749,17 @@ pub fn render() -> String {
         "`--keys` is what makes the rest composable: `jired list --sprint \
          \"Sprint 7\" --status \"To Do\" --keys` feeds `jired set`, `jired label`, \
          `jired transition` or `jired sprint add`, all of which take several \
-         keys. Use `--json` instead when you need more than the key. Searching \
-         the *server* rather than the working copy is `jired search JQL`.\n\n",
+         keys. Searching the *server* rather than the working copy is `jired \
+         search JQL`.\n\n",
+    );
+    s.push_str(
+        "`--columns` takes any of `key`, `type`, `status`, `assignee`, \
+         `summary`, `sprint`, `labels` and `file`, in any order, and is \
+         tab-separated whenever stdout is not a terminal — `jired list \
+         --columns key,type | grep -P '\\tBug$'` needs no JSON parser. The \
+         values are the ones `--json` carries, except that `assignee` is the \
+         name out of `@[Name](id)`; reach for `--json` when you need the id, a \
+         field no column offers, or a document rather than a table.\n\n",
     );
 
     s.push_str("## Sprints\n\n");

@@ -827,7 +827,7 @@ across instances and the only one nobody can read; finding out what
 the name or the id, `--custom` narrows to the instance's own.
 JSON: `{"schema":"jired/fields/1","count":42,"fields":[{"id","name","custom","schema_type","items"}]}`.
 
-### `jired list [--summary-contains T] [--label L] [--status S…] [--not-status S…] [--category new|indeterminate|done] [--sprint S] [--assignee U] [--type T] [--keys]`
+### `jired list [--summary-contains T] [--label L] [--status S…] [--not-status S…] [--category new|indeterminate|done] [--sprint S] [--assignee U] [--issue-type T] [--columns COLS] [--keys]`
 `search` is JQL on the server; this is its offline half, and the other half of
 any bulk edit — choosing what to edit. Without it the choice was a `grep` over
 the `.md` files, which means the caller writing regexes against jired's own
@@ -843,9 +843,13 @@ where a broken file is reported.
 Every filter is a conjunction, and every comparison ignores case: these are
 values read off a screen and typed back. `--summary-contains` is a substring,
 because that is what looking for `[ALL]` means; the rest match a whole value,
-because a status half-named is a different status. `--assignee` is a substring of
-the file's `@[Name](id)`, so either half finds the person. `--sprint` asks where
-the issue *is*, which is the last entry of its sprint history.
+because a status half-named is a different status. `--issue-type` is one of
+those: an instance whose nine type names differ by a prefix — `Task`, `Sub-task`,
+`Analytics sub-task`, `Sub-task bug` — would answer a different question under a
+substring, so `--issue-type sub-task` is `Sub-task` and nothing else.
+`--assignee` is the exception it looks like it is not: a substring of the file's
+`@[Name](id)`, so either half finds the person. `--sprint` asks where the issue
+*is*, which is the last entry of its sprint history.
 
 A repeated `--status` is the one disjunction — an issue is in one status, so
 several can only mean "any of" — and `--not-status` (also repeatable) excludes
@@ -858,9 +862,24 @@ classification, read off the snapshots — every status a workflow uses is on so
 pulled issue — so a status jired has never seen (typed into a file by hand) has
 no category and `--category` does not claim it.
 
-`--keys` prints the keys alone, one per line, with no heading, count or colour,
-so the output is an argument list:
+Bare, it prints a line per matching issue: key, status, summary. `--keys` prints
+the keys alone, one per line, with no heading, count or colour, so the output is
+an argument list:
 `jired list --keys --label regular | xargs jired sprint add --sprint "Sprint 44"`.
+
+`--columns` names the fields instead, in the order it names them, out of `key`,
+`type`, `status`, `assignee`, `summary`, `sprint`, `labels` and `file` — the
+fields of the JSON document and nothing besides, so the two cannot disagree
+about what an issue is. It answers the question the default line cannot: which of
+these are `Task`s and who has them, on an instance where the type names differ by
+a prefix. The layout follows the stream rather than a flag, because the caller
+should not have to say which of the two it is: columns are padded to line up when
+stdout is a terminal and separated by a single tab when it is not, so
+`jired list --columns key,type,assignee | cut -f2` works without a JSON parser.
+An issue with nothing in a column gets an empty cell, never a placeholder, and a
+tab or newline inside a value is flattened to a space rather than being allowed
+to forge a column boundary. `assignee` is the name out of `@[Name](id)`; the id
+is in `--json`, which is also where anything no column offers lives.
 JSON: `{"schema":"jired/list/1","count":2,"issues":[{"key","file","summary","status","type","labels","assignee","sprint"}]}`.
 
 ### `jired label add|remove|set LABEL ISSUES… [--push] [--dry-run]`
