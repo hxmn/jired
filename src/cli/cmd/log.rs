@@ -4,6 +4,11 @@
 //! about, merged into one newest-first list. Name an issue and it narrows to
 //! that issue's history.
 //!
+//! A field whose old and new values are short reads as `from → to`. One whose
+//! values are prose — a description, an instance's own "Acceptance Criteria" —
+//! reads as a unified diff instead: Jira hands back the whole text on both
+//! sides, and a page of it does not fit through a column layout.
+//!
 //! Changelogs are fetched per issue and cached, rather than pulled for every
 //! issue during `fetch`: they are large, rarely needed, and asking for them
 //! wholesale is the difference between a fast sync and a slow one. So the first
@@ -21,6 +26,7 @@ use crate::sync::progress::Progress;
 use crate::sync::Engine;
 use chrono::{DateTime, Duration, Utc};
 use clap::Args;
+use similar::TextDiff;
 
 #[derive(Args, Debug, Clone)]
 pub struct LogArgs {
@@ -285,6 +291,121 @@ fn fetch_into(
     Ok(())
 }
 
+/// The unified diff between the two values of one changed field.
+struct Prose {
+    added: usize,
+    removed: usize,
+    /// Unified diff lines, signs and `@@` headers included, indented by nobody.
+    lines: Vec<String>,
+    /// How many lines the cap left out.
+    hidden: usize,
+}
+
+/// Everything either value may spend on the `from → to` line before the field
+/// is treated as prose.
+///
+/// The row already costs four spaces of indent, sixteen of field name and three
+/// for the arrow, so this is what is left of a narrow terminal. It is a budget
+/// rather than a list of field names on purpose: an instance's own "Acceptance
+/// Criteria" is as much prose as `description` is, and jired does not know its
+/// name — but it can see that what came back does not fit on a line.
+const ARROW_BUDGET: usize = 56;
+
+/// How much of one field's diff a log is willing to spend lines on.
+///
+/// `jired diff` shows one issue at a time and can print everything; a log is a
+/// scan over many entries, and a description rewritten wholesale would bury the
+/// twenty other things that happened that week.
+const MAX_DIFF_LINES: usize = 30;
+
+/// The diff to show for a field, or `None` when `from → to` still reads.
+///
+/// Prose is decided by the values, not the field: Jira hands back the whole old
+/// and new text of a description in one changelog item, and printing that as
+/// `from → to` puts a page of text through a column layout — the newlines land
+/// in the middle of the row and the reader has to spot the arrow to know which
+/// half is which.
+fn prose_diff(from: &str, to: &str) -> Option<Prose> {
+    let long = from.chars().count() > ARROW_BUDGET || to.chars().count() > ARROW_BUDGET;
+    if !(long || from.contains('\n') || to.contains('\n')) {
+        return None;
+    }
+    // A last line that ends like every other one, so that appending a paragraph
+    // is not reported as an edit to the paragraph above it.
+    let (from, to) = (line_terminated(from), line_terminated(to));
+    let diff = TextDiff::from_lines(from.as_ref(), to.as_ref());
+    let mut added = 0;
+    let mut removed = 0;
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            similar::ChangeTag::Insert => added += 1,
+            similar::ChangeTag::Delete => removed += 1,
+            similar::ChangeTag::Equal => {}
+        }
+    }
+
+    let body = diff
+        .unified_diff()
+        .context_radius(2)
+        // The marker says something about the text jired synthesised, not about
+        // the text Jira stored.
+        .missing_newline_hint(false)
+        .to_string();
+    let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
+    // Values that differ only in a trailing newline diff to nothing; the arrow
+    // form still describes them, so let it.
+    if lines.is_empty() {
+        return None;
+    }
+    let hidden = lines.len().saturating_sub(MAX_DIFF_LINES);
+    lines.truncate(MAX_DIFF_LINES);
+    Some(Prose {
+        added,
+        removed,
+        lines,
+        hidden,
+    })
+}
+
+/// Text whose last line ends like every other line. Empty text stays empty, so
+/// a field that had no value diffs as additions alone.
+fn line_terminated(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.is_empty() || s.ends_with('\n') {
+        std::borrow::Cow::Borrowed(s)
+    } else {
+        std::borrow::Cow::Owned(format!("{s}\n"))
+    }
+}
+
+fn render_prose(field: &str, prose: &Prose, out: Out) {
+    out.say(format!(
+        "    {} {} {}",
+        format_args!("{:<16}", field),
+        style::out(GREEN, format!("+{}", prose.added)),
+        style::out(RED, format!("-{}", prose.removed)),
+    ));
+    for line in &prose.lines {
+        // Colouring the body is the difference between reading a diff and
+        // counting `+` signs — the same painting `jired diff` does.
+        let painted = match line.chars().next() {
+            Some('+') => style::out(GREEN, line),
+            Some('-') => style::out(RED, line),
+            Some('@') => style::out(CYAN, line),
+            _ => line.clone(),
+        };
+        out.say(format!("      {painted}"));
+    }
+    if prose.hidden > 0 {
+        out.say(format!(
+            "      {}",
+            style::out(
+                DIM,
+                format!("… {} more lines — --json for the whole text", prose.hidden)
+            )
+        ));
+    }
+}
+
 fn render(entries: &[LogEntry], total: usize, one: Option<&str>, args: &LogArgs, out: Out) {
     if entries.is_empty() {
         // History that exists but sits outside the window is a different answer
@@ -339,6 +460,12 @@ fn render(entries: &[LogEntry], total: usize, one: Option<&str>, args: &LogArgs,
             out.say(head);
         }
         for item in &e.entry.items {
+            let from = item.from.as_deref().unwrap_or_default();
+            let to = item.to.as_deref().unwrap_or_default();
+            if let Some(prose) = prose_diff(from, to) {
+                render_prose(&item.field, &prose, out);
+                continue;
+            }
             // Red out, green in: the same reading `diff` and `pull` already ask
             // for, so a changelog entry needs no second vocabulary.
             out.say(format!(
@@ -457,6 +584,76 @@ mod tests {
         });
         apply_limit(&mut entries, Limit::Count(20), at("2026-09-07T12:00:00Z"));
         assert_eq!(entries.len(), 1);
+    }
+
+    /// A status or a priority is exactly what the arrow form is for.
+    #[test]
+    fn a_short_change_stays_on_one_line() {
+        assert!(prose_diff("To Do", "In Progress").is_none());
+        assert!(prose_diff("", "auth backend").is_none());
+        assert!(prose_diff("Medium", "High").is_none());
+    }
+
+    #[test]
+    fn a_change_that_does_not_fit_the_row_becomes_a_diff() {
+        let from = "The login form rejects a correct password on the second attempt.";
+        let to = "The login form rejects a correct password on every attempt after the first.";
+        let prose = prose_diff(from, to).expect("too long for the arrow");
+        assert_eq!((prose.added, prose.removed), (1, 1));
+        assert!(prose.lines.iter().any(|l| l.starts_with("@@")));
+        assert!(prose.lines.contains(&format!("-{from}")));
+        assert!(prose.lines.contains(&format!("+{to}")));
+    }
+
+    /// The point of the whole thing: only the edited line is red and green, and
+    /// the paragraphs around it are printed once rather than twice.
+    #[test]
+    fn a_multi_line_change_shows_only_what_moved() {
+        let from = "Steps:\n\n1. Log in\n2. Log out\n3. Log in again\n";
+        let to = "Steps:\n\n1. Log in\n2. Wait five minutes\n3. Log in again\n";
+        let prose = prose_diff(from, to).expect("newlines make it prose");
+        assert_eq!((prose.added, prose.removed), (1, 1));
+        assert!(prose.lines.contains(&"-2. Log out".to_string()));
+        assert!(prose.lines.contains(&"+2. Wait five minutes".to_string()));
+        assert!(prose.lines.contains(&" 3. Log in again".to_string()));
+        assert_eq!(
+            prose.lines.iter().filter(|l| l.starts_with('+')).count(),
+            1,
+            "the unchanged lines are context, not additions"
+        );
+    }
+
+    /// A description written where there was none is all additions, and the
+    /// empty side must not show up as a line that was removed.
+    #[test]
+    fn a_field_filled_in_from_nothing_is_additions_alone() {
+        let prose = prose_diff("", "One line.\nAnd another.\n").expect("prose");
+        assert_eq!((prose.added, prose.removed), (2, 0));
+        assert!(!prose.lines.iter().any(|l| l.starts_with('-')));
+    }
+
+    /// A log is a scan over many entries, so one rewritten description is
+    /// capped rather than allowed to bury the week.
+    #[test]
+    fn a_wholesale_rewrite_is_capped_and_says_so() {
+        let from: String = (0..80).map(|i| format!("old line {i}\n")).collect();
+        let to: String = (0..80).map(|i| format!("new line {i}\n")).collect();
+        let prose = prose_diff(&from, &to).expect("prose");
+        assert_eq!((prose.added, prose.removed), (80, 80));
+        assert_eq!(prose.lines.len(), MAX_DIFF_LINES);
+        assert_eq!(
+            prose.hidden,
+            161 - MAX_DIFF_LINES,
+            "one @@ header and 160 lines"
+        );
+    }
+
+    /// Nothing to show is the arrow's business: a header reading `+0 -0` over
+    /// an empty body would be a change jired invented.
+    #[test]
+    fn a_value_that_only_gained_a_line_ending_is_not_a_diff() {
+        let long = "x".repeat(ARROW_BUDGET + 1);
+        assert!(prose_diff(&long, &format!("{long}\n")).is_none());
     }
 
     #[test]

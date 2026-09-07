@@ -8,6 +8,22 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.13.1] — 2026-09-07
+
+### Fixed
+
+- **`jired log` diffs a changed text field instead of printing both copies of
+  it.** Jira's changelog carries the whole old and new text of a description, so
+  `description  <the old page> → <the new page>` was a page of prose fed through
+  a column layout: the newlines landed mid-row and finding the arrow was how you
+  told the two apart. A field whose values are prose now prints a unified diff
+  under its name, headed with what it gained and lost and coloured the way
+  `jired diff` colours one. Which fields those are is decided by the values —
+  a newline, or a value too long for the row — and not by a list of names, so an
+  instance's own "Acceptance Criteria" is diffed and a status is not: short
+  changes still read as `from → to`. One field's diff stops at 30 lines and says
+  how many it left; `--json` is unchanged and still carries both texts whole.
+
 ## [0.13.0] — 2026-09-07
 
 ### Added

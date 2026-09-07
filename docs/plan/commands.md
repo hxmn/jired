@@ -374,6 +374,17 @@ loud rather than left to be discovered.
 Changelog entries newest first, each tagged with its issue. With no `ISSUE` it
 covers the whole workspace, the way `git log` does; naming one narrows to it.
 
+A field whose values are short prints as `field  from → to`. One whose values
+are prose prints as a unified diff under the field name, headed with what it
+gained and lost — Jira's changelog carries the *whole* old and new text of a
+description, and a page of it does not fit through a column layout. Which it is
+is decided by the values and not by a list of field names, since an instance's
+own "Acceptance Criteria" is as much prose as `description` is: a value with a
+newline in it, or one too long for the row, is diffed. The text is the server's
+own, not jired's markdown rendering of it, and a single field's diff is capped
+at 30 lines so a rewritten description cannot bury the rest of the week —
+`--json` still carries both texts whole, diffed by nobody.
+
 `--limit` says how much of the log to show, as either a count of entries (`20`,
 the default) or a span back from now — `1d`, `2w`, `36h`, `90m`, `1d12h`. Which
 was meant is unambiguous from the spelling: a bare number is a count, a unit

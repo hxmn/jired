@@ -4030,6 +4030,51 @@ fn log_takes_a_span_as_a_limit() {
     );
 }
 
+/// A description change carries the whole old and new text on both sides. Put
+/// through the `from → to` row it is a page of prose with an arrow somewhere in
+/// it; as a diff it is the line that moved, with the paragraph around it shown
+/// once. Short changes keep the row, which is what the row is good at.
+#[test]
+fn log_diffs_a_text_field_and_leaves_short_changes_alone() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.cmd(&["log", "PROJ-142"]).output().unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        printed.contains("-2. Log out") && printed.contains("+2. Wait five minutes"),
+        "the edited line should be the only one signed:\n{printed}"
+    );
+    assert!(
+        printed.contains(" 3. Log in again"),
+        "the line after it is context:\n{printed}"
+    );
+    assert!(
+        printed.contains("description") && printed.contains("+1") && printed.contains("-1"),
+        "the field is headed with what it gained and lost:\n{printed}"
+    );
+    assert!(
+        !printed.contains("1. Log in\n2. Log out\n3. Log in again → "),
+        "the arrow row must not be used for prose:\n{printed}"
+    );
+    // The short changes in the same entry are untouched.
+    assert!(
+        printed.contains("Medium → High") && printed.contains("To Do → In Progress"),
+        "a status or a priority still reads as one line:\n{printed}"
+    );
+
+    // The JSON is the record: it keeps both texts whole, diffed by nobody.
+    let report = ws.json(&["log", "PROJ-142"]);
+    let items = report["entries"][0]["items"].as_array().unwrap();
+    let description = items.iter().find(|i| i["field"] == "description").unwrap();
+    assert!(description["from"]
+        .as_str()
+        .unwrap()
+        .contains("2. Log out\n3. Log in again"));
+}
+
 #[test]
 fn log_refuses_a_limit_that_is_neither_a_count_nor_a_span() {
     let ws = Ws::new();

@@ -378,7 +378,7 @@ the filename you were just editing instead of retyping the key.
 | `attachments pull [ISSUES…]` / `list` | download attachment content over the stubs, or show what is present |
 | `logwork [ISSUE] [TIME]` | book time — `jired logwork PROJ-142 "2h 30m"`; with either missing it opens a form, `--push` sends it straight away |
 | `report time` | who booked how much time, a row per person and a column per day, off the files already on disk; `--days N` (default 7) and `--show-issues`, both of which the screen can change while it is open |
-| `log [ISSUE]` | what changed, newest first — every issue in the workspace, or just one; `--limit` takes a count (`20`, the default) or a span back from now (`1d`, `2w`, `36h`, `90m`), `--refresh` asks the server |
+| `log [ISSUE]` | what changed, newest first — every issue in the workspace, or just one; a short change reads as `from → to` and an edited description reads as a diff; `--limit` takes a count (`20`, the default) or a span back from now (`1d`, `2w`, `36h`, `90m`), `--refresh` asks the server |
 | `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag) |
 | `list [--summary-contains T] [--label L] [--status S…] [--not-status S…] [--category new\|indeterminate\|done] [--sprint S] [--assignee U] [--issue-type T]` | the same question asked of the working copy, offline; `--status` repeats to mean "any of", `--category` is Jira's own three-way reading of any workflow ("not finished yet" is `--not-status Done` on one instance and three flags on the next), `--issue-type` matches the whole name and not a substring; prints key, status and summary, or the fields `--columns key,type,assignee` names, or keys alone with `--keys`, for piping |
 | `show ISSUE [--raw]` | everything the workspace knows about one issue; `--raw` is the server's own payload, unset fields included |
@@ -404,6 +404,32 @@ before rewriting the file from the server. An op the server did not act on is
 `failed`, carrying the request that was sent; the issue is `ok: false`, the push
 exits 10, and your edit is still in the file — nothing is overwritten on the
 strength of a success that was not one.
+
+### History
+
+`jired log` is what changed and who changed it, newest first, over one issue or
+the whole workspace. `--limit` is either a count or a span back from now, so
+"since yesterday" is a question you can ask directly:
+
+```
+$ jired log --limit 1d
+PROJ-142  2026-08-16 14:03:00  Ilya A
+    priority         Medium → High
+    description      +1 -1
+      @@ -2,4 +2,4 @@
+
+       1. Log in
+      -2. Log out
+      +2. Wait five minutes
+       3. Log in again
+```
+
+A short change reads as `from → to`. A field carrying prose is diffed instead —
+Jira's changelog hands back the whole old and new text of a description, and a
+page of it does not fit on a row. jired decides by the values, not by the field
+name, so an instance's own "Acceptance Criteria" is diffed too. The diff is of
+the server's own text rather than jired's markdown rendering of it, and one
+field is capped at 30 lines; `--json` carries both texts whole.
 
 ### The issue picker
 

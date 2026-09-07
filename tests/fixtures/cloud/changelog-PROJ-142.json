@@ -25,6 +25,11 @@
         "field": "labels",
         "from": null,
         "to": "auth backend"
+      },
+      {
+        "field": "description",
+        "from": "Steps:\n\n1. Log in\n2. Log out\n3. Log in again\n",
+        "to": "Steps:\n\n1. Log in\n2. Wait five minutes\n3. Log in again\n"
       }
     ]
   }
