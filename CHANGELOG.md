@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.14.1] — 2026-09-07
+
+### Changed
+
+- **`jired log` separates its entries.** One blank line between them, the way
+  `git log` separates commits: an entry is as many rows as it changed things,
+  and without a gap a three-field edit and three one-field edits read the same.
+  The key is bold as well as cyan, being what the eye lands on to find where an
+  entry starts. A blank line now means only one thing, so quoted text — a prose
+  diff, a comment, a worklog note — prints under a `│` gutter; a description
+  with a blank paragraph in it used to split its own entry in two.
+
 ## [0.14.0] — 2026-09-07
 
 ### Breaking

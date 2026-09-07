@@ -385,7 +385,13 @@ today", and time booked this morning for last Tuesday happened this morning.
 `report time` is the command that reads a worklog the other way round.
 
 Each entry heads with when, the key, the issue's summary and the author, in
-columns measured from the data. The timestamp prints only the part the reader
+columns measured from the data, and one blank line separates it from the next —
+an entry is as many rows as it changed things, and without the gap a three-field
+edit and three one-field edits read the same. A blank line therefore means only
+one thing, which is why quoted text (a prose diff, a comment, a worklog note)
+prints under a `│` gutter: a description with a blank paragraph in it would
+otherwise split its own entry in two. The key is bold as well as cyan, being
+what the eye lands on to find where an entry starts. The timestamp prints only the part the reader
 does not already know — `14:03` inside a day, `08-16 14:03` beyond one,
 `2025-11-02 16:20` in another year — in local time, like everything jired puts
 on a screen. The summary is the snapshot's current one, not the summary as it
@@ -404,8 +410,9 @@ Under the heading, one row per thing that changed:
   or one too long for the row, is diffed. The text is the server's own, not
   jired's markdown rendering of it, and one field's diff stops at 30 lines so a
   rewritten description cannot bury the rest of the week;
-* `+comment:` and `+worklog:` with the text quoted, capped at six lines — a
-  comment is worth recognising in a log and worth reading in the issue file.
+* `+comment:` and `+worklog:` with the text quoted under the same gutter, capped
+  at six lines — a comment is worth recognising in a log and worth reading in
+  the issue file.
 
 `--links` turns each key into a link to `/browse/KEY`. On a terminal it is an
 OSC 8 hyperlink on the key itself, so the rows stay the width they were; into a

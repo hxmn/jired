@@ -26,7 +26,7 @@ use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::store::state::IssueRow;
-use crate::style::{self, CYAN, DIM, GREEN, RED};
+use crate::style::{self, BOLD, CYAN, DIM, GREEN, RED};
 use crate::sync::progress::Progress;
 use crate::sync::Engine;
 use chrono::{DateTime, Datelike, Duration, Local, Utc};
@@ -681,7 +681,13 @@ fn render(
     // gets the URL itself, which is the part a reader can still use.
     let clickable = args.links && std::io::IsTerminal::is_terminal(&std::io::stdout());
 
-    for (e, when) in events.iter().zip(&when) {
+    for (i, (e, when)) in events.iter().zip(&when).enumerate() {
+        // One blank line between entries, the way `git log` separates commits:
+        // an entry is as many rows as it changed things, and without a gap a
+        // three-field edit and three one-field edits read the same.
+        if i > 0 {
+            out.say("");
+        }
         let key = pad(e.key, key_width);
         let key = if clickable {
             hyperlink(&browse_url(base_url, e.key), &key)
@@ -691,7 +697,9 @@ fn render(
         let mut row = format!(
             "{}  {}",
             style::out(DIM, pad(when, time_width)),
-            style::out(CYAN, key)
+            // Bold as well as cyan: the key is what the eye lands on to find
+            // where one entry starts, so it is the one thing painted twice.
+            style::out(&format!("{BOLD}{CYAN}"), key)
         );
         if summary_width > 0 {
             row.push_str(&format!("  {}", pad(e.summary, summary_width)));
@@ -729,6 +737,11 @@ fn render(
         }
     }
 
+    // The trailer is about the log, not about the entry it happens to follow,
+    // so it gets the same gap every entry got.
+    if total > events.len() || !partial.is_empty() {
+        out.say("");
+    }
     if total > events.len() {
         out.hint(format!(
             "{} of {total} entries; --limit {} to see more",
@@ -796,19 +809,27 @@ fn render_prose(field: &str, prose: &Prose, out: Out) {
             Some('@') => style::out(CYAN, line),
             _ => line.clone(),
         };
-        // A context line for a blank line is a lone space; indented, it is five
-        // characters of nothing that a `git diff --check` habit reads as dirt.
-        out.say(format!("    {painted}").trim_end());
+        out.say(quoted(&painted));
     }
     if prose.hidden > 0 {
-        out.say(format!(
-            "    {}",
-            style::out(
-                DIM,
-                format!("⋯ {} more lines — --json for the whole text", prose.hidden)
-            )
-        ));
+        out.say(quoted(&style::out(
+            DIM,
+            format!("⋯ {} more lines — --json for the whole text", prose.hidden),
+        )));
     }
+}
+
+/// A row of somebody else's text, under a gutter.
+///
+/// The gutter is what keeps an entry one block: a description with a blank
+/// paragraph break in it, or a comment with one, would otherwise print an empty
+/// line in the middle of an entry — and an empty line is how the log says the
+/// next entry has started. It marks the text as quoted at the same time, which
+/// is what it is.
+fn quoted(line: &str) -> String {
+    format!("    {} {line}", style::out(DIM, "│"))
+        .trim_end()
+        .to_string()
 }
 
 /// The rows under a comment or a worklog: what it was, then what it said.
@@ -838,13 +859,13 @@ fn render_body(kind: &str, edited: bool, duration: Option<&str>, text: &str, out
     let rest: Vec<&str> = rest.copied().collect();
     for (i, line) in rest.iter().enumerate() {
         if i == MAX_BODY_LINES {
-            out.say(format!(
-                "    {}",
-                style::out(DIM, format!("⋯ {} more lines", rest.len() - i))
-            ));
+            out.say(quoted(&style::out(
+                DIM,
+                format!("⋯ {} more lines", rest.len() - i),
+            )));
             break;
         }
-        out.say(format!("    {line}").trim_end());
+        out.say(quoted(line));
     }
 }
 
@@ -1076,6 +1097,22 @@ mod tests {
         let cell = hyperlink(&url, &pad("PROJ-1", 10));
         assert!(cell.starts_with("\x1b]8;;https://jira.example.com/browse/PROJ-1\x1b\\"));
         assert!(cell.contains("PROJ-1    "));
+    }
+
+    /// An entry is separated from the next by a blank line, so nothing inside
+    /// one may print an empty row: a blank paragraph inside a quoted comment or
+    /// description would otherwise split the entry in two.
+    #[test]
+    fn a_quoted_line_is_never_empty_however_empty_the_text_is() {
+        // Asserted without forcing the colour mode: it is process-global, and
+        // moving it under the tests running beside this one is how flakes start.
+        assert!(quoted("-2. Log out").ends_with("│ -2. Log out"));
+        assert!(!quoted("").trim().is_empty(), "a gutter is still a mark");
+        assert_eq!(quoted(" "), quoted(""), "a diff's blank context line");
+        assert!(
+            !quoted("text").ends_with(' '),
+            "and none of it is whitespace"
+        );
     }
 
     #[test]

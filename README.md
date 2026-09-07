@@ -417,24 +417,31 @@ $ jired log --limit 1w
   priority: Medium → High
   +labels: auth backend
   description: +1 -1
-    @@ -2,4 +2,4 @@
+    │ @@ -2,4 +2,4 @@
+    │
+    │  1. Log in
+    │ -2. Log out
+    │ +2. Wait five minutes
+    │  3. Log in again
 
-     1. Log in
-    -2. Log out
-    +2. Wait five minutes
-     3. Log in again
 08-15 13:30  PROJ-142  Fix login flow  (Jane D)
   +worklog: 2h 30m — Chased the redirect loop.
+
 08-15 12:32  PROJ-142  Fix login flow  (Jane D)
   +comment: Repro confirmed on staging.
+
 08-14 11:00  PROJ-142  Fix login flow  (Jane D)
   status: To Do → In Progress
   -Sprint: Sprint 11
 ```
 
-Each row is when, which issue, what that issue is, and who. The time says only
-what you do not already know: the clock alone for the last day, the date once it
-is older than that, the year only when it is not this one.
+Each entry heads with when, which issue, what that issue is, and who; the key is
+bold, and a blank line separates one entry from the next, so an entry of six rows
+is as easy to pick out as an entry of one. Quoted text — a diff, a comment — sits
+under a `│` gutter, which is what keeps a blank paragraph inside a description
+from reading as the start of the next entry. The time says only what you do not
+already know: the clock alone for the last day, the date once it is older than
+that, the year only when it is not this one.
 
 Under it, one row per thing that changed. A field that gained a value it did not
 have is `+`, one that lost the value it had is `-`, and one that swapped reads

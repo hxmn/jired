@@ -4161,6 +4161,41 @@ fn log_merges_comments_and_worklogs_into_the_timeline() {
     );
 }
 
+/// A blank line means "the next entry starts here" and nothing else, so an
+/// entry of six rows is as easy to see as an entry of one — and a description
+/// with a blank paragraph in it does not split its own entry in two.
+#[test]
+fn log_entries_are_separated_by_a_blank_line_and_nothing_else_is() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.cmd(&["log"]).output().unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = printed.lines().collect();
+
+    // Five entries, so four gaps — the fixture's description diff carries a
+    // blank line of its own, which must not read as a fifth.
+    assert_eq!(
+        lines.iter().filter(|l| l.trim().is_empty()).count(),
+        4,
+        "expected one blank line per entry boundary:\n{printed}"
+    );
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            assert!(
+                lines[i + 1].starts_with(char::is_numeric),
+                "a blank line must be followed by an entry, got: {}",
+                lines[i + 1]
+            );
+        }
+    }
+    assert!(
+        printed.contains("    │") && printed.contains("│ -2. Log out"),
+        "quoted text is marked as quoted:\n{printed}"
+    );
+}
+
 /// `--links` into a pipe cannot rely on an escape sequence nobody will render,
 /// so it prints the URL. On a terminal the key itself carries it.
 #[test]
