@@ -1080,6 +1080,44 @@ impl JiraApi for Rest {
             .filter_map(|u| normalize::user_ref(Some(u)))
             .collect())
     }
+
+    /// The body is the identifier itself, as a bare JSON string — not an object
+    /// with a field in it, which is what every other write here sends.
+    async fn watch(&self, key: &str, user_id: &str) -> Result<()> {
+        self.http
+            .post_json(
+                &self.url(&routes::ADD_WATCHER, &[("issueIdOrKey", key)], &[]),
+                json!(user_id),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn unwatch(&self, key: &str, user_id: &str) -> Result<()> {
+        self.http
+            .delete(&self.url(
+                remove_watcher_route(self.deployment),
+                &[("issueIdOrKey", key)],
+                &[(watcher_param(self.deployment), user_id)],
+            ))
+            .await
+    }
+}
+
+/// Which of the two `DELETE …/watchers` declarations to send, and what it calls
+/// the user: the one place the deployments disagree about watching.
+pub(crate) fn remove_watcher_route(deployment: Deployment) -> &'static Route {
+    match deployment {
+        Deployment::Cloud => &crate::api::cloud::REMOVE_WATCHER,
+        Deployment::DataCenter => &routes::REMOVE_WATCHER,
+    }
+}
+
+pub(crate) fn watcher_param(deployment: Deployment) -> &'static str {
+    match deployment {
+        Deployment::Cloud => "accountId",
+        Deployment::DataCenter => "username",
+    }
 }
 
 /// Cloud's user search: `query`, and the assignable route wherever the caller

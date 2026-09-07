@@ -8,6 +8,35 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.15.0] — 2026-09-07
+
+### Added
+
+- **`jired watch`** — which issues this account is a watcher of, as a screen of
+  tick boxes over the workspace's issues, newest first. Jira offers watching one
+  issue at a time from that issue's own page, which makes "am I watching the
+  things that moved this week" a question you answer by opening twenty tabs.
+  `space` ticks a row, `a` ticks or unticks the lot, `⏎` sends what the ticks add
+  up to and `esc` throws it away — nothing leaves the machine while the screen is
+  open, which is what makes one key for "watch everything" safe to offer. The
+  boxes start from the server, asked as a single `watcher = currentUser()`
+  search, because somebody else can add you as a watcher and a week-old answer
+  about watching is worse than none; when that search cannot be run the last
+  fetch stands in and says so.
+- **`jired watch --all`** watches every issue in the workspace without a screen,
+  for a script or a terminal that cannot draw one. The scope is what `fetch`
+  brought in — for an `init` workspace, the project — and an issue already
+  watched is not sent again, so a second run costs one search and no writes.
+  Without a terminal and without `--all`, exit 7 names the flag.
+
+### Changed
+
+- **`jired --help` lists its commands alphabetically.** They were in the order
+  somebody works in — fetch, pull, push, diff — which is a fine tutorial and a
+  poor index: a help listing is where you go having half-remembered a name, and
+  the only order that answers "is there one called `watch`" is the one a
+  dictionary uses.
+
 ## [0.14.1] — 2026-09-07
 
 ### Changed

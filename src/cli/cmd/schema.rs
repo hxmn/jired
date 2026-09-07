@@ -101,6 +101,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
         include_str!("../../../schemas/transitions.json"),
     ),
     ("version", include_str!("../../../schemas/version.json")),
+    ("watch", include_str!("../../../schemas/watch.json")),
     ("whoami", include_str!("../../../schemas/whoami.json")),
 ];
 

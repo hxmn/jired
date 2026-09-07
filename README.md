@@ -387,6 +387,7 @@ the filename you were just editing instead of retyping the key.
 | `reset [ISSUES…]` | drop local changes and put the files back to the last sync; lists what would go and asks first, `-n/--dry-run` just lists, `--include-new` also deletes locally created issues |
 | `clean` | remove files whose issues left the workspace scope; `--dry-run`, `--force` for ones with unpushed edits |
 | `open [ISSUE]` | open it in a browser, or `--print` the URL; without an issue, pick one from the list |
+| `watch [--all]` | which issues you are a watcher of, as a screen of tick boxes over the recently changed ones — `a` ticks the lot, `⏎` sends; `--all` watches every issue in the workspace without a screen, `--limit` takes a count or a span the way `log` does — see [Watching](#watching) |
 | `whoami` | which account, which server, and where the credential is kept |
 | `fetch-spec [-o DIR]` | write the server's own description of its REST API into a directory, one file per module, named for the server and its version — see [The server's own API reference](#the-servers-own-api-reference) |
 | `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and is needed only when the project's boards would answer differently; `boards` says which project each board is filed under |
@@ -464,6 +465,37 @@ escape sequence is no use — the URL is printed at the end of the row.
 `--json` is the record rather than the rendering: every entry says its `kind`
 (`change`, `comment` or `worklog`), a change carries both texts of every field it
 touched, whole and undiffed, and a comment or a worklog carries its `text`.
+
+### Watching
+
+Jira lets you watch one issue at a time, from that issue's own page. The question
+worth asking is about a list — am I watching the things that moved this week? —
+so `jired watch` is a list:
+
+```
+Watching  1 of 12 ticked                                              PROJ
+ +2 to watch  -0 to stop watching
+ [x] PROJ-142  Fix login flow                                           2h
+ [ ] PROJ-150  Rotate the signing key                                   1d
+ [x] PROJ-151  Sweep the audit log                                      3d
+        space tick  ·  a all  ·  ⏎ send  ·  esc cancel
+```
+
+The boxes start from what the *server* says, asked as one
+`watcher = currentUser()` search when the screen opens: somebody else can add you
+as a watcher, and a screen about watching that shows a week-old answer is worse
+than no screen. When that search cannot be run, the last fetch stands in and
+jired says so.
+
+Nothing is sent while the screen is open. Ticking builds a plan — the line under
+the title says what `⏎` would send — and `esc` throws it away, which is what
+makes `a`, tick everything, safe to offer as one key.
+
+`jired watch --all` is that plan with every box ticked, for a script or a
+terminal with no screen to draw on. The scope is the workspace: the issues
+`fetch` has brought in, which for a workspace made by `jired init` is the
+project. An issue you already watch is not sent again, so running it twice costs
+one search and no writes.
 
 ### The issue picker
 

@@ -311,6 +311,16 @@ impl JiraApi for DataCenter {
     async fn download_attachment(&self, attachment: &RemoteAttachment) -> Result<Vec<u8>> {
         self.rest.download_attachment(attachment).await
     }
+
+    /// Both watcher calls are shared: [`Rest`] already picks the right query
+    /// parameter for the deployment it was built for.
+    async fn watch(&self, key: &str, user_id: &str) -> Result<()> {
+        self.rest.watch(key, user_id).await
+    }
+
+    async fn unwatch(&self, key: &str, user_id: &str) -> Result<()> {
+        self.rest.unwatch(key, user_id).await
+    }
 }
 
 #[cfg(test)]

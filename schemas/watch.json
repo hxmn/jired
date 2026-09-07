@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/watch/1",
+  "title": "jired watch result",
+  "description": "What the run changed about who watches which issues",
+  "type": "object",
+  "required": [
+    "schema",
+    "watched",
+    "unwatched",
+    "failed",
+    "issues"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/watch/1"
+    },
+    "watched": {
+      "description": "How many issues this account now watches that it did not before",
+      "type": "integer"
+    },
+    "unwatched": {
+      "description": "How many it stopped watching",
+      "type": "integer"
+    },
+    "failed": {
+      "description": "How many the server refused; the rest were still sent",
+      "type": "integer"
+    },
+    "issues": {
+      "description": "One entry per issue the run sent, in the order it sent them. An issue already in the state asked for is not sent and does not appear",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "status"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "status": {
+            "description": "What this account is now for the issue, or `failed` when the server refused",
+            "enum": [
+              "watching",
+              "not-watching",
+              "failed"
+            ]
+          },
+          "error": {
+            "description": "Why the server refused; absent unless `status` is `failed`",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

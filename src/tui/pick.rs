@@ -570,7 +570,7 @@ fn layout(width: u16, sort: Sort, key_width: u16) -> Vec<(Column, u16)> {
 }
 
 /// Pad or truncate `text` to exactly `width` terminal cells.
-fn fit(text: &str, width: usize) -> String {
+pub(crate) fn fit(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }

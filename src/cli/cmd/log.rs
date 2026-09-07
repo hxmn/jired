@@ -70,7 +70,7 @@ pub enum Limit {
     Span(Duration),
 }
 
-fn parse_limit(text: &str) -> std::result::Result<Limit, String> {
+pub fn parse_limit(text: &str) -> std::result::Result<Limit, String> {
     let text = text.trim();
     if text.chars().all(|c| c.is_ascii_digit()) && !text.is_empty() {
         return text
@@ -133,6 +133,27 @@ fn describe(span: Duration) -> String {
 }
 
 impl Limit {
+    /// Cut a newest-first list down to this limit, dating each item with `at`.
+    ///
+    /// Shared with `jired watch`, which asks the same question of the same
+    /// spelling — how much of the recent end do I want — over a different kind
+    /// of row. An item nothing dates cannot be shown to fall inside a span, so
+    /// a span drops it; a count still counts it.
+    pub(crate) fn keep<T>(
+        self,
+        items: &mut Vec<T>,
+        now: DateTime<Utc>,
+        at: impl Fn(&T) -> Option<DateTime<Utc>>,
+    ) {
+        match self {
+            Limit::Count(n) => items.truncate(n),
+            Limit::Span(span) => {
+                let cutoff = now - span;
+                items.retain(|item| at(item).is_some_and(|when| when >= cutoff));
+            }
+        }
+    }
+
     /// The limit to suggest when there is more to see: twice this one.
     ///
     /// Doubling is what makes the hint worth printing — it is a limit the
@@ -409,19 +430,12 @@ fn partial_snapshots(known: &[Known]) -> Vec<Partial> {
     out
 }
 
-/// Cut a newest-first list down to what `--limit` asked for.
+/// Cut a newest-first list of events down to what `--limit` asked for.
 ///
 /// `now` is passed in rather than read here so the window can be tested against
-/// a fixed clock. An event the server dated nothing cannot be shown to fall
-/// inside a span, so a span drops it; a count still counts it.
+/// a fixed clock.
 fn apply_limit(events: &mut Vec<Event>, limit: Limit, now: DateTime<Utc>) {
-    match limit {
-        Limit::Count(n) => events.truncate(n),
-        Limit::Span(span) => {
-            let cutoff = now - span;
-            events.retain(|e| e.at.is_some_and(|c| c >= cutoff));
-        }
-    }
+    limit.keep(events, now, |e| e.at);
 }
 
 /// True when the server has edited this issue since its changelog was cached.

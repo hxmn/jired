@@ -187,92 +187,101 @@ pub struct ConnectionArgs {
     pub insecure_store: bool,
 }
 
+/// Every command, in the order `--help` lists them: alphabetical.
+///
+/// Not the order somebody works in — fetch, pull, edit, push — because a help
+/// listing is not a tutorial: it is where you go having half-remembered a name,
+/// and the only order that answers "is there one called `watch`" is the one a
+/// dictionary uses. The `run` match below follows the same order so the two
+/// cannot drift.
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Authenticate, pick a project, and set up the workspace
-    Init(cmd::init::InitArgs),
-    /// Download remote state into the local snapshot without touching files
-    Fetch(cmd::fetch::FetchArgs),
-    /// Fetch and merge remote changes into the working copy
-    Pull(cmd::pull::PullArgs),
-    /// Send local changes to Jira
-    Push(cmd::push::PushArgs),
-    /// Show differences between working copy, base, and remote
-    Diff(cmd::diff::DiffArgs),
-    /// One-screen overview of the workspace
-    #[command(visible_alias = "st")]
-    Status(cmd::status::StatusArgs),
-    /// Show what changed, newest first — the whole workspace, or one issue
-    Log(cmd::log::LogArgs),
-    /// Read the working copy back as figures
-    #[command(subcommand)]
-    Report(cmd::report::ReportCmd),
-    /// Add a comment to an issue
-    Comment(cmd::comment::CommentArgs),
-    /// Book time against an issue
-    Logwork(cmd::logwork::LogworkArgs),
-    /// Create a new issue locally
-    Create(cmd::create::CreateArgs),
-    /// Edit an issue in a form
-    Edit(cmd::edit::EditArgs),
-    /// Change an issue's workflow status
-    Transition(cmd::transition::TransitionArgs),
     /// Assign an issue
     Assign(cmd::assign::AssignArgs),
-    /// Put a label on issues, or take one off
-    #[command(subcommand)]
-    Label(cmd::label::LabelCmd),
-    /// Move sub-tasks under a different parent
-    Parent(cmd::parent::ParentArgs),
-    /// Write any editable field on any number of issues
-    Set(cmd::set::SetArgs),
     /// Stage a file for upload to an issue
     Attach(cmd::attach::AttachArgs),
     /// Work with attachments
     #[command(subcommand)]
     Attachments(cmd::attach::AttachmentsCmd),
-    /// Open an issue in the browser
-    Open(cmd::open::OpenArgs),
-    /// Run a JQL search
-    Search(cmd::search::SearchArgs),
-    /// Which issues in this workspace match, without asking the server
-    List(cmd::list_issues::ListArgs),
-    /// Everything the workspace knows about one issue
-    Show(cmd::show::ShowArgs),
+    /// List boards
+    Boards(cmd::list::BoardsArgs),
+    /// Remove files whose issues left the workspace scope
+    Clean(cmd::clean::CleanArgs),
+    /// Add a comment to an issue
+    Comment(cmd::comment::CommentArgs),
+    /// Generate a shell completion script
+    Completion(cmd::completion::CompletionArgs),
+    /// Read and write configuration
+    #[command(subcommand)]
+    Config(cmd::config::ConfigCmd),
+    /// Create a new issue locally
+    Create(cmd::create::CreateArgs),
+    /// Show differences between working copy, base, and remote
+    Diff(cmd::diff::DiffArgs),
+    /// Check the workspace over and repair what can be repaired
+    Doctor(cmd::doctor::DoctorArgs),
+    /// Edit an issue in a form
+    Edit(cmd::edit::EditArgs),
+    /// Download remote state into the local snapshot without touching files
+    Fetch(cmd::fetch::FetchArgs),
+    /// Write the server's own description of its REST API to a directory
+    FetchSpec(cmd::fetch_spec::FetchSpecArgs),
     /// What this instance's fields are called
     Fields(cmd::fields::FieldsArgs),
+    /// Authenticate, pick a project, and set up the workspace
+    Init(cmd::init::InitArgs),
+    /// Write the agent instructions and the read-only command permissions
+    InitAgents(cmd::init_agents::InitAgentsArgs),
+    /// Put a label on issues, or take one off
+    #[command(subcommand)]
+    Label(cmd::label::LabelCmd),
+    /// Which issues in this workspace match, without asking the server
+    List(cmd::list_issues::ListArgs),
+    /// Show what changed, newest first — the whole workspace, or one issue
+    Log(cmd::log::LogArgs),
+    /// Book time against an issue
+    Logwork(cmd::logwork::LogworkArgs),
+    /// Open an issue in the browser
+    Open(cmd::open::OpenArgs),
+    /// Move sub-tasks under a different parent
+    Parent(cmd::parent::ParentArgs),
+    /// List projects
+    Projects(cmd::list::ProjectsArgs),
+    /// Fetch and merge remote changes into the working copy
+    Pull(cmd::pull::PullArgs),
+    /// Send local changes to Jira
+    Push(cmd::push::PushArgs),
+    /// Read the working copy back as figures
+    #[command(subcommand)]
+    Report(cmd::report::ReportCmd),
     /// Drop local changes and go back to the last sync
     Reset(cmd::reset::ResetArgs),
     /// Resolve recorded conflicts
     Resolve(cmd::resolve::ResolveArgs),
-    /// Remove files whose issues left the workspace scope
-    Clean(cmd::clean::CleanArgs),
-    /// Check the workspace over and repair what can be repaired
-    Doctor(cmd::doctor::DoctorArgs),
-    /// Read and write configuration
-    #[command(subcommand)]
-    Config(cmd::config::ConfigCmd),
-    /// Show the authenticated account
-    Whoami(cmd::whoami::WhoamiArgs),
-    /// Write the server's own description of its REST API to a directory
-    FetchSpec(cmd::fetch_spec::FetchSpecArgs),
-    /// List projects
-    Projects(cmd::list::ProjectsArgs),
-    /// List boards
-    Boards(cmd::list::BoardsArgs),
-    /// List sprints
-    Sprints(cmd::list::SprintsArgs),
+    /// Print JSON Schemas for outputs and the frontmatter format
+    Schema(cmd::schema::SchemaArgs),
+    /// Run a JQL search
+    Search(cmd::search::SearchArgs),
+    /// Write any editable field on any number of issues
+    Set(cmd::set::SetArgs),
+    /// Everything the workspace knows about one issue
+    Show(cmd::show::ShowArgs),
     /// Work with sprints
     #[command(subcommand)]
     Sprint(cmd::sprint::SprintCmd),
-    /// Generate a shell completion script
-    Completion(cmd::completion::CompletionArgs),
-    /// Write the agent instructions and the read-only command permissions
-    InitAgents(cmd::init_agents::InitAgentsArgs),
-    /// Print JSON Schemas for outputs and the frontmatter format
-    Schema(cmd::schema::SchemaArgs),
+    /// List sprints
+    Sprints(cmd::list::SprintsArgs),
+    /// One-screen overview of the workspace
+    #[command(visible_alias = "st")]
+    Status(cmd::status::StatusArgs),
+    /// Change an issue's workflow status
+    Transition(cmd::transition::TransitionArgs),
     /// Which binary this is, and what changed in it
     Version(cmd::version::VersionArgs),
+    /// Watch issues, or stop watching them, on a screen of tick boxes
+    Watch(cmd::watch::WatchArgs),
+    /// Show the authenticated account
+    Whoami(cmd::whoami::WhoamiArgs),
 }
 
 /// Shown on every run whose traffic is unverified, whether the setting came
@@ -318,47 +327,48 @@ pub fn run(cli: Cli) -> ExitCode {
 fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
     let g = &cli.global;
     match &cli.command {
-        // Commands that must run before a workspace exists.
-        Command::Completion(a) => cmd::completion::run(a, out),
-        Command::Schema(a) => cmd::schema::run(a, out),
-        Command::Version(a) => cmd::version::run(g, a, out),
-        Command::Init(a) => cmd::init::run(g, a, out),
-
-        Command::Fetch(a) => cmd::fetch::run(g, a, out),
-        Command::Pull(a) => cmd::pull::run(g, a, out),
-        Command::Push(a) => cmd::push::run(g, a, out),
-        Command::Diff(a) => cmd::diff::run(g, a, out),
-        Command::Status(a) => cmd::status::run(g, a, out),
-        Command::Log(a) => cmd::log::run(g, a, out),
-        Command::Report(a) => cmd::report::run(g, a, out),
-        Command::Comment(a) => cmd::comment::run(g, a, out),
-        Command::Logwork(a) => cmd::logwork::run(g, a, out),
-        Command::Create(a) => cmd::create::run(g, a, out),
-        Command::Edit(a) => cmd::edit::run(g, a, out),
-        Command::Transition(a) => cmd::transition::run(g, a, out),
+        // The same order as the enum above: alphabetical, so a reader
+        // looking for one command does not read the other thirty-nine.
         Command::Assign(a) => cmd::assign::run(g, a, out),
-        Command::Label(a) => cmd::label::run(g, a, out),
-        Command::Parent(a) => cmd::parent::run(g, a, out),
-        Command::Set(a) => cmd::set::run(g, a, out),
         Command::Attach(a) => cmd::attach::run(g, a, out),
         Command::Attachments(a) => cmd::attach::run_attachments(g, a, out),
-        Command::Open(a) => cmd::open::run(g, a, out),
-        Command::Search(a) => cmd::search::run(g, a, out),
-        Command::List(a) => cmd::list_issues::run(g, a, out),
-        Command::Show(a) => cmd::show::run(g, a, out),
+        Command::Boards(a) => cmd::list::run_boards(g, a, out),
+        Command::Clean(a) => cmd::clean::run(g, a, out),
+        Command::Comment(a) => cmd::comment::run(g, a, out),
+        Command::Completion(a) => cmd::completion::run(a, out),
+        Command::Config(a) => cmd::config::run(g, a, out),
+        Command::Create(a) => cmd::create::run(g, a, out),
+        Command::Diff(a) => cmd::diff::run(g, a, out),
+        Command::Doctor(a) => cmd::doctor::run(g, a, out),
+        Command::Edit(a) => cmd::edit::run(g, a, out),
+        Command::Fetch(a) => cmd::fetch::run(g, a, out),
+        Command::FetchSpec(a) => cmd::fetch_spec::run(g, a, out),
         Command::Fields(a) => cmd::fields::run(g, a, out),
+        Command::Init(a) => cmd::init::run(g, a, out),
+        Command::InitAgents(a) => cmd::init_agents::run(g, a, out),
+        Command::Label(a) => cmd::label::run(g, a, out),
+        Command::List(a) => cmd::list_issues::run(g, a, out),
+        Command::Log(a) => cmd::log::run(g, a, out),
+        Command::Logwork(a) => cmd::logwork::run(g, a, out),
+        Command::Open(a) => cmd::open::run(g, a, out),
+        Command::Parent(a) => cmd::parent::run(g, a, out),
+        Command::Projects(a) => cmd::list::run_projects(g, a, out),
+        Command::Pull(a) => cmd::pull::run(g, a, out),
+        Command::Push(a) => cmd::push::run(g, a, out),
+        Command::Report(a) => cmd::report::run(g, a, out),
         Command::Reset(a) => cmd::reset::run(g, a, out),
         Command::Resolve(a) => cmd::resolve::run(g, a, out),
-        Command::Clean(a) => cmd::clean::run(g, a, out),
-        Command::Doctor(a) => cmd::doctor::run(g, a, out),
-        Command::Config(a) => cmd::config::run(g, a, out),
-        Command::Whoami(a) => cmd::whoami::run(g, a, out),
-        Command::FetchSpec(a) => cmd::fetch_spec::run(g, a, out),
-        Command::Projects(a) => cmd::list::run_projects(g, a, out),
-        Command::Boards(a) => cmd::list::run_boards(g, a, out),
-        Command::Sprints(a) => cmd::list::run_sprints(g, a, out),
+        Command::Schema(a) => cmd::schema::run(a, out),
+        Command::Search(a) => cmd::search::run(g, a, out),
+        Command::Set(a) => cmd::set::run(g, a, out),
+        Command::Show(a) => cmd::show::run(g, a, out),
         Command::Sprint(a) => cmd::sprint::run(g, a, out),
-        Command::InitAgents(a) => cmd::init_agents::run(g, a, out),
+        Command::Sprints(a) => cmd::list::run_sprints(g, a, out),
+        Command::Status(a) => cmd::status::run(g, a, out),
+        Command::Transition(a) => cmd::transition::run(g, a, out),
+        Command::Version(a) => cmd::version::run(g, a, out),
+        Command::Watch(a) => cmd::watch::run(g, a, out),
+        Command::Whoami(a) => cmd::whoami::run(g, a, out),
     }
 }
 

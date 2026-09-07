@@ -230,6 +230,45 @@ impl FixtureClient {
             })
     }
 
+    /// Add or remove the caller from an issue's watchers.
+    ///
+    /// The count moves with the flag and only when the flag moves, so a test
+    /// that watches an issue twice sees one watcher rather than two — which is
+    /// what a real server does, watchers being a set.
+    fn set_watching(&self, key: &str, user_id: &str, watching: bool) -> Result<()> {
+        let path = format!("/issue/{key}/watchers");
+        let method = if watching { "POST" } else { "DELETE" };
+        self.record(method, &path, json!(user_id))?;
+        if !self.applies(method, &path) {
+            return Ok(());
+        }
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            let Some(issue) = issues.get_mut(key) else {
+                return Err(JiredError::generic(format!("{key} is not on this server")));
+            };
+            let watches = issue["fields"]["watches"].clone();
+            let was = watches.get("isWatching").and_then(Value::as_bool) == Some(true);
+            let count = watches
+                .get("watchCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let count = match (was, watching) {
+                (false, true) => count + 1,
+                (true, false) => count.saturating_sub(1),
+                _ => count,
+            };
+            issue["fields"]["watches"] = json!({
+                "isWatching": watching,
+                "watchCount": count,
+            });
+        }
+        // Deliberately no `bump_updated`: watching an issue is not an edit to
+        // it, and a real server does not move `updated` for one.
+        self.persist();
+        Ok(())
+    }
+
     fn bump_updated(&self, key: &str) {
         {
             let mut issues = self.issues.lock().expect("fixture lock");
@@ -1178,6 +1217,17 @@ impl JiraApi for FixtureClient {
             })
             .collect())
     }
+
+    /// Watching is recorded on the issue itself, in the shape a real payload
+    /// carries it: `fields.watches.isWatching` is what `jired watch` reads back
+    /// and what the `watcher = currentUser()` clause below filters on.
+    async fn watch(&self, key: &str, user_id: &str) -> Result<()> {
+        self.set_watching(key, user_id, true)
+    }
+
+    async fn unwatch(&self, key: &str, user_id: &str) -> Result<()> {
+        self.set_watching(key, user_id, false)
+    }
 }
 
 /// The rows of a listing, which a fixture may write as the server's wrapper
@@ -1225,6 +1275,18 @@ fn jql_matches(jql: &str, issue: &Value) -> bool {
             if !wanted.iter().any(|w| w == key) {
                 return false;
             }
+        }
+    }
+
+    // `watcher = currentUser()` is how `jired watch` asks which issues it
+    // already watches; the fixture answers from the flag its own watch call set.
+    if lower.contains("watcher = currentuser()") {
+        let watching = issue
+            .pointer("/fields/watches/isWatching")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !watching {
+            return false;
         }
     }
 

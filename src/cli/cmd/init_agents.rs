@@ -1141,6 +1141,11 @@ mod tests {
                 "stages a sprint move, and creates, starts, edits or closes a \
                  sprint on the server",
             ),
+            (
+                "watch",
+                "adds this account to an issue's watchers on the server, or \
+                 takes it off",
+            ),
         ];
 
         let cli = crate::cli::Cli::command();

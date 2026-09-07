@@ -8488,3 +8488,94 @@ fn fetch_spec_on_cloud_points_at_the_published_openapi() {
     // Nothing was created for a fetch that could not happen.
     assert!(!ws.path().join("specs").exists());
 }
+
+// ---------------------------------------------------------------------------
+// Watching
+// ---------------------------------------------------------------------------
+
+/// `--all` is the screen with every box ticked, for a terminal that has none.
+/// It sends one request per issue not already watched, and none for the rest —
+/// watching is a set, so re-adding buys a request and changes nothing.
+#[test]
+fn watch_all_watches_every_issue_in_the_workspace_once() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let journal = ws.path().join("calls.jsonl");
+    let out = ws
+        .cmd(&["watch", "--all", "--json"])
+        .env("JIRED_FIXTURE_JOURNAL", &journal)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["schema"], "jired/watch/1");
+    assert_eq!(report["failed"], 0);
+    assert_eq!(report["unwatched"], 0);
+    let watched = report["watched"].as_u64().unwrap();
+    assert!(watched >= 3, "the workspace's issues: {report}");
+    let issues = report["issues"].as_array().unwrap();
+    assert_eq!(issues.len() as u64, watched);
+    assert!(issues.iter().all(|i| i["status"] == "watching"), "{report}");
+
+    // The account the credential belongs to is what goes in the body, and the
+    // request is the dedicated watcher route rather than a field edit.
+    let calls: Vec<Value> = std::fs::read_to_string(&journal)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let added: Vec<&Value> = calls
+        .iter()
+        .filter(|c| c["method"] == "POST" && c["path"].as_str().unwrap().ends_with("/watchers"))
+        .collect();
+    assert_eq!(added.len() as u64, watched);
+    assert_eq!(added[0]["body"], "5b10a2ilya");
+
+    // Run again: the server already says yes, so nothing is sent at all.
+    let journal2 = ws.path().join("calls2.jsonl");
+    let out = ws
+        .cmd(&["watch", "--all", "--json"])
+        .env("JIRED_FIXTURE_JOURNAL", &journal2)
+        .output()
+        .unwrap();
+    let again: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(again["watched"], 0, "already watching: {again}");
+    let calls2 = std::fs::read_to_string(&journal2).unwrap_or_default();
+    assert!(
+        !calls2.contains("\"POST\""),
+        "nothing should be sent twice:\n{calls2}"
+    );
+}
+
+/// The screen is the command, so without a terminal to draw it on the answer is
+/// the exit code for "a value is missing" and the flag that needs no screen.
+#[test]
+fn watch_without_a_terminal_says_how_to_do_it_without_one() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let err = ws.json_err(&["watch"], 7);
+    assert_eq!(err["kind"], "missing_value");
+    assert!(
+        err["hint"].as_str().unwrap_or_default().contains("--all"),
+        "{err}"
+    );
+}
+
+/// An empty workspace is a real answer rather than an error, and it says what
+/// would fill it.
+#[test]
+fn watch_on_an_empty_workspace_says_so() {
+    let ws = Ws::new();
+    ws.init();
+    let report = ws.json(&["watch", "--all"]);
+    assert_eq!(report["watched"], 0);
+    assert!(report["issues"].as_array().unwrap().is_empty());
+}

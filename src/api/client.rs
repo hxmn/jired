@@ -240,6 +240,14 @@ pub trait JiraApi: Send + Sync {
 
     /// Users matching `query`, restricted to those `scope` permits.
     async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>>;
+
+    /// Add a user to an issue's watchers, and take one off again.
+    ///
+    /// The id is the one the deployment identifies people by — an account id on
+    /// Cloud, a username on Data Center — which is exactly what
+    /// [`Myself::account_id`] already holds for each.
+    async fn watch(&self, key: &str, user_id: &str) -> Result<()>;
+    async fn unwatch(&self, key: &str, user_id: &str) -> Result<()>;
 }
 
 /// Walk every page of a search, respecting both pagination styles.

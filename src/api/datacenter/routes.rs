@@ -353,6 +353,27 @@ route!(
 );
 
 route!(
+    /// Adding a watcher is a POST whose whole body is the user's identifier as
+    /// a bare JSON string — `"jane"` on Data Center, an account id on Cloud.
+    ADD_WATCHER,
+    "addWatcher",
+    "POST",
+    Api,
+    "issue/{issueIdOrKey}/watchers",
+);
+route!(
+    /// Removing one names the user in the query string, and this is where the
+    /// two deployments part: Data Center declares `username`, Cloud takes
+    /// `accountId` — see [`crate::api::cloud::REMOVE_WATCHER`].
+    REMOVE_WATCHER,
+    "removeWatcher",
+    "DELETE",
+    Api,
+    "issue/{issueIdOrKey}/watchers",
+    "username",
+);
+
+route!(
     FIND_USERS,
     "findUsers",
     "GET",
@@ -476,6 +497,8 @@ pub const ALL: &[&Route] = &[
     &CREATE_ISSUE_LINK,
     &DELETE_ISSUE_LINK,
     &ADD_ATTACHMENT,
+    &ADD_WATCHER,
+    &REMOVE_WATCHER,
     &FIND_USERS,
     &FIND_ASSIGNABLE_USERS,
     &BOARDS,
@@ -607,6 +630,8 @@ mod tests {
             "linkIssues",
             "deleteIssueLink",
             "addAttachment",
+            "addWatcher",
+            "removeWatcher",
             "findUsers",
             "findAssignableUsers",
             "getAllBoards",
@@ -621,7 +646,7 @@ mod tests {
         ] {
             assert!(listed.contains(&id), "{id} is missing from ALL");
         }
-        assert_eq!(ALL.len(), 37, "a route was added without a test naming it");
+        assert_eq!(ALL.len(), 39, "a route was added without a test naming it");
 
         // `getIssue` is a method id in both modules, so nothing may key on the
         // id alone — the contract test keys on (method, path).

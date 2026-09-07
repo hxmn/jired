@@ -23,6 +23,7 @@ mod picker;
 pub mod report;
 pub mod sprint;
 mod theme;
+pub mod watch;
 pub mod when;
 
 use crate::error::{JiredError, Result};

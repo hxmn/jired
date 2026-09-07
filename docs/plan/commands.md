@@ -664,6 +664,37 @@ server key to browse. No terminal for the picker → exit 7 naming what to type.
 Going to an issue stamps `viewed_at`, this being the plainest thing viewing an
 issue can mean.
 
+### `jired watch [--all] [--limit N|SPAN]`
+Who watches an issue is a per-issue toggle in Jira's UI, and the question worth
+asking is about a list, so this is a list: the workspace's issues, newest first,
+with a box ticked where this account is a watcher. `a` ticks or unticks them all
+— the one key the screen exists for — `space` toggles the row, `⏎` sends, `esc`
+throws the plan away. Nothing leaves the machine while the screen is open, which
+is what makes a key that ticks everything safe to offer; the line under the title
+says what `⏎` would send, before it is sent.
+
+The ticks start from the *server*, asked as one `watcher = currentUser()` search
+scoped to the workspace's project. Not from the snapshot: somebody else can add
+you as a watcher, and a screen about watching that shows a week-old answer is
+worse than no screen. `FieldSet::Summary` on that search, so it does not drag
+every comment page behind it. When the search cannot be run, the snapshot's own
+`watches.isWatching` stands in and a warning says which answer this is.
+
+`--limit` is `jired log`'s, sharing its parser: a count (`50`, the default) or a
+span back from now (`2w`), applied to the list the screen offers. `--all` skips
+the screen and watches every issue in the workspace — the scope `fetch` brought
+in, which for an `init` workspace is the project — and is what a script and a
+terminal with no screen use. Issues already watched are not sent again, watching
+being a set; `jired watch` with neither a terminal nor `--all` is exit 7 naming
+the flag.
+
+Adding a watcher is `POST issue/{key}/watchers` whose whole body is the user's
+identifier as a bare JSON string; removing one names them in the query, and that
+is where the deployments part — Data Center declares `username`, Cloud takes
+`accountId`, which is exactly the difference `myself` already carries. One issue
+the server refuses does not stop the rest: it is recorded against its own key,
+the run finishes, and the exit code is 1 with the failures named.
+
 ### `jired search "project = PROJ AND status = Open" [--limit N]`
 JQL is positional; `--jql` is the same value spelled as a flag, and the two
 conflict. Table / JSON rows, `showing N of TOTAL`, an explicit line when nothing

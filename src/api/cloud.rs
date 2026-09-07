@@ -61,6 +61,16 @@ pub const FIND_ASSIGNABLE_USERS: Route = Route {
     query: &["query", "project", "issueKey", "maxResults"],
 };
 
+/// Cloud names the watcher to remove by `accountId`, where Data Center's own
+/// description declares `username`.
+pub const REMOVE_WATCHER: Route = Route {
+    id: "removeWatcher",
+    method: "DELETE",
+    module: Module::Api,
+    path: "issue/{issueIdOrKey}/watchers",
+    query: &["accountId"],
+};
+
 /// Where Atlassian publishes the Cloud OpenAPI document.
 ///
 /// Named here so the error a Cloud user gets can point at it, not fetched: it
