@@ -378,7 +378,7 @@ the filename you were just editing instead of retyping the key.
 | `attachments pull [ISSUES…]` / `list` | download attachment content over the stubs, or show what is present |
 | `logwork [ISSUE] [TIME]` | book time — `jired logwork PROJ-142 "2h 30m"`; with either missing it opens a form, `--push` sends it straight away |
 | `report time` | who booked how much time, a row per person and a column per day, off the files already on disk; `--days N` (default 7) and `--show-issues`, both of which the screen can change while it is open |
-| `log [ISSUE]` | what changed, newest first — every issue in the workspace, or just one; a short change reads as `from → to` and an edited description reads as a diff; `--limit` takes a count (`20`, the default) or a span back from now (`1d`, `2w`, `36h`, `90m`), `--refresh` asks the server |
+| `log [ISSUE]` | what happened, newest first — every issue in the workspace, or just one; field changes, comments and worklogs on one timeline, a short change as `from → to` and an edited description as a diff; `--limit` takes a count (`20`, the default) or a span back from now (`1d`, `2w`, `36h`, `90m`), `--links` makes the keys clickable, `--refresh` asks the server |
 | `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag) |
 | `list [--summary-contains T] [--label L] [--status S…] [--not-status S…] [--category new\|indeterminate\|done] [--sprint S] [--assignee U] [--issue-type T]` | the same question asked of the working copy, offline; `--status` repeats to mean "any of", `--category` is Jira's own three-way reading of any workflow ("not finished yet" is `--not-status Done` on one instance and three flags on the next), `--issue-type` matches the whole name and not a substring; prints key, status and summary, or the fields `--columns key,type,assignee` names, or keys alone with `--keys`, for piping |
 | `show ISSUE [--raw]` | everything the workspace knows about one issue; `--raw` is the server's own payload, unset fields included |
@@ -407,29 +407,56 @@ strength of a success that was not one.
 
 ### History
 
-`jired log` is what changed and who changed it, newest first, over one issue or
-the whole workspace. `--limit` is either a count or a span back from now, so
-"since yesterday" is a question you can ask directly:
+`jired log` is what happened and who did it, newest first, over one issue or the
+whole workspace. `--limit` is either a count of entries or a span back from now,
+so "since yesterday" is a question you can ask directly:
 
 ```
-$ jired log --limit 1d
-PROJ-142  2026-08-16 14:03:00  Ilya A
-    priority         Medium → High
-    description      +1 -1
-      @@ -2,4 +2,4 @@
+$ jired log --limit 1w
+08-16 14:03  PROJ-142  Fix login flow  (Ilya A)
+  priority: Medium → High
+  +labels: auth backend
+  description: +1 -1
+    @@ -2,4 +2,4 @@
 
-       1. Log in
-      -2. Log out
-      +2. Wait five minutes
-       3. Log in again
+     1. Log in
+    -2. Log out
+    +2. Wait five minutes
+     3. Log in again
+08-15 13:30  PROJ-142  Fix login flow  (Jane D)
+  +worklog: 2h 30m — Chased the redirect loop.
+08-15 12:32  PROJ-142  Fix login flow  (Jane D)
+  +comment: Repro confirmed on staging.
+08-14 11:00  PROJ-142  Fix login flow  (Jane D)
+  status: To Do → In Progress
+  -Sprint: Sprint 11
 ```
 
-A short change reads as `from → to`. A field carrying prose is diffed instead —
-Jira's changelog hands back the whole old and new text of a description, and a
-page of it does not fit on a row. jired decides by the values, not by the field
-name, so an instance's own "Acceptance Criteria" is diffed too. The diff is of
-the server's own text rather than jired's markdown rendering of it, and one
-field is capped at 30 lines; `--json` carries both texts whole.
+Each row is when, which issue, what that issue is, and who. The time says only
+what you do not already know: the clock alone for the last day, the date once it
+is older than that, the year only when it is not this one.
+
+Under it, one row per thing that changed. A field that gained a value it did not
+have is `+`, one that lost the value it had is `-`, and one that swapped reads
+`old → new`. A field carrying prose is diffed instead — Jira's changelog hands
+back the whole old and new text of a description, and a page of it does not fit
+on a row; jired decides by the values, not the field name, so an instance's own
+"Acceptance Criteria" is diffed too. The diff is of the server's own text rather
+than jired's markdown rendering of it, and one field is capped at 30 lines.
+
+Jira's changelog records field changes and nothing else, but a comment posted and
+time booked are as much of an issue's history, so they are merged into the same
+timeline — read out of the snapshot `fetch` already stores, with no extra
+requests. A worklog is dated by when it was *booked*, which is when it happened;
+`report time` is the command that reads a worklog by when the work started.
+
+`--links` makes each key a link to the issue in a browser: the key itself becomes
+clickable and the rows stay the width they were, or — piped to a file, where an
+escape sequence is no use — the URL is printed at the end of the row.
+
+`--json` is the record rather than the rendering: every entry says its `kind`
+(`change`, `comment` or `worklog`), a change carries both texts of every field it
+touched, whole and undiffed, and a comment or a worklog carries its `text`.
 
 ### The issue picker
 

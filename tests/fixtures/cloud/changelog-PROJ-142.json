@@ -8,6 +8,11 @@
         "field": "status",
         "from": "To Do",
         "to": "In Progress"
+      },
+      {
+        "field": "Sprint",
+        "from": "Sprint 11",
+        "to": null
       }
     ]
   },

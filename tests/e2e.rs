@@ -3758,10 +3758,15 @@ fn log_shows_the_changelog_newest_first_and_caches_it() {
 
     let report = ws.json(&["log", "PROJ-142"]);
     let entries = report["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 2);
+    // Two changelog entries, one comment and two worklogs: the log is the
+    // issue's history, and Jira's changelog is only part of that.
+    assert_eq!(entries.len(), 5);
     assert_eq!(entries[0]["id"], "70002", "newest first");
+    assert_eq!(entries[0]["kind"], "change");
     assert_eq!(entries[0]["items"][0]["field"], "priority");
-    assert_eq!(entries[1]["items"][0]["from"], "To Do");
+    let changes: Vec<&Value> = entries.iter().filter(|e| e["kind"] == "change").collect();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[1]["items"][0]["from"], "To Do");
 
     // Cached, so a second run needs no server at all.
     let out = ws
@@ -3776,7 +3781,7 @@ fn log_shows_the_changelog_newest_first_and_caches_it() {
         String::from_utf8_lossy(&out.stderr)
     );
     let cached: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(cached["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(cached["entries"].as_array().unwrap().len(), 5);
 }
 
 /// Colour is on by default, and both ways of turning it off work.
@@ -3883,9 +3888,11 @@ fn printed_times_follow_the_readers_timezone_and_json_does_not() {
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
 
-    assert!(printed("Asia/Tokyo").contains("2026-08-16 21:03:00"));
-    assert!(printed("America/New_York").contains("2026-08-16 08:03:00"));
-    assert!(printed("UTC").contains("2026-08-16 12:03:00"));
+    // The fixture's history is months old, so every row carries its date; the
+    // year is this one, which the reader knows, so it is not printed.
+    assert!(printed("Asia/Tokyo").contains("08-16 21:03"));
+    assert!(printed("America/New_York").contains("08-16 08:03"));
+    assert!(printed("UTC").contains("08-16 12:03"));
     // The zone marker goes with the zone: what is left is the reader's clock.
     assert!(!printed("Asia/Tokyo").contains('Z'));
 
@@ -3952,10 +3959,24 @@ fn log_with_no_issue_covers_the_whole_workspace() {
     assert!(report["key"].is_null(), "no single issue was asked for");
 
     let entries = report["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 5);
     assert_eq!(entries[0]["key"], "PROJ-142");
     assert_eq!(entries[0]["id"], "70002", "newest first");
-    assert_eq!(entries[1]["id"], "70001");
+    assert_eq!(entries[0]["summary"], "Fix login flow", "what the key is");
+    assert_eq!(entries.last().unwrap()["id"], "70001", "oldest last");
+
+    // The kinds are told apart, and each carries what it is: a change has the
+    // fields it touched, a comment and a worklog have their text.
+    let kinds: Vec<&str> = entries
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["change", "worklog", "worklog", "comment", "change"]);
+    let comment = entries.iter().find(|e| e["kind"] == "comment").unwrap();
+    assert_eq!(comment["text"], "Repro confirmed on staging.");
+    assert!(comment["items"].as_array().unwrap().is_empty());
+    let worklog = entries.iter().find(|e| e["kind"] == "worklog").unwrap();
+    assert!(worklog["time_spent"].is_string());
 
     // The narrow form still works, and still says which issue it read.
     let one = ws.json(&["log", "PROJ-142"]);
@@ -3984,7 +4005,7 @@ fn log_over_the_workspace_is_offline_after_the_first_run() {
         String::from_utf8_lossy(&out.stderr)
     );
     let cached: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(cached["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(cached["entries"].as_array().unwrap().len(), 5);
 }
 
 #[test]
@@ -4014,7 +4035,7 @@ fn log_takes_a_span_as_a_limit() {
 
     let ever = ws.json(&["log", "PROJ-142", "--limit", "999w"]);
     let entries = ever["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 5);
     assert_eq!(entries[0]["id"], "70002", "newest first, as ever");
 
     // History exists, it is just older than the window — the difference is
@@ -4025,7 +4046,7 @@ fn log_takes_a_span_as_a_limit() {
         .unwrap();
     let printed = String::from_utf8_lossy(&out.stdout);
     assert!(
-        printed.contains("nothing changed in the last 1d"),
+        printed.contains("nothing happened in the last 1d"),
         "expected the window in the message, got: {printed}"
     );
 }
@@ -4073,6 +4094,94 @@ fn log_diffs_a_text_field_and_leaves_short_changes_alone() {
         .as_str()
         .unwrap()
         .contains("2. Log out\n3. Log in again"));
+}
+
+/// Each row says when, which issue, what the issue is and who did it; a field
+/// that gained or lost a value says so with a sign rather than with `(none)`.
+#[test]
+fn log_rows_carry_the_issue_and_sign_one_sided_changes() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.cmd(&["log"]).output().unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        printed.contains("PROJ-142  Fix login flow"),
+        "the key alone does not say what the issue is:\n{printed}"
+    );
+    assert!(
+        printed.contains("(Ilya A)") && printed.contains("(Jane D)"),
+        "who changed it is what a log is for:\n{printed}"
+    );
+    assert!(
+        printed.contains("+labels: auth backend"),
+        "a value where there was none is a `+`:\n{printed}"
+    );
+    assert!(
+        printed.contains("-Sprint: Sprint 11"),
+        "a value taken away is a `-`:\n{printed}"
+    );
+    assert!(
+        !printed.contains("(none)"),
+        "which is the point of the signs:\n{printed}"
+    );
+}
+
+/// Jira's changelog records field changes and nothing else. A comment posted
+/// and time booked are as much of the issue's history, and jired already has
+/// both in the snapshot, so they belong on the same timeline.
+#[test]
+fn log_merges_comments_and_worklogs_into_the_timeline() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.cmd(&["log", "PROJ-142"]).output().unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        printed.contains("+comment: Repro confirmed on staging."),
+        "a comment is part of what happened:\n{printed}"
+    );
+    assert!(
+        printed.contains("+worklog: 2h 30m — Chased the redirect loop."),
+        "so is time booked, with the note it was booked with:\n{printed}"
+    );
+    // Ordered against the field changes rather than listed after them.
+    let comment = printed.find("+comment:").expect("a comment");
+    let status = printed.find("status: To Do").expect("the status change");
+    let priority = printed
+        .find("priority: Medium")
+        .expect("the priority change");
+    assert!(
+        priority < comment && comment < status,
+        "one timeline, newest first:\n{printed}"
+    );
+}
+
+/// `--links` into a pipe cannot rely on an escape sequence nobody will render,
+/// so it prints the URL. On a terminal the key itself carries it.
+#[test]
+fn log_links_print_a_url_when_nothing_can_click_them() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let plain = String::from_utf8_lossy(&ws.cmd(&["log"]).output().unwrap().stdout).into_owned();
+    assert!(!plain.contains("browse/PROJ-142"), "not without --links");
+
+    let linked =
+        String::from_utf8_lossy(&ws.cmd(&["log", "--links"]).output().unwrap().stdout).into_owned();
+    assert!(
+        linked.contains("https://fixture.invalid/browse/PROJ-142"),
+        "expected the URL in a piped log, got:\n{linked}"
+    );
+    assert!(
+        !linked.contains("\x1b]8;;"),
+        "and no hyperlink escapes into a pipe:\n{linked:?}"
+    );
 }
 
 #[test]

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jired/log/1",
   "title": "jired log result",
-  "description": "Changelog entries, newest first: one issue's, or the whole workspace's",
+  "description": "What happened, newest first: one issue's history, or the whole workspace's. A field change, a comment posted or time booked, told apart by `kind`",
   "type": "object",
   "required": [
     "schema",
@@ -37,7 +37,19 @@
             "description": "The issue this entry belongs to",
             "type": "string"
           },
+          "kind": {
+            "description": "`change` is a field the changelog recorded, `comment` a comment posted, `worklog` time booked. A comment and a worklog carry `text`; only a `change` carries `items`",
+            "enum": [
+              "change",
+              "comment",
+              "worklog"
+            ]
+          },
           "id": {
+            "type": "string"
+          },
+          "summary": {
+            "description": "The issue's summary as the snapshot has it now, not as it read when this happened; empty when there is no snapshot to read it from",
             "type": "string"
           },
           "author": {
@@ -52,7 +64,16 @@
               "null"
             ]
           },
+          "text": {
+            "description": "A comment's body, or the note a worklog was booked with, as markdown. Whole and undiffed: the terminal renders a diff, the record keeps the text",
+            "type": "string"
+          },
+          "time_spent": {
+            "description": "A worklog's duration as Jira spells it — `2h 30m`",
+            "type": "string"
+          },
           "items": {
+            "description": "The fields a `change` touched, with both values whole; empty for a comment or a worklog",
             "type": "array",
             "items": {
               "type": "object",
@@ -81,6 +102,7 @@
         },
         "required": [
           "key",
+          "kind",
           "id",
           "items"
         ]

@@ -8,6 +8,45 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.14.0] — 2026-09-07
+
+### Breaking
+
+- **`jired log` prints a different shape, and `--json` says what kind each entry
+  is.** Every entry now carries `kind` — `change`, `comment` or `worklog` — plus
+  the issue's `summary`; a comment or a worklog carries `text` (and a worklog
+  `time_spent`) where a change carries `items`. A consumer that assumed every
+  entry was a field change gets entries with an empty `items`, so switch on
+  `kind`. The printed form changed with it, from a key-and-author heading with
+  padded field columns to one row per event and one row per field beneath it.
+
+### Added
+
+- **`jired log` is the issue's history, not just Jira's changelog.** Comments
+  posted and time booked are as much of what happened as a status that moved,
+  and jired already had both in the snapshot `fetch` stores — so they are merged
+  into the same timeline, at no extra request, as `+comment:` and `+worklog:`
+  rows. A worklog is dated by when it was booked rather than by when the work
+  started, because a log answers "what happened today"; `report time` is the
+  command that reads a worklog the other way round.
+- **`jired log --links`** makes each key a link to the issue in a browser: an
+  OSC 8 hyperlink on the key itself where something can click it, so the rows
+  stay the width they were, and the plain URL at the end of the row when the
+  output is a pipe or a file, where the escape sequence would be noise.
+
+### Changed
+
+- **A log row says which issue it is about, and in words.** Each entry now heads
+  with the time, the key, *the issue's summary* and the author — a key alone
+  does not say what an issue is, which is the whole problem with scanning a
+  workspace-wide log. The timestamp prints only what the reader does not already
+  know: `14:03` within a day, `08-16 14:03` beyond one, `2025-11-02 16:20` in
+  another year.
+- **A field that gained or lost a value says so with a sign.** `+labels: auth
+  backend` where there was nothing before, `-Sprint: Sprint 11` where there is
+  nothing now; a field that swapped one value for another still reads
+  `old → new`. `(none) →` is gone — a sign does it in one character.
+
 ## [0.13.1] — 2026-09-07
 
 ### Fixed

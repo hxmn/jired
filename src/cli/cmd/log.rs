@@ -1,8 +1,13 @@
 //! `jired log [ISSUE]` [M3.7] — who changed what, and when.
 //!
-//! With no issue named it reads like `git log`: every edit the workspace knows
-//! about, merged into one newest-first list. Name an issue and it narrows to
+//! With no issue named it reads like `git log`: everything the workspace knows
+//! happened, merged into one newest-first list. Name an issue and it narrows to
 //! that issue's history.
+//!
+//! "Happened" is wider than Jira's changelog, which records field changes and
+//! nothing else. A comment posted and time booked are as much of an issue's
+//! history as a status that moved, so they are merged into the same timeline —
+//! out of the snapshot `fetch` already stores, not a second round of requests.
 //!
 //! A field whose old and new values are short reads as `from → to`. One whose
 //! values are prose — a description, an instance's own "Acceptance Criteria" —
@@ -15,16 +20,16 @@
 //! run over a workspace fetches what it is missing; every run after it is
 //! offline until `--refresh`.
 
-use crate::api::model::ChangelogEntry;
+use crate::api::model::{ChangelogEntry, ChangelogItem, RemoteComment, RemoteIssue, RemoteWorklog};
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::store::state::IssueRow;
-use crate::style::{self, BOLD, CYAN, DIM, GREEN, RED};
+use crate::style::{self, CYAN, DIM, GREEN, RED};
 use crate::sync::progress::Progress;
 use crate::sync::Engine;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, Utc};
 use clap::Args;
 use similar::TextDiff;
 
@@ -41,6 +46,13 @@ pub struct LogArgs {
     /// days, hours and minutes — `2w`, `1d12h`, `36h`, `90m`.
     #[arg(long, value_name = "N|SPAN", default_value = "20", value_parser = parse_limit)]
     pub limit: Limit,
+    /// Make every issue key a link to the issue in a browser
+    ///
+    /// On a terminal the key itself becomes clickable and the rows stay the
+    /// width they were; into a pipe or a file, where an escape sequence is no
+    /// use to anyone, the URL is printed instead.
+    #[arg(long)]
+    pub links: bool,
     /// Ignore the cached copy and ask the server
     #[arg(long)]
     pub refresh: bool,
@@ -133,20 +145,108 @@ impl Limit {
     }
 }
 
-/// One changelog entry, tagged with the issue it belongs to.
-///
-/// The tag is what makes a merged log readable; it is emitted in single-issue
-/// mode too so a consumer never has to special-case the two shapes.
-#[derive(serde::Serialize)]
-struct LogEntry<'a> {
+/// Everything one issue contributes to the log.
+struct Known {
+    key: String,
+    changelog: Vec<ChangelogEntry>,
+    /// The last snapshot `fetch` stored: where the comments, the worklogs and
+    /// the summary come from. `None` when it cannot be parsed, which costs this
+    /// issue its comments and its summary but not its changelog.
+    snapshot: Option<RemoteIssue>,
+}
+
+impl Known {
+    fn summary(&self) -> &str {
+        self.snapshot
+            .as_ref()
+            .map(|i| i.fields.summary.as_str())
+            .unwrap_or("")
+    }
+}
+
+/// One thing that happened to an issue, whatever kind of thing it was.
+struct Event<'a> {
     key: &'a str,
-    #[serde(flatten)]
-    entry: &'a ChangelogEntry,
+    /// The issue's summary *now* — a rename shows up as its own row anyway.
+    summary: &'a str,
+    at: Option<DateTime<Utc>>,
+    /// Jira's own id, which is also how same-second events are ordered.
+    id: &'a str,
+    author: Option<&'a str>,
+    what: What<'a>,
+}
+
+enum What<'a> {
+    Change(&'a [ChangelogItem]),
+    Comment(&'a RemoteComment),
+    Worklog(&'a RemoteWorklog),
+}
+
+impl What<'_> {
+    fn kind(&self) -> &'static str {
+        match self {
+            What::Change(_) => "change",
+            What::Comment(_) => "comment",
+            What::Worklog(_) => "worklog",
+        }
+    }
+}
+
+impl Event<'_> {
+    /// The record a consumer parses, which is not what the terminal shows: the
+    /// texts go out whole and undiffed, because a diff is a rendering and the
+    /// two sides are the fact.
+    fn to_json(&self) -> serde_json::Value {
+        let mut doc = serde_json::json!({
+            "key": self.key,
+            "kind": self.what.kind(),
+            "id": self.id,
+            "summary": self.summary,
+            "author": self.author,
+            "created": self.at.as_ref().map(crate::api::model::format_timestamp),
+            "items": [],
+        });
+        match self.what {
+            What::Change(items) => {
+                doc["items"] = serde_json::json!(items
+                    .iter()
+                    .map(|i| serde_json::json!({
+                        "field": i.field,
+                        "from": i.from,
+                        "to": i.to,
+                    }))
+                    .collect::<Vec<_>>());
+            }
+            // Trimmed at the end only: the trailing newline is the markdown
+            // renderer's, not the author's, and it is the one part of the text
+            // that would differ from what the issue file holds.
+            What::Comment(c) => {
+                doc["text"] =
+                    serde_json::json!(crate::convert::to_markdown(&c.body).markdown.trim_end());
+            }
+            What::Worklog(w) => {
+                doc["text"] =
+                    serde_json::json!(crate::convert::to_markdown(&w.comment).markdown.trim_end());
+                doc["time_spent"] = serde_json::json!(w.time_spent);
+            }
+        }
+        doc
+    }
+}
+
+/// An issue whose snapshot holds fewer comments or worklogs than the server
+/// said it had, so the timeline is knowingly short.
+struct Partial {
+    key: String,
+    what: &'static str,
+    held: usize,
+    total: usize,
 }
 
 pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let engine = Engine::open(&mut ctx)?;
+    let base_url = engine.base_url().to_string();
 
     let one = args
         .issue
@@ -170,61 +270,156 @@ pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
             .collect(),
     };
 
-    let mut history: Vec<(String, Vec<ChangelogEntry>)> = Vec::new();
+    let markup = engine.markup();
+    let field_map = engine.field_map()?;
+    let mut known: Vec<Known> = Vec::new();
     let mut stale: Vec<(String, Option<DateTime<Utc>>)> = Vec::new();
     for row in rows {
         if args.refresh || is_stale(&engine, &row)? {
             stale.push((row.key.clone(), issue_updated(&row)));
         }
-        let cached = engine.state.changelog(&row.key)?;
-        history.push((row.key, cached));
+        let changelog = engine.state.changelog(&row.key)?;
+        // The newer of the two snapshots: `remote` is what the last fetch saw,
+        // and only an issue that has never been fetched falls back to `base`.
+        let raw = row
+            .remote
+            .as_ref()
+            .map(|r| &r.raw)
+            .or(row.base.as_ref().map(|b| &b.raw));
+        let snapshot = raw
+            .and_then(|raw| crate::api::normalize::issue_from_json(raw, markup, &field_map).ok());
+        known.push(Known {
+            key: row.key,
+            changelog,
+            snapshot,
+        });
     }
 
     if !stale.is_empty() {
-        fetch_into(&mut ctx, &engine, &stale, &mut history, one.is_some(), out)?;
+        fetch_into(&mut ctx, &engine, &stale, &mut known, one.is_some(), out)?;
     }
 
-    let mut entries: Vec<LogEntry> = history
-        .iter()
-        .flat_map(|(key, entries)| entries.iter().map(move |e| LogEntry { key, entry: e }))
-        .collect();
+    let partial = partial_snapshots(&known);
+    let mut events = timeline(&known);
     // Newest first: the last thing that happened is the thing being asked
     // about. Ties break on the entry id, which Jira hands out in order, so a
     // batch of same-second edits still reads in the order it happened.
-    entries.sort_by(|a, b| {
-        b.entry
-            .created
-            .cmp(&a.entry.created)
-            .then_with(|| b.entry.id.cmp(&a.entry.id))
+    events.sort_by(|a, b| {
+        b.at.cmp(&a.at)
+            .then_with(|| b.id.cmp(a.id))
             .then_with(|| a.key.cmp(b.key))
     });
-    let total = entries.len();
-    apply_limit(&mut entries, args.limit, Utc::now());
+    let total = events.len();
+    let now = Utc::now();
+    apply_limit(&mut events, args.limit, now);
 
-    render(&entries, total, one.as_deref(), args, out);
+    render(
+        &events,
+        total,
+        &partial,
+        now,
+        one.as_deref(),
+        args,
+        &base_url,
+        out,
+    );
 
     out.emit(
         "log",
         &serde_json::json!({
             "key": one,
             "scope": if one.is_some() { "issue" } else { "workspace" },
-            "entries": entries,
+            "entries": events.iter().map(Event::to_json).collect::<Vec<_>>(),
         }),
     );
     Ok(ExitCode::Success)
 }
 
+/// Every event the workspace knows about, in no particular order yet.
+fn timeline(known: &[Known]) -> Vec<Event<'_>> {
+    let mut events = Vec::new();
+    for k in known {
+        let summary = k.summary();
+        for entry in &k.changelog {
+            events.push(Event {
+                key: &k.key,
+                summary,
+                at: entry.created,
+                id: &entry.id,
+                author: entry.author.as_deref(),
+                what: What::Change(&entry.items),
+            });
+        }
+        let Some(issue) = &k.snapshot else { continue };
+        for c in &issue.comments {
+            events.push(Event {
+                key: &k.key,
+                summary,
+                at: c.created,
+                id: &c.id,
+                author: c.author.as_ref().map(|a| a.display_name.as_str()),
+                what: What::Comment(c),
+            });
+        }
+        for w in &issue.worklogs {
+            events.push(Event {
+                key: &k.key,
+                summary,
+                // Dated by when the booking happened, not by when the work did:
+                // a log answers "what happened today", and time booked this
+                // morning for last Tuesday happened this morning. `report time`
+                // is the command that reads a worklog the other way round.
+                at: w.created.or(w.started),
+                id: &w.id,
+                author: w.author.as_ref().map(|a| a.display_name.as_str()),
+                what: What::Worklog(w),
+            });
+        }
+    }
+    events
+}
+
+/// Issues whose snapshot holds only part of what the server said it had.
+///
+/// Both listings are completed page by page when an issue is fetched, so this
+/// is what a completion that failed at the time looks like weeks later: a
+/// timeline missing comments nobody was told about. Rare, and worth a line
+/// rather than silence.
+fn partial_snapshots(known: &[Known]) -> Vec<Partial> {
+    let mut out = Vec::new();
+    for k in known {
+        let Some(issue) = &k.snapshot else { continue };
+        if issue.comment_total > issue.comments.len() {
+            out.push(Partial {
+                key: k.key.clone(),
+                what: "comments",
+                held: issue.comments.len(),
+                total: issue.comment_total,
+            });
+        }
+        if issue.worklog_total > issue.worklogs.len() {
+            out.push(Partial {
+                key: k.key.clone(),
+                what: "worklogs",
+                held: issue.worklogs.len(),
+                total: issue.worklog_total,
+            });
+        }
+    }
+    out
+}
+
 /// Cut a newest-first list down to what `--limit` asked for.
 ///
 /// `now` is passed in rather than read here so the window can be tested against
-/// a fixed clock. An entry the server dated nothing cannot be shown to fall
+/// a fixed clock. An event the server dated nothing cannot be shown to fall
 /// inside a span, so a span drops it; a count still counts it.
-fn apply_limit(entries: &mut Vec<LogEntry>, limit: Limit, now: DateTime<Utc>) {
+fn apply_limit(events: &mut Vec<Event>, limit: Limit, now: DateTime<Utc>) {
     match limit {
-        Limit::Count(n) => entries.truncate(n),
+        Limit::Count(n) => events.truncate(n),
         Limit::Span(span) => {
             let cutoff = now - span;
-            entries.retain(|e| e.entry.created.is_some_and(|c| c >= cutoff));
+            events.retain(|e| e.at.is_some_and(|c| c >= cutoff));
         }
     }
 }
@@ -259,7 +454,7 @@ fn fetch_into(
     ctx: &mut Context,
     engine: &Engine,
     stale: &[(String, Option<DateTime<Utc>>)],
-    history: &mut [(String, Vec<ChangelogEntry>)],
+    known: &mut [Known],
     single: bool,
     out: Out,
 ) -> Result<()> {
@@ -282,8 +477,8 @@ fn fetch_into(
         if let Some(at) = updated {
             engine.state.set_changelog_synced_at(key, at)?;
         }
-        if let Some(slot) = history.iter_mut().find(|(k, _)| k == key) {
-            slot.1 = fetched;
+        if let Some(slot) = known.iter_mut().find(|k| &k.key == key) {
+            slot.changelog = fetched;
         }
         progress.inc();
     }
@@ -301,14 +496,13 @@ struct Prose {
     hidden: usize,
 }
 
-/// Everything either value may spend on the `from → to` line before the field
-/// is treated as prose.
+/// Everything either value may spend on the `field: from → to` row before the
+/// field is treated as prose.
 ///
-/// The row already costs four spaces of indent, sixteen of field name and three
-/// for the arrow, so this is what is left of a narrow terminal. It is a budget
-/// rather than a list of field names on purpose: an instance's own "Acceptance
-/// Criteria" is as much prose as `description` is, and jired does not know its
-/// name — but it can see that what came back does not fit on a line.
+/// It is a budget rather than a list of field names on purpose: an instance's
+/// own "Acceptance Criteria" is as much prose as `description` is, and jired
+/// does not know its name — but it can see that what came back does not fit on
+/// a line.
 const ARROW_BUDGET: usize = 56;
 
 /// How much of one field's diff a log is willing to spend lines on.
@@ -317,6 +511,14 @@ const ARROW_BUDGET: usize = 56;
 /// scan over many entries, and a description rewritten wholesale would bury the
 /// twenty other things that happened that week.
 const MAX_DIFF_LINES: usize = 30;
+
+/// The same, for a comment or a worklog note, which are quoted rather than
+/// diffed: enough to recognise the comment, not enough to become the screen.
+const MAX_BODY_LINES: usize = 6;
+
+/// How wide the summary column pads to. A longer summary is printed in full and
+/// pushes that row's author along; it is never cut.
+const SUMMARY_COLUMN: usize = 48;
 
 /// The diff to show for a field, or `None` when `from → to` still reads.
 ///
@@ -377,50 +579,74 @@ fn line_terminated(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn render_prose(field: &str, prose: &Prose, out: Out) {
-    out.say(format!(
-        "    {} {} {}",
-        format_args!("{:<16}", field),
-        style::out(GREEN, format!("+{}", prose.added)),
-        style::out(RED, format!("-{}", prose.removed)),
-    ));
-    for line in &prose.lines {
-        // Colouring the body is the difference between reading a diff and
-        // counting `+` signs — the same painting `jired diff` does.
-        let painted = match line.chars().next() {
-            Some('+') => style::out(GREEN, line),
-            Some('-') => style::out(RED, line),
-            Some('@') => style::out(CYAN, line),
-            _ => line.clone(),
-        };
-        out.say(format!("      {painted}"));
-    }
-    if prose.hidden > 0 {
-        out.say(format!(
-            "      {}",
-            style::out(
-                DIM,
-                format!("… {} more lines — --json for the whole text", prose.hidden)
-            )
-        ));
+/// A timestamp as somebody scanning a log wants it.
+///
+/// The date of something that happened in the last day is "today", which the
+/// reader knows; the year of something that happened this year is this year,
+/// which they also know. So each is printed only once it stops being obvious,
+/// and what is left is the part that tells them something. Local time, like
+/// everything else jired puts on a screen.
+fn format_when(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let local = at.with_timezone(&Local);
+    // A timestamp from the future is a clock disagreeing with the server's, not
+    // a reason to print a date; it reads as "just now" either way.
+    if now.signed_duration_since(at) < Duration::hours(24) {
+        local.format("%H:%M").to_string()
+    } else if local.year() == now.with_timezone(&Local).year() {
+        local.format("%m-%d %H:%M").to_string()
+    } else {
+        local.format("%Y-%m-%d %H:%M").to_string()
     }
 }
 
-fn render(entries: &[LogEntry], total: usize, one: Option<&str>, args: &LogArgs, out: Out) {
-    if entries.is_empty() {
+/// A terminal hyperlink: the text is what shows, the URL is where it goes.
+///
+/// OSC 8, which terminals that do not know it drop silently — but only when
+/// they are terminals at all. Into a file the escapes are noise around a URL
+/// nobody can click, which is why the caller prints the URL instead.
+fn hyperlink(url: &str, text: &str) -> String {
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+}
+
+fn browse_url(base: &str, key: &str) -> String {
+    format!("{}/browse/{}", base.trim_end_matches('/'), key)
+}
+
+/// Pad to a column width measured in characters.
+///
+/// Bytes would make a Cyrillic summary half as wide as it looks, and painting
+/// before padding would count the escape codes; both knock every column after
+/// this one out of line.
+fn pad(text: &str, width: usize) -> String {
+    let len = text.chars().count();
+    format!("{text}{}", " ".repeat(width.saturating_sub(len)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render(
+    events: &[Event],
+    total: usize,
+    partial: &[Partial],
+    now: DateTime<Utc>,
+    one: Option<&str>,
+    args: &LogArgs,
+    base_url: &str,
+    out: Out,
+) {
+    if events.is_empty() {
         // History that exists but sits outside the window is a different answer
         // from no history at all, and saying the second when the first is true
         // reads as jired having lost it.
         match (total, one) {
-            (0, Some(key)) => out.say(format!("{key} has no recorded history")),
+            (0, Some(key)) => out.say(format!("{key} has nothing recorded against it")),
             (0, None) => {
-                out.say("no recorded history in this workspace");
+                out.say("nothing recorded in this workspace");
                 out.hint("run `jired pull` to bring issues in, then `jired log`");
             }
             _ => {
                 match args.limit {
                     Limit::Span(span) => {
-                        out.say(format!("nothing changed in the last {}", describe(span)))
+                        out.say(format!("nothing happened in the last {}", describe(span)))
                     }
                     Limit::Count(_) => out.say("nothing to show at this limit"),
                 }
@@ -433,57 +659,192 @@ fn render(entries: &[LogEntry], total: usize, one: Option<&str>, args: &LogArgs,
         return;
     }
 
-    // Only a merged log needs the key column, and only as wide as it has to be.
-    let width = if one.is_some() {
-        0
-    } else {
-        entries.iter().map(|e| e.key.len()).max().unwrap_or(0)
-    };
+    // Every column is as wide as its own data and no wider, so a workspace of
+    // short keys does not pay for the one long one it does not have.
+    let when: Vec<String> = events
+        .iter()
+        .map(|e| e.at.map(|at| format_when(at, now)).unwrap_or_default())
+        .collect();
+    let time_width = when.iter().map(|w| w.chars().count()).max().unwrap_or(0);
+    let key_width = events
+        .iter()
+        .map(|e| e.key.chars().count())
+        .max()
+        .unwrap_or(0);
+    let summary_width = events
+        .iter()
+        .map(|e| e.summary.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(SUMMARY_COLUMN);
+    // An escape sequence is a link only where something can follow it; a file
+    // gets the URL itself, which is the part a reader can still use.
+    let clickable = args.links && std::io::IsTerminal::is_terminal(&std::io::stdout());
 
-    for e in entries {
-        let when = e
-            .entry
-            .created
-            .as_ref()
-            .map(crate::api::model::format_local)
-            .unwrap_or_default();
-        let who = e.entry.author.as_deref().unwrap_or("unknown");
-        // Padded before painting: escape codes count towards a format width and
-        // would knock every following column out of line.
-        let head = format!("{}  {}", style::out(DIM, when), style::out(BOLD, who));
-        if width > 0 {
-            out.say(format!(
-                "{}  {head}",
-                style::out(CYAN, format!("{:<width$}", e.key, width = width))
-            ));
+    for (e, when) in events.iter().zip(&when) {
+        let key = pad(e.key, key_width);
+        let key = if clickable {
+            hyperlink(&browse_url(base_url, e.key), &key)
         } else {
-            out.say(head);
+            key
+        };
+        let mut row = format!(
+            "{}  {}",
+            style::out(DIM, pad(when, time_width)),
+            style::out(CYAN, key)
+        );
+        if summary_width > 0 {
+            row.push_str(&format!("  {}", pad(e.summary, summary_width)));
         }
-        for item in &e.entry.items {
-            let from = item.from.as_deref().unwrap_or_default();
-            let to = item.to.as_deref().unwrap_or_default();
-            if let Some(prose) = prose_diff(from, to) {
-                render_prose(&item.field, &prose, out);
-                continue;
-            }
-            // Red out, green in: the same reading `diff` and `pull` already ask
-            // for, so a changelog entry needs no second vocabulary.
-            out.say(format!(
-                "    {} {} {} {}",
-                format_args!("{:<16}", item.field),
-                style::out(RED, item.from.as_deref().unwrap_or("(none)")),
-                style::out(DIM, "→"),
-                style::out(GREEN, item.to.as_deref().unwrap_or("(none)"))
+        if let Some(author) = e.author {
+            row.push_str(&format!("  {}", style::out(DIM, format!("({author})"))));
+        }
+        if args.links && !clickable {
+            row.push_str(&format!(
+                "  {}",
+                style::out(DIM, browse_url(base_url, e.key))
             ));
+        }
+        out.say(row.trim_end());
+
+        match e.what {
+            What::Change(items) => render_change(items, out),
+            What::Comment(c) => render_body(
+                "comment",
+                // A comment edited after it was posted is not the comment that
+                // was posted, and the log dates it by when it first appeared.
+                c.updated
+                    .is_some_and(|edited| c.created.is_some_and(|posted| edited > posted)),
+                None,
+                &crate::convert::to_markdown(&c.body).markdown,
+                out,
+            ),
+            What::Worklog(w) => render_body(
+                "worklog",
+                false,
+                Some(&w.time_spent),
+                &crate::convert::to_markdown(&w.comment).markdown,
+                out,
+            ),
         }
     }
 
-    if total > entries.len() {
+    if total > events.len() {
         out.hint(format!(
             "{} of {total} entries; --limit {} to see more",
-            entries.len(),
+            events.len(),
             args.limit.wider()
         ));
+    }
+    for p in partial.iter().take(3) {
+        out.hint(format!(
+            "{}: the snapshot holds {} of {} {} — `jired fetch {}` brings the rest",
+            p.key, p.held, p.total, p.what, p.key
+        ));
+    }
+}
+
+/// The rows under a changelog entry: one per field it touched.
+fn render_change(items: &[ChangelogItem], out: Out) {
+    for item in items {
+        let from = item.from.as_deref().unwrap_or_default();
+        let to = item.to.as_deref().unwrap_or_default();
+        if let Some(prose) = prose_diff(from, to) {
+            render_prose(&item.field, &prose, out);
+            continue;
+        }
+        // A field that gained a value it did not have, or lost the one it did,
+        // is a `+` or a `-` rather than an arrow out of nothing: the sign says
+        // in one character what `(none) →` said in seven.
+        match (from.is_empty(), to.is_empty()) {
+            (true, false) => out.say(format!(
+                "  {} {}",
+                style::out(GREEN, format!("+{}:", item.field)),
+                style::out(GREEN, to)
+            )),
+            (false, true) => out.say(format!(
+                "  {} {}",
+                style::out(RED, format!("-{}:", item.field)),
+                style::out(RED, from)
+            )),
+            // Red out, green in: the same reading `diff` and `pull` already ask
+            // for, so a changelog entry needs no second vocabulary.
+            (false, false) => out.say(format!(
+                "  {}: {} {} {}",
+                item.field,
+                style::out(RED, from),
+                style::out(DIM, "→"),
+                style::out(GREEN, to)
+            )),
+            (true, true) => out.say(format!("  {}: {}", item.field, style::out(DIM, "(none)"))),
+        }
+    }
+}
+
+fn render_prose(field: &str, prose: &Prose, out: Out) {
+    out.say(format!(
+        "  {field}: {} {}",
+        style::out(GREEN, format!("+{}", prose.added)),
+        style::out(RED, format!("-{}", prose.removed)),
+    ));
+    for line in &prose.lines {
+        // Colouring the body is the difference between reading a diff and
+        // counting `+` signs — the same painting `jired diff` does.
+        let painted = match line.chars().next() {
+            Some('+') => style::out(GREEN, line),
+            Some('-') => style::out(RED, line),
+            Some('@') => style::out(CYAN, line),
+            _ => line.clone(),
+        };
+        // A context line for a blank line is a lone space; indented, it is five
+        // characters of nothing that a `git diff --check` habit reads as dirt.
+        out.say(format!("    {painted}").trim_end());
+    }
+    if prose.hidden > 0 {
+        out.say(format!(
+            "    {}",
+            style::out(
+                DIM,
+                format!("⋯ {} more lines — --json for the whole text", prose.hidden)
+            )
+        ));
+    }
+}
+
+/// The rows under a comment or a worklog: what it was, then what it said.
+///
+/// Quoted rather than diffed, and capped: a comment is worth recognising in a
+/// log, and worth reading in the issue file.
+fn render_body(kind: &str, edited: bool, duration: Option<&str>, text: &str, out: Out) {
+    let head = style::out(
+        GREEN,
+        format!("+{kind}{}:", if edited { " (edited)" } else { "" }),
+    );
+    let mut lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    let mut rest = lines.iter();
+    let first = rest.next().copied().unwrap_or_default();
+    // The duration is what a worklog *is*, so it leads; the note it was booked
+    // with follows on the same row while there is one line of it.
+    let opening = match duration {
+        Some(d) if first.is_empty() => d.to_string(),
+        Some(d) => format!("{d} — {first}"),
+        None => first.to_string(),
+    };
+    out.say(format!("  {head} {opening}").trim_end());
+
+    let rest: Vec<&str> = rest.copied().collect();
+    for (i, line) in rest.iter().enumerate() {
+        if i == MAX_BODY_LINES {
+            out.say(format!(
+                "    {}",
+                style::out(DIM, format!("⋯ {} more lines", rest.len() - i))
+            ));
+            break;
+        }
+        out.say(format!("    {line}").trim_end());
     }
 }
 
@@ -496,6 +857,15 @@ mod tests {
         DateTime::parse_from_rfc3339(iso)
             .unwrap()
             .with_timezone(&Utc)
+    }
+
+    fn change(id: &str, iso: &str) -> ChangelogEntry {
+        ChangelogEntry {
+            id: id.to_string(),
+            author: None,
+            created: Some(at(iso)),
+            items: vec![],
+        }
     }
 
     #[test]
@@ -527,63 +897,57 @@ mod tests {
 
     #[test]
     fn a_span_keeps_the_entries_inside_the_window() {
-        let entries: Vec<ChangelogEntry> = ["2026-09-07T09:00:00Z", "2026-09-01T09:00:00Z"]
-            .iter()
-            .map(|iso| ChangelogEntry {
-                id: iso.to_string(),
-                author: None,
-                created: Some(at(iso)),
-                items: vec![],
-            })
-            .collect();
+        let entries = [
+            change("1", "2026-09-07T09:00:00Z"),
+            change("2", "2026-09-01T09:00:00Z"),
+        ];
         let now = at("2026-09-07T12:00:00Z");
+        let build = || -> Vec<Event> {
+            entries
+                .iter()
+                .map(|entry| Event {
+                    key: "PROJ-1",
+                    summary: "",
+                    at: entry.created,
+                    id: &entry.id,
+                    author: None,
+                    what: What::Change(&entry.items),
+                })
+                .collect()
+        };
 
-        let mut day: Vec<LogEntry> = entries
-            .iter()
-            .map(|entry| LogEntry {
-                key: "PROJ-1",
-                entry,
-            })
-            .collect();
+        let mut day = build();
         apply_limit(&mut day, Limit::Span(Duration::hours(24)), now);
         assert_eq!(day.len(), 1);
 
-        let mut fortnight: Vec<LogEntry> = entries
-            .iter()
-            .map(|entry| LogEntry {
-                key: "PROJ-1",
-                entry,
-            })
-            .collect();
+        let mut fortnight = build();
         apply_limit(&mut fortnight, Limit::Span(Duration::days(14)), now);
         assert_eq!(fortnight.len(), 2);
     }
 
-    /// Nothing dates an entry to inside the window, so a span leaves it out.
+    /// Nothing dates an event to inside the window, so a span leaves it out.
     #[test]
-    fn a_span_drops_an_entry_the_server_never_dated() {
-        let entry = ChangelogEntry {
-            id: "1".into(),
-            author: None,
-            created: None,
-            items: vec![],
-        };
-        let mut entries = vec![LogEntry {
+    fn a_span_drops_an_event_the_server_never_dated() {
+        let entry = change("1", "2026-09-07T09:00:00Z");
+        let undated = || Event {
             key: "PROJ-1",
-            entry: &entry,
-        }];
+            summary: "",
+            at: None,
+            id: &entry.id,
+            author: None,
+            what: What::Change(&entry.items),
+        };
+        let mut events = vec![undated()];
         apply_limit(
-            &mut entries,
+            &mut events,
             Limit::Span(Duration::days(3650)),
             at("2026-09-07T12:00:00Z"),
         );
-        assert!(entries.is_empty());
-        entries.push(LogEntry {
-            key: "PROJ-1",
-            entry: &entry,
-        });
-        apply_limit(&mut entries, Limit::Count(20), at("2026-09-07T12:00:00Z"));
-        assert_eq!(entries.len(), 1);
+        assert!(events.is_empty());
+
+        events.push(undated());
+        apply_limit(&mut events, Limit::Count(20), at("2026-09-07T12:00:00Z"));
+        assert_eq!(events.len(), 1);
     }
 
     /// A status or a priority is exactly what the arrow form is for.
@@ -664,5 +1028,59 @@ mod tests {
         assert_eq!(Limit::Span(Duration::minutes(90)).wider(), "3h");
         assert_eq!(Limit::Span(Duration::hours(36)).wider(), "3d");
         assert_eq!(Limit::Span(Duration::minutes(50)).wider(), "100m");
+    }
+
+    /// The date appears when "today" stops being the answer, and the year when
+    /// "this year" does.
+    ///
+    /// The shape is asserted rather than the digits: the clock a reader sees is
+    /// their own, so the exact numbers belong to the machine running the test.
+    /// Which zone that is, `tests/e2e.rs` pins with `TZ` on a subprocess — the
+    /// process env is not a thing to move under the other tests in here.
+    #[test]
+    fn a_timestamp_says_only_what_the_reader_does_not_already_know() {
+        fn shape(s: &str) -> String {
+            s.chars()
+                .map(|c| if c.is_ascii_digit() { 'N' } else { c })
+                .collect()
+        }
+        let now = at("2026-09-07T12:00:00Z");
+
+        assert_eq!(
+            shape(&format_when(at("2026-09-07T09:30:00Z"), now)),
+            "NN:NN"
+        );
+        // Under twenty-four hours old, however the local date reads.
+        assert_eq!(
+            shape(&format_when(at("2026-09-06T13:00:00Z"), now)),
+            "NN:NN"
+        );
+        assert_eq!(
+            shape(&format_when(at("2026-09-06T11:00:00Z"), now)),
+            "NN-NN NN:NN"
+        );
+        let old = format_when(at("2025-11-02T16:20:00Z"), now);
+        assert_eq!(shape(&old), "NNNN-NN-NN NN:NN");
+        assert!(old.starts_with("2025-"), "another year, so it is printed");
+        // A server clock ahead of this one is not a reason to print a date.
+        assert_eq!(
+            shape(&format_when(at("2026-09-07T12:30:00Z"), now)),
+            "NN:NN"
+        );
+    }
+
+    #[test]
+    fn a_link_wraps_the_text_and_not_the_padding() {
+        let url = browse_url("https://jira.example.com/", "PROJ-1");
+        assert_eq!(url, "https://jira.example.com/browse/PROJ-1");
+        let cell = hyperlink(&url, &pad("PROJ-1", 10));
+        assert!(cell.starts_with("\x1b]8;;https://jira.example.com/browse/PROJ-1\x1b\\"));
+        assert!(cell.contains("PROJ-1    "));
+    }
+
+    #[test]
+    fn columns_are_measured_in_characters_not_bytes() {
+        assert_eq!(pad("Пишем", 7), "Пишем  ");
+        assert_eq!(pad("wide enough already", 3), "wide enough already");
     }
 }

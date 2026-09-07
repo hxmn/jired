@@ -370,20 +370,55 @@ for one is not nagged about it. It does not make the workspace unclean — nothi
 is at risk — but a stale doc is what an agent plans against, so it is said out
 loud rather than left to be discovered.
 
-### `jired log [ISSUE] [--limit N|SPAN] [--refresh]`
-Changelog entries newest first, each tagged with its issue. With no `ISSUE` it
-covers the whole workspace, the way `git log` does; naming one narrows to it.
+### `jired log [ISSUE] [--limit N|SPAN] [--links] [--refresh]`
+Everything that happened, newest first, each entry tagged with its issue. With
+no `ISSUE` it covers the whole workspace, the way `git log` does; naming one
+narrows to it.
 
-A field whose values are short prints as `field  from → to`. One whose values
-are prose prints as a unified diff under the field name, headed with what it
-gained and lost — Jira's changelog carries the *whole* old and new text of a
-description, and a page of it does not fit through a column layout. Which it is
-is decided by the values and not by a list of field names, since an instance's
-own "Acceptance Criteria" is as much prose as `description` is: a value with a
-newline in it, or one too long for the row, is diffed. The text is the server's
-own, not jired's markdown rendering of it, and a single field's diff is capped
-at 30 lines so a rewritten description cannot bury the rest of the week —
-`--json` still carries both texts whole, diffed by nobody.
+Wider than Jira's changelog, which records field changes and nothing else: a
+comment posted and time booked are as much of an issue's history, so they are
+merged into the same timeline out of the snapshot `fetch` already stores — no
+second round of requests, and nothing a `--json` consumer has to stitch together
+itself. A worklog is dated by when it was booked (`created`, falling back to
+`started`) rather than by when the work started: a log answers "what happened
+today", and time booked this morning for last Tuesday happened this morning.
+`report time` is the command that reads a worklog the other way round.
+
+Each entry heads with when, the key, the issue's summary and the author, in
+columns measured from the data. The timestamp prints only the part the reader
+does not already know — `14:03` inside a day, `08-16 14:03` beyond one,
+`2025-11-02 16:20` in another year — in local time, like everything jired puts
+on a screen. The summary is the snapshot's current one, not the summary as it
+read at the time; a rename is its own row anyway.
+
+Under the heading, one row per thing that changed:
+
+* `field: old → new` when both sides have a value;
+* `+field: value` when there was none before, `-field: value` when there is none
+  now — the sign says in one character what `(none) →` said in seven;
+* `field: +3 -1` and a unified diff under it when the values are prose. Jira's
+  changelog carries the *whole* old and new text of a description, and a page of
+  it does not fit through a column layout. Which fields those are is decided by
+  the values and not by a list of names, since an instance's own "Acceptance
+  Criteria" is as much prose as `description` is: a value with a newline in it,
+  or one too long for the row, is diffed. The text is the server's own, not
+  jired's markdown rendering of it, and one field's diff stops at 30 lines so a
+  rewritten description cannot bury the rest of the week;
+* `+comment:` and `+worklog:` with the text quoted, capped at six lines — a
+  comment is worth recognising in a log and worth reading in the issue file.
+
+`--links` turns each key into a link to `/browse/KEY`. On a terminal it is an
+OSC 8 hyperlink on the key itself, so the rows stay the width they were; into a
+pipe or a file, where the escape sequence is no use to anyone, the URL is
+printed at the end of the heading row instead.
+
+`--json` is the record rather than the rendering. Every entry carries `kind` —
+`change`, `comment` or `worklog` — plus `key`, `summary`, `author` and `created`;
+a change carries `items` with both texts of every field it touched, whole and
+undiffed, and a comment or worklog carries `text` (and `time_spent`). Comments
+and worklogs are read from the stored snapshot, which is completed page by page
+when an issue is fetched; an issue whose snapshot is nonetheless short of what
+the server said it had is named in a trailer rather than quietly under-reported.
 
 `--limit` says how much of the log to show, as either a count of entries (`20`,
 the default) or a span back from now — `1d`, `2w`, `36h`, `90m`, `1d12h`. Which
@@ -393,7 +428,7 @@ week is seven days; this is deliberately *not* the working time `logwork "1d"`
 books, where the instance's day may be eight hours. An entry the server dated
 nothing cannot be shown to fall inside a window, so a span leaves it out where a
 count keeps it. History that exists but is older than the window says so — and
-offers twice the span — rather than printing the empty-changelog answer.
+offers twice the span — rather than printing the nothing-recorded answer.
 
 Changelogs are fetched per issue (`expand=changelog`) and cached, so the first
 log over a workspace fetches what it is missing and every run after it is
