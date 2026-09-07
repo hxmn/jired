@@ -19,7 +19,7 @@ use crate::store::state::IssueRow;
 use crate::style::{self, BOLD, CYAN, DIM, GREEN, RED};
 use crate::sync::progress::Progress;
 use crate::sync::Engine;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use clap::Args;
 
 #[derive(Args, Debug, Clone)]
@@ -28,12 +28,103 @@ pub struct LogArgs {
     ///
     /// Omitted, every issue in the workspace is shown, newest edit first.
     pub issue: Option<String>,
-    /// Show at most this many entries (newest first)
-    #[arg(long, default_value_t = 20)]
-    pub limit: usize,
+    /// How much to show: a count of entries, or a span back from now
+    ///
+    /// `--limit 20` is the newest twenty entries; `--limit 1d` is everything
+    /// from the last day, however many that is. Spans are written in weeks,
+    /// days, hours and minutes — `2w`, `1d12h`, `36h`, `90m`.
+    #[arg(long, value_name = "N|SPAN", default_value = "20", value_parser = parse_limit)]
+    pub limit: Limit,
     /// Ignore the cached copy and ask the server
     #[arg(long)]
     pub refresh: bool,
+}
+
+/// What `--limit` asked for: how many entries, or how far back.
+///
+/// The two are one flag rather than two because they answer the same question —
+/// how much of the log do I want — and a `git log` reader reaches for `--limit`
+/// either way. Which one was meant is unambiguous from the spelling: a bare
+/// number is a count, anything with a unit is a span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Limit {
+    Count(usize),
+    Span(Duration),
+}
+
+fn parse_limit(text: &str) -> std::result::Result<Limit, String> {
+    let text = text.trim();
+    if text.chars().all(|c| c.is_ascii_digit()) && !text.is_empty() {
+        return text
+            .parse()
+            .map(Limit::Count)
+            .map_err(|_| format!("{text} is more entries than there could ever be"));
+    }
+    parse_span(text).map(Limit::Span).ok_or_else(|| {
+        format!(
+            "`{text}` is neither a count nor a span — write `20` for the newest \
+             twenty entries, or `1d`, `2w`, `36h`, `90m` for a span back from now"
+        )
+    })
+}
+
+/// A span in calendar time: `1d` is twenty-four hours, `1w` is seven days.
+///
+/// Deliberately *not* `doc::parse_duration`, which reads the same letters as
+/// Jira's working time — there a day is eight hours and a week is five days.
+/// That scale is right for booked work and wrong for "what happened since
+/// yesterday", and sharing the parser would silently give `--limit 1d` a
+/// third of the window it says.
+fn parse_span(text: &str) -> Option<Duration> {
+    let mut seconds: i64 = 0;
+    let mut digits = String::new();
+    let mut any = false;
+
+    for c in text.chars() {
+        match c {
+            '0'..='9' => digits.push(c),
+            ' ' | ',' => {}
+            _ => {
+                let scale: i64 = match c.to_ascii_lowercase() {
+                    'w' => 7 * 24 * 3600,
+                    'd' => 24 * 3600,
+                    'h' => 3600,
+                    'm' => 60,
+                    _ => return None,
+                };
+                let n: i64 = digits.parse().ok()?;
+                digits.clear();
+                seconds = seconds.checked_add(n.checked_mul(scale)?)?;
+                any = true;
+            }
+        }
+    }
+    // A trailing number has no unit, and a span of nothing would show nothing.
+    (any && digits.is_empty() && seconds > 0).then(|| Duration::seconds(seconds))
+}
+
+/// A span written the shortest way that stays exact: `172800s` reads as `2d`.
+fn describe(span: Duration) -> String {
+    let seconds = span.num_seconds().max(60);
+    for (unit, scale) in [("w", 7 * 24 * 3600), ("d", 24 * 3600), ("h", 3600)] {
+        if seconds >= scale && seconds % scale == 0 {
+            return format!("{}{unit}", seconds / scale);
+        }
+    }
+    format!("{}m", seconds / 60)
+}
+
+impl Limit {
+    /// The limit to suggest when there is more to see: twice this one.
+    ///
+    /// Doubling is what makes the hint worth printing — it is a limit the
+    /// reader can paste, not a unit conversion they have to do first.
+    fn wider(self) -> String {
+        match self {
+            Limit::Count(n) => n.saturating_mul(2).max(1).to_string(),
+            Limit::Span(s) => describe(s.checked_mul(2).unwrap_or(s)),
+        }
+    }
 }
 
 /// One changelog entry, tagged with the issue it belongs to.
@@ -102,7 +193,7 @@ pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
             .then_with(|| a.key.cmp(b.key))
     });
     let total = entries.len();
-    entries.truncate(args.limit);
+    apply_limit(&mut entries, args.limit, Utc::now());
 
     render(&entries, total, one.as_deref(), args, out);
 
@@ -115,6 +206,21 @@ pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
         }),
     );
     Ok(ExitCode::Success)
+}
+
+/// Cut a newest-first list down to what `--limit` asked for.
+///
+/// `now` is passed in rather than read here so the window can be tested against
+/// a fixed clock. An entry the server dated nothing cannot be shown to fall
+/// inside a span, so a span drops it; a count still counts it.
+fn apply_limit(entries: &mut Vec<LogEntry>, limit: Limit, now: DateTime<Utc>) {
+    match limit {
+        Limit::Count(n) => entries.truncate(n),
+        Limit::Span(span) => {
+            let cutoff = now - span;
+            entries.retain(|e| e.entry.created.is_some_and(|c| c >= cutoff));
+        }
+    }
 }
 
 /// True when the server has edited this issue since its changelog was cached.
@@ -181,11 +287,26 @@ fn fetch_into(
 
 fn render(entries: &[LogEntry], total: usize, one: Option<&str>, args: &LogArgs, out: Out) {
     if entries.is_empty() {
-        match one {
-            Some(key) => out.say(format!("{key} has no recorded history")),
-            None => {
+        // History that exists but sits outside the window is a different answer
+        // from no history at all, and saying the second when the first is true
+        // reads as jired having lost it.
+        match (total, one) {
+            (0, Some(key)) => out.say(format!("{key} has no recorded history")),
+            (0, None) => {
                 out.say("no recorded history in this workspace");
                 out.hint("run `jired pull` to bring issues in, then `jired log`");
+            }
+            _ => {
+                match args.limit {
+                    Limit::Span(span) => {
+                        out.say(format!("nothing changed in the last {}", describe(span)))
+                    }
+                    Limit::Count(_) => out.say("nothing to show at this limit"),
+                }
+                out.hint(format!(
+                    "{total} older entries; --limit {} to look further back",
+                    args.limit.wider()
+                ));
             }
         }
         return;
@@ -234,7 +355,117 @@ fn render(entries: &[LogEntry], total: usize, one: Option<&str>, args: &LogArgs,
         out.hint(format!(
             "{} of {total} entries; --limit {} to see more",
             entries.len(),
-            args.limit * 2
+            args.limit.wider()
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::model::ChangelogEntry;
+
+    fn at(iso: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(iso)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn a_bare_number_is_a_count_and_a_unit_makes_a_span() {
+        assert_eq!(parse_limit("20"), Ok(Limit::Count(20)));
+        assert_eq!(parse_limit(" 5 "), Ok(Limit::Count(5)));
+        assert_eq!(parse_limit("1d"), Ok(Limit::Span(Duration::hours(24))));
+        assert_eq!(parse_limit("2w"), Ok(Limit::Span(Duration::days(14))));
+        assert_eq!(parse_limit("36h"), Ok(Limit::Span(Duration::hours(36))));
+        assert_eq!(parse_limit("90m"), Ok(Limit::Span(Duration::minutes(90))));
+        assert_eq!(parse_limit("1D"), Ok(Limit::Span(Duration::hours(24))));
+        assert_eq!(parse_limit("1d 12h"), Ok(Limit::Span(Duration::hours(36))));
+    }
+
+    /// A day here is a day, not the eight hours `logwork "1d"` books.
+    #[test]
+    fn a_span_is_calendar_time_not_working_time() {
+        assert_eq!(parse_limit("1d"), Ok(Limit::Span(Duration::hours(24))));
+        assert_eq!(crate::doc::parse_duration("1d"), Some(8 * 3600));
+    }
+
+    #[test]
+    fn nonsense_is_refused_rather_than_read_as_something() {
+        // `0` stays a legal count: it was one before spans existed.
+        for bad in ["", "banana", "1x", "1d5", "-3", "0d", "d", "1.5d"] {
+            assert!(parse_limit(bad).is_err(), "{bad} should not parse");
+        }
+    }
+
+    #[test]
+    fn a_span_keeps_the_entries_inside_the_window() {
+        let entries: Vec<ChangelogEntry> = ["2026-09-07T09:00:00Z", "2026-09-01T09:00:00Z"]
+            .iter()
+            .map(|iso| ChangelogEntry {
+                id: iso.to_string(),
+                author: None,
+                created: Some(at(iso)),
+                items: vec![],
+            })
+            .collect();
+        let now = at("2026-09-07T12:00:00Z");
+
+        let mut day: Vec<LogEntry> = entries
+            .iter()
+            .map(|entry| LogEntry {
+                key: "PROJ-1",
+                entry,
+            })
+            .collect();
+        apply_limit(&mut day, Limit::Span(Duration::hours(24)), now);
+        assert_eq!(day.len(), 1);
+
+        let mut fortnight: Vec<LogEntry> = entries
+            .iter()
+            .map(|entry| LogEntry {
+                key: "PROJ-1",
+                entry,
+            })
+            .collect();
+        apply_limit(&mut fortnight, Limit::Span(Duration::days(14)), now);
+        assert_eq!(fortnight.len(), 2);
+    }
+
+    /// Nothing dates an entry to inside the window, so a span leaves it out.
+    #[test]
+    fn a_span_drops_an_entry_the_server_never_dated() {
+        let entry = ChangelogEntry {
+            id: "1".into(),
+            author: None,
+            created: None,
+            items: vec![],
+        };
+        let mut entries = vec![LogEntry {
+            key: "PROJ-1",
+            entry: &entry,
+        }];
+        apply_limit(
+            &mut entries,
+            Limit::Span(Duration::days(3650)),
+            at("2026-09-07T12:00:00Z"),
+        );
+        assert!(entries.is_empty());
+        entries.push(LogEntry {
+            key: "PROJ-1",
+            entry: &entry,
+        });
+        apply_limit(&mut entries, Limit::Count(20), at("2026-09-07T12:00:00Z"));
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn the_hint_offers_twice_what_was_asked_for() {
+        assert_eq!(Limit::Count(20).wider(), "40");
+        assert_eq!(Limit::Span(Duration::hours(24)).wider(), "2d");
+        assert_eq!(Limit::Span(Duration::days(7)).wider(), "2w");
+        assert_eq!(Limit::Span(Duration::minutes(90)).wider(), "3h");
+        assert_eq!(Limit::Span(Duration::hours(36)).wider(), "3d");
+        assert_eq!(Limit::Span(Duration::minutes(50)).wider(), "100m");
     }
 }

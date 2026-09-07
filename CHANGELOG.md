@@ -8,6 +8,26 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.13.0] — 2026-09-07
+
+### Added
+
+- **`jired log --limit` takes a span as well as a count.** `--limit 1d` is
+  everything from the last day, however many entries that is; `2w`, `36h`,
+  `90m` and `1d12h` work the same way, and a bare `--limit 20` still means the
+  newest twenty. "What happened since yesterday" was a count you had to guess
+  and then guess again, which over a whole workspace is a different guess every
+  day. A span is calendar time — a day is twenty-four hours, a week is seven
+  days — and is deliberately *not* the working time `logwork "1d"` books, where
+  the instance's day may be eight hours.
+
+### Fixed
+
+- **`jired log` no longer says an issue has no history when the limit hid it.**
+  A window with nothing in it, or `--limit 0`, printed the same line as an issue
+  the server has never changed. It now says what the window was and offers twice
+  it, so an empty screen is not read as a lost changelog.
+
 ## [0.12.0] — 2026-09-07
 
 ### Breaking

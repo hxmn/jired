@@ -3996,6 +3996,52 @@ fn log_honours_the_limit() {
     assert_eq!(report["entries"].as_array().unwrap().len(), 1);
 }
 
+/// `--limit 1d` is a window, not a count: the fixture's history was recorded in
+/// August 2026 and falls outside a day of any run, and inside a wide enough
+/// span. The entries themselves are the same ones the count form shows.
+#[test]
+fn log_takes_a_span_as_a_limit() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let recent = ws.json(&["log", "PROJ-142", "--limit", "1d"]);
+    assert_eq!(recent["scope"], "issue");
+    assert!(
+        recent["entries"].as_array().unwrap().is_empty(),
+        "nothing was edited in the last day"
+    );
+
+    let ever = ws.json(&["log", "PROJ-142", "--limit", "999w"]);
+    let entries = ever["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["id"], "70002", "newest first, as ever");
+
+    // History exists, it is just older than the window — the difference is
+    // said out loud rather than read as an empty changelog.
+    let out = ws
+        .cmd(&["log", "PROJ-142", "--limit", "1d"])
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        printed.contains("nothing changed in the last 1d"),
+        "expected the window in the message, got: {printed}"
+    );
+}
+
+#[test]
+fn log_refuses_a_limit_that_is_neither_a_count_nor_a_span() {
+    let ws = Ws::new();
+    ws.init();
+    let out = ws.cmd(&["log", "--limit", "1x"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("neither a count nor a span"),
+        "the error should say what a limit may look like"
+    );
+}
+
 #[test]
 fn log_on_an_unknown_issue_is_a_usage_error() {
     let ws = Ws::new();

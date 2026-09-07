@@ -378,7 +378,7 @@ the filename you were just editing instead of retyping the key.
 | `attachments pull [ISSUES…]` / `list` | download attachment content over the stubs, or show what is present |
 | `logwork [ISSUE] [TIME]` | book time — `jired logwork PROJ-142 "2h 30m"`; with either missing it opens a form, `--push` sends it straight away |
 | `report time` | who booked how much time, a row per person and a column per day, off the files already on disk; `--days N` (default 7) and `--show-issues`, both of which the screen can change while it is open |
-| `log [ISSUE]` | what changed, newest first — every issue in the workspace, or just one; `--refresh` asks the server |
+| `log [ISSUE]` | what changed, newest first — every issue in the workspace, or just one; `--limit` takes a count (`20`, the default) or a span back from now (`1d`, `2w`, `36h`, `90m`), `--refresh` asks the server |
 | `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag) |
 | `list [--summary-contains T] [--label L] [--status S…] [--not-status S…] [--category new\|indeterminate\|done] [--sprint S] [--assignee U] [--issue-type T]` | the same question asked of the working copy, offline; `--status` repeats to mean "any of", `--category` is Jira's own three-way reading of any workflow ("not finished yet" is `--not-status Done` on one instance and three flags on the next), `--issue-type` matches the whole name and not a substring; prints key, status and summary, or the fields `--columns key,type,assignee` names, or keys alone with `--keys`, for piping |
 | `show ISSUE [--raw]` | everything the workspace knows about one issue; `--raw` is the server's own payload, unset fields included |

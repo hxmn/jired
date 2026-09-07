@@ -370,9 +370,19 @@ for one is not nagged about it. It does not make the workspace unclean — nothi
 is at risk — but a stale doc is what an agent plans against, so it is said out
 loud rather than left to be discovered.
 
-### `jired log [ISSUE] [--limit N] [--refresh]`
+### `jired log [ISSUE] [--limit N|SPAN] [--refresh]`
 Changelog entries newest first, each tagged with its issue. With no `ISSUE` it
 covers the whole workspace, the way `git log` does; naming one narrows to it.
+
+`--limit` says how much of the log to show, as either a count of entries (`20`,
+the default) or a span back from now — `1d`, `2w`, `36h`, `90m`, `1d12h`. Which
+was meant is unambiguous from the spelling: a bare number is a count, a unit
+makes a span. A span is calendar time, where a day is twenty-four hours and a
+week is seven days; this is deliberately *not* the working time `logwork "1d"`
+books, where the instance's day may be eight hours. An entry the server dated
+nothing cannot be shown to fall inside a window, so a span leaves it out where a
+count keeps it. History that exists but is older than the window says so — and
+offers twice the span — rather than printing the empty-changelog answer.
 
 Changelogs are fetched per issue (`expand=changelog`) and cached, so the first
 log over a workspace fetches what it is missing and every run after it is
