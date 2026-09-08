@@ -3,9 +3,22 @@
 ## Global contract
 
 **Flags on every command:** `--json`, `--no-input`, `-y/--yes`, `-q/--quiet`,
-`-v/-vv`, `--color auto|always|never`, `--no-color`, `--dir PATH`, `--config PATH`,
-`--project KEY`, `--ca-cert PATH`, `--insecure`. They are grouped under their own
-help heading and displayed after the command's own options.
+`--silent`, `-v/-vv`, `--color auto|always|never`, `--no-color`, `--dir PATH`,
+`--config PATH`, `--project KEY`, `--ca-cert PATH`, `--insecure`. They are
+grouped under their own help heading and displayed after the command's own
+options.
+
+`-q/--quiet` drops the narration and the progress bars. `--silent` is the whole
+of that plus the two things it leaves behind: the warnings, and the `warn`-level
+log where the HTTP retries live — a `jired pull --silent` against a slow server
+writes nothing where `--quiet` writes a line per attempt. It is the flag for a
+cron job or a CI step that should speak only when something went wrong, so the
+error and the exit code survive it: an exit code with no reason is not something
+anyone can act on. `JIRED_LOG` still wins over the log floor, somebody who set it
+having asked for those lines by name, and `--silent -v` is refused rather than
+reconciled. Under `--json` the result document is untouched, warnings included:
+silence is about the streams a person reads, and dropping a warning out of the
+document a machine reads would be losing it rather than quieting it.
 
 **Connection flags** — `--url`, `--token`, `--email`, `--auth`, `--deployment`,
 `--insecure-store` — belong to `init` and `doctor`, the only commands that act on

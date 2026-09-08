@@ -8,6 +8,21 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.16.0] — 2026-09-08
+
+### Added
+
+- **`--silent`, on every command** — say nothing at all unless the run fails.
+  `-q/--quiet` already drops the narration and the progress bars; what it leaves
+  on stderr is the warnings and the `warn`-level log, which is where the HTTP
+  retries live. A `jired pull --quiet` against a server that is not answering
+  writes a line per attempt; `jired pull --silent` writes nothing, and a cron job
+  that mails stderr mails you only when there is something to read. The error and
+  the exit code survive it — an exit code with no reason is not something anyone
+  can act on — `JIRED_LOG` still wins over the log floor, and `--silent -v` is
+  refused rather than reconciled. Under `--json` the result document is
+  untouched, warnings included: silence is about the streams a person reads.
+
 ## [0.15.0] — 2026-09-07
 
 ### Added

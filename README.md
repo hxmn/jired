@@ -869,6 +869,11 @@ jired init --url https://acme.atlassian.net --email ci@acme.example \
 jired pull --no-input --json
 ```
 
+`--silent` is worth adding to a scheduled run: it says nothing at all unless the
+command fails, which is `--quiet` plus the warnings and the HTTP retry log that
+`--quiet` leaves on stderr. The error and the exit code survive it, so a cron job
+that mails stderr mails you only when there is something to read.
+
 `--no-input` never prompts and exits 7 naming whatever is missing. Set
 `JIRED_NO_KEYRING=1` to ignore a keychain that exists but is locked, and
 `creds.storage` to choose between `local_db` (this workspace) and `user_config`

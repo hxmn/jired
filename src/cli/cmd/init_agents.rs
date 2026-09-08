@@ -999,6 +999,7 @@ pub fn render() -> String {
         "| `--no-input` | Never prompt; missing values fail with exit 7 naming the value. |\n",
     );
     s.push_str("| `--yes` | Accept confirmations. |\n");
+    s.push_str("| `--silent` | Say nothing unless the command fails: `--quiet` plus the warnings and the retry log. The error and the exit code survive it, and `--json` keeps its document, warnings and all. |\n");
     s.push_str("| `--dry-run` (`-n`) | On `push`: the exact API calls, nothing sent. On `pull`: what would be written, nothing touched. |\n");
     s.push_str("| `--fields <PATHS>` | Keep only these dotted paths of the `--json` document: `results.key,results.ops.summary`. Cheaper than parsing the whole thing. |\n");
     s.push_str("| `--json-compact` | Drop null and empty values from the `--json` document. |\n\n");

@@ -89,6 +89,16 @@ pub struct GlobalArgs {
     #[arg(long, short = 'q', global = true)]
     pub quiet: bool,
 
+    /// Say nothing at all unless the command fails
+    ///
+    /// Everything `--quiet` silences, plus the warnings and the retry log that
+    /// still reach stderr without it — for a cron job or a CI step that should
+    /// speak only when something went wrong. The error and the exit code
+    /// survive: an exit code with no reason is not something anyone can act on.
+    /// `--json` keeps its result document, warnings and all.
+    #[arg(long, global = true, conflicts_with = "verbose")]
+    pub silent: bool,
+
     /// Keep only these paths of the --json document: `dirty,results.ok`
     ///
     /// Dotted names walk objects and map over arrays, so `results.ok` keeps the
@@ -291,14 +301,17 @@ pub const INSECURE_TLS_WARNING: &str =
      traffic can be intercepted";
 
 pub fn run(cli: Cli) -> ExitCode {
-    let out = Out::new(cli.global.json, cli.global.quiet);
+    let out = match cli.global.silent {
+        true => Out::silent(cli.global.json),
+        false => Out::new(cli.global.json, cli.global.quiet),
+    };
     crate::style::init(cli.global.color_choice());
     crate::json::set_shape(crate::json::Shape {
         fields: cli.global.fields.clone(),
         compact: cli.global.json_compact,
     });
     crate::json::set_verbose(cli.global.verbose > 0);
-    init_tracing(cli.global.verbose);
+    init_tracing(cli.global.verbose, cli.global.silent);
 
     // Warned here as well as in `Context` so it still appears when the command
     // fails before a context exists. `Context` covers the other half: the same
@@ -372,13 +385,11 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
     }
 }
 
-fn init_tracing(verbose: u8) {
+fn init_tracing(verbose: u8, silent: bool) {
     use tracing_subscriber::EnvFilter;
-    let default = match verbose {
-        0 => "warn",
-        1 => "info,jired=debug",
-        _ => "debug,jired=trace",
-    };
+    let default = log_filter(verbose, silent);
+    // `JIRED_LOG` still wins: somebody who set it asked for those logs by name,
+    // and a flag about chatter should not overrule an instruction about logging.
     let filter = EnvFilter::try_from_env("JIRED_LOG").unwrap_or_else(|_| EnvFilter::new(default));
     // Logs always go to stderr so `--json` stdout stays parseable.
     let _ = tracing_subscriber::fmt()
@@ -386,6 +397,22 @@ fn init_tracing(verbose: u8) {
         .with_writer(std::io::stderr)
         .with_target(false)
         .try_init();
+}
+
+/// The log level each verbosity means.
+///
+/// `--silent` lowers the floor below `warn`, which is where the retries live: a
+/// pull that reaches a slow server writes a line per attempt, and those are the
+/// loudest thing left once `--quiet` has taken the narration. `error` rather
+/// than `off`, because a log line at that level is about the failure the exit
+/// code is already reporting.
+fn log_filter(verbose: u8, silent: bool) -> &'static str {
+    match (silent, verbose) {
+        (true, _) => "error",
+        (false, 0) => "warn",
+        (false, 1) => "info,jired=debug",
+        (false, _) => "debug,jired=trace",
+    }
 }
 
 /// Marker for command paths that a later milestone delivers.
@@ -415,6 +442,23 @@ mod tests {
         let cli = Cli::try_parse_from(["jired", "status", "--json", "--no-input"]).unwrap();
         assert!(cli.global.json);
         assert!(cli.global.no_input);
+    }
+
+    /// `--silent` lowers the log floor below the retry warnings; `-v` raises
+    /// it, and clap refuses the pair, so the two never have to be reconciled.
+    #[test]
+    fn silence_takes_the_log_floor_below_the_retries() {
+        assert_eq!(log_filter(0, false), "warn");
+        assert_eq!(log_filter(0, true), "error");
+        assert_eq!(log_filter(1, false), "info,jired=debug");
+        assert_eq!(log_filter(2, false), "debug,jired=trace");
+    }
+
+    #[test]
+    fn silent_and_verbose_cannot_be_asked_for_together() {
+        assert!(Cli::try_parse_from(["jired", "pull", "--silent"]).is_ok());
+        assert!(Cli::try_parse_from(["jired", "pull", "-v"]).is_ok());
+        assert!(Cli::try_parse_from(["jired", "pull", "--silent", "-v"]).is_err());
     }
 
     #[test]

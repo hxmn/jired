@@ -8579,3 +8579,78 @@ fn watch_on_an_empty_workspace_says_so() {
     assert_eq!(report["watched"], 0);
     assert!(report["issues"].as_array().unwrap().is_empty());
 }
+
+/// `--quiet` already takes the narration; what it leaves behind is the reason
+/// `--silent` exists — the warnings and the log floor. A run that worked says
+/// nothing at all, and a run that failed still says why.
+#[test]
+fn silent_says_nothing_unless_the_command_fails() {
+    let ws = Ws::new();
+    ws.init();
+
+    let out = ws.cmd(&["pull", "--silent"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(
+        out.stdout.is_empty() && out.stderr.is_empty(),
+        "a silent pull that worked has nothing to say:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The warning `--quiet` still prints, which is the gap `--silent` fills.
+    let loud = ws.cmd(&["pull", "--quiet", "--insecure"]).output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&loud.stderr).contains("TLS certificate verification is disabled"),
+        "--quiet keeps warnings, or this test is pinning the wrong thing"
+    );
+    let quiet = ws
+        .cmd(&["pull", "--silent", "--insecure"])
+        .output()
+        .unwrap();
+    assert!(
+        quiet.stderr.is_empty(),
+        "--silent takes the warnings too: {}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+
+    // A failure is not noise. The message and the exit code both survive.
+    let broken = ws
+        .cmd(&["pull", "--silent"])
+        .arg("--dir")
+        .arg(ws.path().join("not-a-workspace"))
+        .output()
+        .unwrap();
+    assert_eq!(broken.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&broken.stderr).contains("no jired workspace"),
+        "an exit code with no reason is not something anyone can act on"
+    );
+}
+
+/// The result document is the machine's channel, not chatter: `--silent` leaves
+/// it alone, warnings included.
+#[test]
+fn silent_keeps_the_json_document_and_the_warnings_in_it() {
+    let ws = Ws::new();
+    ws.init();
+
+    let out = ws
+        .cmd(&["pull", "--silent", "--json", "--insecure"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["schema"], "jired/pull/1");
+    let warnings = report["warnings"].as_array().expect("the parked warning");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap_or_default().contains("TLS")),
+        "{report}"
+    );
+}

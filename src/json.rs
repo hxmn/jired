@@ -197,11 +197,31 @@ pub fn set_verbose(on: bool) {
 pub struct Out {
     pub json: bool,
     pub quiet: bool,
+    /// Nothing on either stream unless the run fails. Implies `quiet`, and
+    /// takes the warnings with it — see [`Out::warn`].
+    pub silent: bool,
 }
 
 impl Out {
     pub fn new(json: bool, quiet: bool) -> Self {
-        Self { json, quiet }
+        Self {
+            json,
+            quiet,
+            silent: false,
+        }
+    }
+
+    /// The sink `--silent` asks for: quiet, and without the warnings.
+    ///
+    /// `quiet` is set along with it rather than checked beside it everywhere,
+    /// so nothing that already asks "am I quiet" — the progress bars, every
+    /// `say` — has to learn a second question with the same answer.
+    pub fn silent(json: bool) -> Self {
+        Self {
+            json,
+            quiet: true,
+            silent: true,
+        }
     }
 
     /// Emit the single machine-readable result document (no-op outside JSON mode).
@@ -254,13 +274,19 @@ impl Out {
     /// Warning about something the user should act on.
     ///
     /// In JSON mode the text is parked for the result document rather than
-    /// printed, for the reason given on [`say`](Self::say).
+    /// printed, for the reason given on [`say`](Self::say) — and it is parked
+    /// under `--silent` too: silence is about the streams a person reads, and
+    /// dropping a warning out of the document a machine reads would be losing
+    /// it rather than quieting it.
     pub fn warn(&self, msg: impl AsRef<str>) {
         let msg = msg.as_ref();
         if self.json {
             if let Ok(mut parked) = PARKED_WARNINGS.lock() {
                 parked.push(msg.to_string());
             }
+            return;
+        }
+        if self.silent {
             return;
         }
         eprintln!("{} {msg}", style::err(YELLOW, "warning:"));
@@ -414,5 +440,26 @@ mod tests {
         let out = Out::new(true, false);
         out.warn("token stored unencrypted");
         assert_eq!(drain_parked(), vec!["token stored unencrypted".to_string()]);
+    }
+
+    /// Silence is about the streams a person reads. The document a machine
+    /// reads still carries the warning, because dropping it there would be
+    /// losing it rather than quieting it.
+    #[test]
+    fn a_silent_run_still_parks_its_warnings_for_the_document() {
+        drain_parked();
+        let out = Out::silent(true);
+        assert!(
+            out.quiet,
+            "silence implies quiet, so nothing checks for both"
+        );
+        out.warn("token stored unencrypted");
+        assert_eq!(drain_parked(), vec!["token stored unencrypted".to_string()]);
+
+        // Outside JSON mode there is nowhere to park it, and nowhere it should
+        // go: `--silent` was asked for.
+        let out = Out::silent(false);
+        out.warn("token stored unencrypted");
+        assert!(drain_parked().is_empty());
     }
 }
