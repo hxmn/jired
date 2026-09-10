@@ -3888,11 +3888,13 @@ fn printed_times_follow_the_readers_timezone_and_json_does_not() {
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
 
-    // The fixture's history is months old, so every row carries its date; the
-    // year is this one, which the reader knows, so it is not printed.
-    assert!(printed("Asia/Tokyo").contains("08-16 21:03"));
-    assert!(printed("America/New_York").contains("08-16 08:03"));
-    assert!(printed("UTC").contains("08-16 12:03"));
+    // The fixture's history is months old, so every heading carries its date;
+    // the year is this one, which the reader knows, so it is not printed. Ilya
+    // touched the issue twice that day, so the heading spans both — one date,
+    // two clock readings, and it is the readings that move with the chair.
+    assert!(printed("Asia/Tokyo").contains("08-16 18:05–21:03"));
+    assert!(printed("America/New_York").contains("08-16 05:05–08:03"));
+    assert!(printed("UTC").contains("08-16 09:05–12:03"));
     // The zone marker goes with the zone: what is left is the reader's clock.
     assert!(!printed("Asia/Tokyo").contains('Z'));
 
@@ -4161,9 +4163,9 @@ fn log_merges_comments_and_worklogs_into_the_timeline() {
     );
 }
 
-/// A blank line means "the next entry starts here" and nothing else, so an
-/// entry of six rows is as easy to see as an entry of one — and a description
-/// with a blank paragraph in it does not split its own entry in two.
+/// A blank line means "the next block starts here" and nothing else, so a block
+/// of six rows is as easy to see as a block of one — and a description with a
+/// blank paragraph in it does not split its own block in two.
 #[test]
 fn log_entries_are_separated_by_a_blank_line_and_nothing_else_is() {
     let ws = Ws::new();
@@ -4174,18 +4176,19 @@ fn log_entries_are_separated_by_a_blank_line_and_nothing_else_is() {
     let printed = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = printed.lines().collect();
 
-    // Five entries, so four gaps — the fixture's description diff carries a
-    // blank line of its own, which must not read as a fifth.
+    // The fixture's five events are two people's, so two blocks and one gap —
+    // and the description diff carries a blank line of its own, which must not
+    // read as a second.
     assert_eq!(
         lines.iter().filter(|l| l.trim().is_empty()).count(),
-        4,
-        "expected one blank line per entry boundary:\n{printed}"
+        1,
+        "expected one blank line per block boundary:\n{printed}"
     );
     for (i, line) in lines.iter().enumerate() {
         if line.trim().is_empty() {
             assert!(
                 lines[i + 1].starts_with(char::is_numeric),
-                "a blank line must be followed by an entry, got: {}",
+                "a blank line must be followed by a block, got: {}",
                 lines[i + 1]
             );
         }
@@ -4194,6 +4197,62 @@ fn log_entries_are_separated_by_a_blank_line_and_nothing_else_is() {
         printed.contains("    │") && printed.contains("│ -2. Log out"),
         "quoted text is marked as quoted:\n{printed}"
     );
+}
+
+/// Jira records a transition, the comment explaining it and the time booked
+/// against it as three separate things. Printing three identical headings makes
+/// one person's afternoon look like three, so neighbouring events by the same
+/// person on the same issue share a heading — and the heading says the span
+/// they covered rather than picking the newest and calling it the moment.
+#[test]
+fn log_gives_one_hand_on_one_issue_a_single_heading() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws
+        .cmd(&["log", "PROJ-142"])
+        .env("TZ", "UTC")
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout);
+
+    // Ilya's change and worklog are hours apart on one day, so the date is
+    // printed once and the clock twice; the time column pads the shorter
+    // heading out to the longer, which is why the row is matched in pieces.
+    assert!(
+        printed.contains("08-16 09:05–12:03")
+            && printed.contains("PROJ-142  Fix login flow  (Ilya A)"),
+        "one heading over the pair, spanning both:\n{printed}"
+    );
+    // Jane's three run over two days, and both ends carry their date.
+    assert!(
+        printed.contains("08-14 09:00–08-15 11:30  PROJ-142  Fix login flow  (Jane D)"),
+        "a block that is not one afternoon must not read as one:\n{printed}"
+    );
+    assert_eq!(
+        printed.matches("PROJ-142").count(),
+        2,
+        "five events, two hands, two headings:\n{printed}"
+    );
+    // The events themselves are all still there, in the order they happened.
+    let order = [
+        "priority: Medium",
+        "+worklog: 1h",
+        "+comment:",
+        "status: To Do",
+    ];
+    let mut cursor = 0;
+    for row in order {
+        let found = printed[cursor..]
+            .find(row)
+            .unwrap_or_else(|| panic!("{row} missing after byte {cursor}:\n{printed}"));
+        cursor += found;
+    }
+
+    // Grouping is a rendering; the record stays one document per event.
+    let report = ws.json(&["log", "PROJ-142"]);
+    assert_eq!(report["entries"].as_array().unwrap().len(), 5);
 }
 
 /// `--links` into a pipe cannot rely on an escape sequence nobody will render,

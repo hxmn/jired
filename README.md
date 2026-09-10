@@ -414,7 +414,7 @@ so "since yesterday" is a question you can ask directly:
 
 ```
 $ jired log --limit 1w
-08-16 14:03  PROJ-142  Fix login flow  (Ilya A)
+08-16 11:05–14:03        PROJ-142  Fix login flow  (Ilya A)
   priority: Medium → High
   +labels: auth backend
   description: +1 -1
@@ -424,25 +424,31 @@ $ jired log --limit 1w
     │ -2. Log out
     │ +2. Wait five minutes
     │  3. Log in again
+  +worklog: 1h
 
-08-15 13:30  PROJ-142  Fix login flow  (Jane D)
+08-14 11:00–08-15 13:30  PROJ-142  Fix login flow  (Jane D)
   +worklog: 2h 30m — Chased the redirect loop.
-
-08-15 12:32  PROJ-142  Fix login flow  (Jane D)
   +comment: Repro confirmed on staging.
-
-08-14 11:00  PROJ-142  Fix login flow  (Jane D)
   status: To Do → In Progress
   -Sprint: Sprint 11
 ```
 
-Each entry heads with when, which issue, what that issue is, and who; the key is
-bold, and a blank line separates one entry from the next, so an entry of six rows
-is as easy to pick out as an entry of one. Quoted text — a diff, a comment — sits
+Each block heads with when, which issue, what that issue is, and who; the key is
+bold, and a blank line separates one block from the next, so a block of six rows
+is as easy to pick out as a block of one. Quoted text — a diff, a comment — sits
 under a `│` gutter, which is what keeps a blank paragraph inside a description
-from reading as the start of the next entry. The time says only what you do not
+from reading as the start of the next block. The time says only what you do not
 already know: the clock alone for the last day, the date once it is older than
 that, the year only when it is not this one.
+
+Neighbouring events by the same person on the same issue share that heading. Jira
+records a transition, the comment explaining it and the time booked against it as
+three separate things, and three identical headings make one afternoon's work
+look like three afternoons'. A block that did *not* all happen at once is headed
+with the span it covered rather than with the newest of its times — `11:05–14:03`
+inside a day, both dates spelled out beyond one. Only neighbours join: an event
+never moves away from where its timestamp put it, so somebody else's edit in the
+middle of a run ends the block and starts another.
 
 Under it, one row per thing that changed. A field that gained a value it did not
 have is `+`, one that lost the value it had is `-`, and one that swapped reads

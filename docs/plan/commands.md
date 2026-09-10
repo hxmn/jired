@@ -397,20 +397,37 @@ itself. A worklog is dated by when it was booked (`created`, falling back to
 today", and time booked this morning for last Tuesday happened this morning.
 `report time` is the command that reads a worklog the other way round.
 
-Each entry heads with when, the key, the issue's summary and the author, in
+Neighbouring events that share an issue and an author print under one heading.
+Jira records a transition, the comment explaining it and the time booked against
+it as three separate things, and three identical headings make one person's
+afternoon look like three. Only neighbours: the timeline is already in the order
+it will be printed, so a block is a run of rows whose headings would have been
+identical — never a gathering that moves an event away from where its timestamp
+put it. Somebody else's edit in the middle of a run therefore ends the block, and
+the same hand returning afterwards starts a new one. An author nobody recorded
+joins another, since the heading it would have printed is the same heading; that
+is a claim about the row and not about the person.
+
+Each block heads with when, the key, the issue's summary and the author, in
 columns measured from the data, and one blank line separates it from the next —
-an entry is as many rows as it changed things, and without the gap a three-field
+a block is as many rows as it changed things, and without the gap a three-field
 edit and three one-field edits read the same. A blank line therefore means only
 one thing, which is why quoted text (a prose diff, a comment, a worklog note)
 prints under a `│` gutter: a description with a blank paragraph in it would
-otherwise split its own entry in two. The key is bold as well as cyan, being
-what the eye lands on to find where an entry starts. The timestamp prints only the part the reader
+otherwise split its own block in two. The key is bold as well as cyan, being
+what the eye lands on to find where a block starts. The timestamp prints only the part the reader
 does not already know — `14:03` inside a day, `08-16 14:03` beyond one,
 `2025-11-02 16:20` in another year — in local time, like everything jired puts
-on a screen. The summary is the snapshot's current one, not the summary as it
-read at the time; a rename is its own row anyway.
+on a screen. A block whose events did not all happen at once is headed with the
+span from its oldest to its newest rather than with the newest alone, which
+would be the heading claiming an issue was touched once when it was touched
+three times: `08-16 11:05–14:03` within a day, where the date is already on the
+left of the dash, and `08-14 11:00–08-15 13:30` across one. The summary is the
+snapshot's current one, not the summary as it read at the time; a rename is its
+own row anyway.
 
-Under the heading, one row per thing that changed:
+Under the heading, one row per thing that changed, in the order the block's
+events happened:
 
 * `field: old → new` when both sides have a value;
 * `+field: value` when there was none before, `-field: value` when there is none
@@ -432,7 +449,10 @@ OSC 8 hyperlink on the key itself, so the rows stay the width they were; into a
 pipe or a file, where the escape sequence is no use to anyone, the URL is
 printed at the end of the heading row instead.
 
-`--json` is the record rather than the rendering. Every entry carries `kind` —
+`--json` is the record rather than the rendering: one document per event, in the
+same order, with the blocks left out — a block is how a screen reads a run of
+events, and a consumer that wants one can group `key` and `author` itself.
+Every entry carries `kind` —
 `change`, `comment` or `worklog` — plus `key`, `summary`, `author` and `created`;
 a change carries `items` with both texts of every field it touched, whole and
 undiffed, and a comment or worklog carries `text` (and `time_spent`). Comments

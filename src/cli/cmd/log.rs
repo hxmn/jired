@@ -14,6 +14,11 @@
 //! reads as a unified diff instead: Jira hands back the whole text on both
 //! sides, and a page of it does not fit through a column layout.
 //!
+//! Neighbouring events by the same person on the same issue share one heading.
+//! Jira records a transition, the comment explaining it and the time booked
+//! against it as three separate things, and printing three identical headings
+//! makes one afternoon's work look like three afternoons'.
+//!
 //! Changelogs are fetched per issue and cached, rather than pulled for every
 //! issue during `fetch`: they are large, rarely needed, and asking for them
 //! wholesale is the difference between a fast sync and a slow one. So the first
@@ -613,6 +618,58 @@ fn format_when(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
     }
 }
 
+/// Neighbouring events that share an issue and an author, as one block each.
+///
+/// Only neighbours: the list is already in the order it will be printed, so a
+/// block is a run of rows whose headings would have been identical — never a
+/// gathering that moves an event away from where its timestamp put it.
+///
+/// An author nobody recorded joins another one, because the heading it would
+/// have printed is the same heading. That is a claim about the row, not about
+/// the person: two unattributed events on one issue are not knowably the same
+/// hand, and the block does not say they are.
+fn blocks<'a, 'e>(events: &'e [Event<'a>]) -> Vec<&'e [Event<'a>]> {
+    let mut blocks: Vec<&[Event]> = Vec::new();
+    for (i, e) in events.iter().enumerate() {
+        match blocks.last_mut() {
+            Some(block) if block[0].key == e.key && block[0].author == e.author => {
+                let start = i - block.len();
+                *block = &events[start..=i];
+            }
+            _ => blocks.push(&events[i..=i]),
+        }
+    }
+    blocks
+}
+
+/// The one timestamp a block is headed with: when it happened, or — when it did
+/// not all happen at once — the span from its oldest event to its newest.
+///
+/// A block usually *is* one moment, and then it reads as one moment. Saying so
+/// when it is not would be the heading claiming an issue was touched once at
+/// the newest of several times, which is the fact a log exists to carry.
+fn block_when(block: &[Event], now: DateTime<Utc>) -> String {
+    // Newest first, so the block's own ends are its first and last rows.
+    let newest = block.first().and_then(|e| e.at);
+    let oldest = block.last().and_then(|e| e.at);
+    let (Some(newest), Some(oldest)) = (newest, oldest) else {
+        return newest.map(|at| format_when(at, now)).unwrap_or_default();
+    };
+    let (from, to) = (format_when(oldest, now), format_when(newest, now));
+    if from == to {
+        return to;
+    }
+    // Within one day the date is already on the left of the dash, and printing
+    // it twice buys nothing but a column every other row has to pad out to.
+    let to =
+        if oldest.with_timezone(&Local).date_naive() == newest.with_timezone(&Local).date_naive() {
+            newest.with_timezone(&Local).format("%H:%M").to_string()
+        } else {
+            to
+        };
+    format!("{from}–{to}")
+}
+
 /// A terminal hyperlink: the text is what shows, the URL is where it goes.
 ///
 /// OSC 8, which terminals that do not know it drop silently — but only when
@@ -673,12 +730,10 @@ fn render(
         return;
     }
 
+    let blocks = blocks(events);
     // Every column is as wide as its own data and no wider, so a workspace of
     // short keys does not pay for the one long one it does not have.
-    let when: Vec<String> = events
-        .iter()
-        .map(|e| e.at.map(|at| format_when(at, now)).unwrap_or_default())
-        .collect();
+    let when: Vec<String> = blocks.iter().map(|b| block_when(b, now)).collect();
     let time_width = when.iter().map(|w| w.chars().count()).max().unwrap_or(0);
     let key_width = events
         .iter()
@@ -695,13 +750,14 @@ fn render(
     // gets the URL itself, which is the part a reader can still use.
     let clickable = args.links && std::io::IsTerminal::is_terminal(&std::io::stdout());
 
-    for (i, (e, when)) in events.iter().zip(&when).enumerate() {
-        // One blank line between entries, the way `git log` separates commits:
-        // an entry is as many rows as it changed things, and without a gap a
+    for (i, (block, when)) in blocks.iter().zip(&when).enumerate() {
+        // One blank line between blocks, the way `git log` separates commits:
+        // a block is as many rows as it changed things, and without a gap a
         // three-field edit and three one-field edits read the same.
         if i > 0 {
             out.say("");
         }
+        let e = &block[0];
         let key = pad(e.key, key_width);
         let key = if clickable {
             hyperlink(&browse_url(base_url, e.key), &key)
@@ -729,25 +785,28 @@ fn render(
         }
         out.say(row.trim_end());
 
-        match e.what {
-            What::Change(items) => render_change(items, out),
-            What::Comment(c) => render_body(
-                "comment",
-                // A comment edited after it was posted is not the comment that
-                // was posted, and the log dates it by when it first appeared.
-                c.updated
-                    .is_some_and(|edited| c.created.is_some_and(|posted| edited > posted)),
-                None,
-                &crate::convert::to_markdown(&c.body).markdown,
-                out,
-            ),
-            What::Worklog(w) => render_body(
-                "worklog",
-                false,
-                Some(&w.time_spent),
-                &crate::convert::to_markdown(&w.comment).markdown,
-                out,
-            ),
+        for e in block.iter() {
+            match e.what {
+                What::Change(items) => render_change(items, out),
+                What::Comment(c) => render_body(
+                    "comment",
+                    // A comment edited after it was posted is not the comment
+                    // that was posted, and the log dates it by when it first
+                    // appeared.
+                    c.updated
+                        .is_some_and(|edited| c.created.is_some_and(|posted| edited > posted)),
+                    None,
+                    &crate::convert::to_markdown(&c.body).markdown,
+                    out,
+                ),
+                What::Worklog(w) => render_body(
+                    "worklog",
+                    false,
+                    Some(&w.time_spent),
+                    &crate::convert::to_markdown(&w.comment).markdown,
+                    out,
+                ),
+            }
         }
     }
 
@@ -1126,6 +1185,107 @@ mod tests {
         assert!(
             !quoted("text").ends_with(' '),
             "and none of it is whitespace"
+        );
+    }
+
+    /// Build a timeline the way `render` sees one: newest first, already sorted.
+    fn events<'a>(rows: &'a [(&'a str, Option<&'a str>, &'a str)]) -> Vec<Event<'a>> {
+        rows.iter()
+            .map(|(key, author, iso)| Event {
+                key,
+                summary: "",
+                at: Some(at(iso)),
+                id: "1",
+                author: *author,
+                what: What::Change(&[]),
+            })
+            .collect()
+    }
+
+    fn shapes(blocks: &[&[Event]]) -> Vec<usize> {
+        blocks.iter().map(|b| b.len()).collect()
+    }
+
+    /// A transition, the comment explaining it and the time booked against it
+    /// are one person's afternoon, not three afternoons.
+    #[test]
+    fn neighbours_by_one_person_on_one_issue_are_one_block() {
+        let timeline = events(&[
+            ("PROJ-1", Some("Jane D"), "2026-09-07T12:03:00Z"),
+            ("PROJ-1", Some("Jane D"), "2026-09-07T12:02:00Z"),
+            ("PROJ-1", Some("Jane D"), "2026-09-07T12:01:00Z"),
+        ]);
+        assert_eq!(shapes(&blocks(&timeline)), [3]);
+    }
+
+    /// Somebody else, or somewhere else, is a heading of its own — and a run
+    /// that has been interrupted does not resume, because a block is a run of
+    /// neighbours and not a gathering of everything that matches.
+    #[test]
+    fn a_different_hand_or_issue_starts_a_new_block() {
+        let by_author = events(&[
+            ("PROJ-1", Some("Jane D"), "2026-09-07T12:03:00Z"),
+            ("PROJ-1", Some("Ilya A"), "2026-09-07T12:02:00Z"),
+            ("PROJ-1", Some("Jane D"), "2026-09-07T12:01:00Z"),
+        ]);
+        assert_eq!(shapes(&blocks(&by_author)), [1, 1, 1]);
+
+        let by_issue = events(&[
+            ("PROJ-1", Some("Jane D"), "2026-09-07T12:03:00Z"),
+            ("PROJ-2", Some("Jane D"), "2026-09-07T12:02:00Z"),
+            ("PROJ-2", Some("Jane D"), "2026-09-07T12:01:00Z"),
+        ]);
+        assert_eq!(shapes(&blocks(&by_issue)), [1, 2]);
+
+        assert!(blocks(&[]).is_empty());
+    }
+
+    /// One moment reads as one moment; several read as the span they covered,
+    /// because the newest of them alone would be the heading saying the issue
+    /// was touched once when it was touched three times.
+    #[test]
+    fn a_block_is_headed_with_the_span_it_covered() {
+        let now = at("2026-09-07T12:10:00Z");
+        let same_minute = events(&[
+            ("PROJ-1", None, "2026-09-07T12:03:40Z"),
+            ("PROJ-1", None, "2026-09-07T12:03:10Z"),
+        ]);
+        assert!(!block_when(&same_minute, now).contains('–'));
+
+        let one = events(&[("PROJ-1", None, "2026-09-07T12:03:00Z")]);
+        assert_eq!(
+            block_when(&one, now),
+            format_when(at("2026-09-07T12:03:00Z"), now)
+        );
+    }
+
+    /// Both ends of the span carry the date only when they fall on different
+    /// days; otherwise the second one is a clock reading under a date already
+    /// printed, and the column stays as narrow as the rows that do not span.
+    #[test]
+    fn a_span_within_one_day_prints_its_date_once() {
+        fn shape(s: &str) -> String {
+            s.chars()
+                .map(|c| if c.is_ascii_digit() { 'N' } else { c })
+                .collect()
+        }
+        let now = at("2026-09-30T12:00:00Z");
+        // Noon to noon UTC, so the pair falls on one local day in every zone
+        // that is a whole hour from it, this test's own included.
+        let within = events(&[
+            ("PROJ-1", None, "2026-09-07T12:00:00Z"),
+            ("PROJ-1", None, "2026-09-07T11:00:00Z"),
+        ]);
+        assert_eq!(shape(&block_when(&within, now)), "NN-NN NN:NN–NN:NN");
+
+        let across = events(&[
+            ("PROJ-1", None, "2026-09-07T12:00:00Z"),
+            ("PROJ-1", None, "2026-09-04T12:00:00Z"),
+        ]);
+        assert_eq!(
+            shape(&block_when(&across, now)),
+            "NN-NN NN:NN–NN-NN NN:NN",
+            "three days apart is not one afternoon"
         );
     }
 

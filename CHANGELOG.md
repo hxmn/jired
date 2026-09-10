@@ -8,6 +8,26 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.17.0] — 2026-09-10
+
+### Changed
+
+- **`jired log` gives one person's run on one issue a single heading.** Jira
+  records a transition, the comment explaining it and the time booked against it
+  as three separate things, so a log that heads each of them separately makes one
+  afternoon's work look like three afternoons'. Neighbouring events that share an
+  issue and an author now print under one heading, with their rows in the order
+  they happened. Only neighbours: the timeline is already in the order it will be
+  printed, so a block is a run of rows whose headings would have been identical —
+  somebody else's edit in the middle ends it, and nothing moves away from where
+  its timestamp put it. A block that did not all happen at once is headed with
+  the span it covered rather than with the newest of its times —
+  `08-16 11:05–14:03` within a day, where the date is already on the left of the
+  dash, and `08-14 11:00–08-15 13:30` across one — because the newest alone would
+  be the heading claiming an issue was touched once when it was touched three
+  times. `--json` is unchanged: one document per event, since a block is how a
+  screen reads a run and not a fact about the history.
+
 ## [0.16.0] — 2026-09-08
 
 ### Added
