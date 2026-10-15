@@ -111,10 +111,7 @@ impl Rest {
     }
 
     fn api(&self) -> &'static str {
-        match self.deployment {
-            Deployment::Cloud => "/rest/api/3",
-            Deployment::DataCenter => "/rest/api/2",
-        }
+        self.deployment.api_prefix()
     }
 
     /// Where a module is mounted on this deployment. The platform API is the
@@ -533,6 +530,58 @@ impl JiraApi for Rest {
             ))
             .with_detail("response", v)
         })
+    }
+
+    async fn project(&self, key: &str) -> Result<Project> {
+        let v = self
+            .get(&routes::GET_PROJECT, &[("projectIdOrKey", key)], &[])
+            .await?;
+        project_from(&v).ok_or_else(|| {
+            JiredError::generic(format!(
+                "project {key} came back in a shape jired cannot read"
+            ))
+            .with_detail("response", v)
+        })
+    }
+
+    async fn versions(&self, project: &str) -> Result<Vec<Version>> {
+        let v = self
+            .get(
+                &routes::PROJECT_VERSIONS,
+                &[("projectIdOrKey", project)],
+                &[],
+            )
+            .await?;
+        Ok(v.as_array()
+            .map(|a| a.iter().filter_map(version_from_json).collect())
+            .unwrap_or_default())
+    }
+
+    async fn version(&self, id: &str) -> Result<Version> {
+        let v = self.get(&routes::GET_VERSION, &[("id", id)], &[]).await?;
+        version_from_json(&v).ok_or_else(|| unreadable_version(id, v))
+    }
+
+    async fn create_version(&self, input: &VersionInput) -> Result<Version> {
+        let v = self
+            .http
+            .post_json(
+                &self.url(&routes::CREATE_VERSION, &[], &[]),
+                input.to_body(),
+            )
+            .await?;
+        version_from_json(&v).ok_or_else(|| unreadable_version(&input.name, v))
+    }
+
+    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version> {
+        let v = self
+            .http
+            .put_json(
+                &self.url(&routes::UPDATE_VERSION, &[("id", id)], &[]),
+                update.to_body(),
+            )
+            .await?;
+        version_from_json(&v).ok_or_else(|| unreadable_version(id, v))
     }
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -1194,6 +1243,36 @@ fn sprint_from_json(s: &Value, board: &str) -> Option<Sprint> {
             .map(str::to_string)
             .filter(|g| !g.is_empty()),
     })
+}
+
+/// One version out of a platform-API payload.
+///
+/// Shared with the fixture client, which keeps its versions in the server's
+/// own shape so a recording reads the way a live answer does.
+pub fn version_from_json(v: &Value) -> Option<Version> {
+    let text = |name: &str| {
+        v.get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|t| !t.is_empty())
+    };
+    Some(Version {
+        id: id_string(v.get("id")?)?,
+        name: v.get("name")?.as_str()?.to_string(),
+        project_id: v.get("projectId").and_then(id_string_ref),
+        description: text("description"),
+        released: v.get("released").and_then(Value::as_bool).unwrap_or(false),
+        archived: v.get("archived").and_then(Value::as_bool).unwrap_or(false),
+        start_date: text("startDate").as_deref().and_then(parse_day),
+        release_date: text("releaseDate").as_deref().and_then(parse_day),
+    })
+}
+
+fn unreadable_version(which: &str, response: Value) -> JiredError {
+    JiredError::generic(format!(
+        "version {which} came back in a shape jired cannot read"
+    ))
+    .with_detail("response", response)
 }
 
 /// The one project a board's project listing names, or `None` when it names

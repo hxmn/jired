@@ -37,7 +37,7 @@ pub fn run(g: &GlobalArgs, args: &CommentArgs, out: Out) -> Result<ExitCode> {
     // the body may open wants the terminal that the picker is still holding,
     // and because "comment on what?" is the question that comes first anyway.
     let key = match &args.issue {
-        Some(issue) => crate::project::naming::key_from_input(issue),
+        Some(issue) => crate::project::naming::key_from_input(issue)?,
         None => pick::choose(&mut ctx, "Comment on which issue?", Listing::WithFiles)?,
     };
     let body = message_or_stdin(&args.message, "comment body")?;

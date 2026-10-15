@@ -162,6 +162,41 @@ route!(
     "includeArchived",
     "browseArchive",
 );
+route!(
+    /// One project by key. Its id is what a version is created against: Cloud
+    /// documents the `project` key in that body as deprecated, and `projectId`
+    /// is the spelling both deployments take.
+    GET_PROJECT,
+    "getProject",
+    "GET",
+    Api,
+    "project/{projectIdOrKey}",
+);
+
+// ---- Versions ------------------------------------------------------------
+//
+// What `fix_versions:` and `affects_versions:` name. A project's whole list is
+// one unpaged array; `version` beside it pages across projects, which is not a
+// question jired asks.
+
+route!(
+    PROJECT_VERSIONS,
+    "getProjectVersions",
+    "GET",
+    Api,
+    "project/{projectIdOrKey}/versions",
+);
+route!(CREATE_VERSION, "createVersion", "POST", Api, "version");
+route!(GET_VERSION, "getVersion", "GET", Api, "version/{id}");
+route!(
+    /// Renaming, re-dating, releasing and archiving are all this one call, and
+    /// it merges: a field the body leaves out is one the version keeps.
+    UPDATE_VERSION,
+    "updateVersion",
+    "PUT",
+    Api,
+    "version/{id}",
+);
 
 route!(
     /// Search is a POST because a JQL naming a few dozen issue keys does not fit in
@@ -475,6 +510,11 @@ pub const ALL: &[&Route] = &[
     &MYSELF,
     &FIELDS,
     &PROJECTS,
+    &GET_PROJECT,
+    &PROJECT_VERSIONS,
+    &CREATE_VERSION,
+    &GET_VERSION,
+    &UPDATE_VERSION,
     &SEARCH,
     &GET_ISSUE,
     &EDIT_ISSUE,
@@ -608,6 +648,11 @@ mod tests {
             "getUser",
             "getFields",
             "getAllProjects",
+            "getProject",
+            "getProjectVersions",
+            "createVersion",
+            "getVersion",
+            "updateVersion",
             "searchUsingSearchRequest",
             "getIssue",
             "editIssue",
@@ -646,7 +691,7 @@ mod tests {
         ] {
             assert!(listed.contains(&id), "{id} is missing from ALL");
         }
-        assert_eq!(ALL.len(), 39, "a route was added without a test naming it");
+        assert_eq!(ALL.len(), 44, "a route was added without a test naming it");
 
         // `getIssue` is a method id in both modules, so nothing may key on the
         // id alone — the contract test keys on (method, path).

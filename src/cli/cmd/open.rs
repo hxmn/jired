@@ -30,7 +30,7 @@ pub fn run(g: &GlobalArgs, args: &OpenArgs, out: Out) -> Result<ExitCode> {
     // complaint the user should read, not one painted over by a picker.
     let base = ctx.resolver.require("server.url")?;
     let key = match &args.issue {
-        Some(issue) => crate::project::naming::key_from_input(issue),
+        Some(issue) => crate::project::naming::key_from_input(issue)?,
         // Nothing named: let them find it. Every issue with a snapshot is
         // offered, file or no file — a browser URL needs neither.
         None => pick::choose(&mut ctx, "Open which issue?", Listing::Known)?,

@@ -27,6 +27,7 @@ pub mod pick;
 pub mod prompt;
 pub mod pull;
 pub mod push;
+pub mod release;
 pub mod report;
 pub mod reset;
 pub mod resolve;

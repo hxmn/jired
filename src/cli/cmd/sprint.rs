@@ -598,20 +598,34 @@ fn close(g: &GlobalArgs, args: &CloseArgs, out: Out) -> Result<ExitCode> {
 
 /// One issue a close would leave behind, as the working copy has it.
 #[derive(Debug, Clone, serde::Serialize)]
-struct Incomplete {
-    key: String,
-    file: String,
-    status: String,
+pub(crate) struct Incomplete {
+    pub key: String,
+    pub file: String,
+    pub status: String,
 }
 
 /// The issues this workspace has in a sprint that are not finished.
+fn incomplete_in(ctx: &mut Context, sprint: &str) -> Result<Vec<Incomplete>> {
+    // Where the issue is *now* is the last entry; an earlier one is history.
+    unfinished_where(ctx, |fm| {
+        fm.sprint
+            .last()
+            .is_some_and(|s| s.eq_ignore_ascii_case(sprint))
+    })
+}
+
+/// The issues in the working copy that `belongs` picks and that are not
+/// finished — what a sprint close or a version release would leave behind.
 ///
 /// "Finished" is the status category the last fetch recorded, because a
 /// workflow's own names mean nothing across instances — `Done` on one is
 /// `Готово` on the next. A status jired has never seen counts as unfinished:
 /// carrying an issue that was already done is a move somebody can undo, and
 /// stranding one in a closed sprint is the thing this exists to prevent.
-fn incomplete_in(ctx: &mut Context, sprint: &str) -> Result<Vec<Incomplete>> {
+pub(crate) fn unfinished_where(
+    ctx: &mut Context,
+    belongs: impl Fn(&crate::doc::Frontmatter) -> bool,
+) -> Result<Vec<Incomplete>> {
     let engine = Engine::open(ctx)?;
     let categories = status_categories(&engine.state.issues()?);
     let mut out = Vec::new();
@@ -622,12 +636,7 @@ fn incomplete_in(ctx: &mut Context, sprint: &str) -> Result<Vec<Incomplete>> {
             continue;
         };
         let fm = doc.frontmatter;
-        // Where the issue is *now* is the last entry; an earlier one is history.
-        if !fm
-            .sprint
-            .last()
-            .is_some_and(|s| s.eq_ignore_ascii_case(sprint))
-        {
+        if !belongs(&fm) {
             continue;
         }
         if categories
@@ -696,7 +705,7 @@ fn carry_target(
 }
 
 /// The client every one of these commands needs, opened the one way.
-fn api_client(ctx: &mut Context) -> Result<Box<dyn JiraApi>> {
+pub(crate) fn api_client(ctx: &mut Context) -> Result<Box<dyn JiraApi>> {
     let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
     let account = session.require_account()?;
     crate::api::build_client(ctx, &account)
@@ -886,7 +895,7 @@ fn create(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
         for issue in &args.issues {
             out.say(format!(
                 "would move {} into it",
-                style::out(CYAN, crate::project::naming::key_from_input(issue))
+                style::out(CYAN, crate::project::naming::key_from_input(issue)?)
             ));
         }
         out.emit(

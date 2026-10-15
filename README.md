@@ -95,7 +95,7 @@ has nothing to ask about. Some of them refresh the read-only snapshot under
 | Codex | `.codex/rules/default.rules` — execpolicy `prefix_rule`s between `# BEGIN jired` and `# END jired`; Codex applies them once the project's `.codex/` layer is trusted |
 
 Granted: `status` (and `st`), `diff`, `log`, `report`, `search`, `fetch`,
-`whoami`, `projects`, `boards`, `sprints`, `list`, `show`, `fields`, `schema`,
+`whoami`, `projects`, `boards`, `sprints`, `releases`, `list`, `show`, `fields`, `schema`,
 `completion`, `version`,
 `attachments list`, `config get|list|path`, `resolve --list`, `init-agents --print`, and
 `pull`, `push`, `reset`, `clean` and `doctor` under `--dry-run`. Everything that
@@ -392,6 +392,7 @@ the filename you were just editing instead of retyping the key.
 | `fetch-spec [-o DIR]` | write the server's own description of its REST API into a directory, one file per module, named for the server and its version — see [The server's own API reference](#the-servers-own-api-reference) |
 | `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and is needed only when the project's boards would answer differently; `boards` says which project each board is filed under |
 | `sprint create [NAME]` / `sprint start\|edit\|close SPRINT` / `sprint add ISSUES… --sprint S` / `sprint remove ISSUES…` | make a sprint, run it, and move issues in and out of one; `close --move-incomplete-to S` carries the unfinished ones over — see [Sprints](#sprints) |
+| `releases [--all]` / `release create NAME` / `release edit\|ship\|archive VERSION` | the project's versions — what `fix_versions:` names: list, make, rename, release and archive them; `ship --move-unfixed-to V` moves the unfinished issues on first — see [Versions](#versions) |
 | `doctor` | check the workspace over and repair it — see below |
 | `config get\|set\|unset\|list\|path\|edit` | read and write settings |
 | `completion <shell>` | print a completion script |
@@ -639,6 +640,40 @@ and only its last entry is where the issue is now. `sprint remove` empties it,
 which is what the backlog looks like in a file. See
 [Grouping folders](#grouping-folders) for the `sprints/` view of where
 everything is.
+
+### Versions
+
+`fix_versions:` and `affects_versions:` name a project's versions, and `jired
+release` makes and manages them — so the version a sprint ships as can be set up
+in the same script as the sprint and its tasks. (`release`, because `jired
+version` already says which binary you have.)
+
+```sh
+jired releases                                 # unreleased versions
+jired releases --all                           # released and archived too
+
+jired release create 0.5.0 --start 2026-10-15 --release-date 2026-10-29
+jired release create 0.5.0 --issues TSK-487,TSK-556 --push   # and put issues in it
+jired release create 0.5.0 --dry-run           # the exact API call, nothing sent
+
+jired release edit 0.5.0 --release-date 2026-10-30
+jired release ship 0.5.0 --move-unfixed-to 0.6.0   # move the rest on, then release
+jired release archive 0.3.0
+```
+
+Like a sprint, a version has no file to stage it in, so these go straight to the
+server and take `-n/--dry-run`. A version is named by its name or its id, and a
+name the project does not have is exit 2 listing the ones it does. Dates are
+plain days, which is all Jira keeps of a version's. `ship` names the issues in
+the version that are not done, by status category as `sprint close` does, and
+`--move-unfixed-to` moves them to the next version — pushed before the release,
+and the release left undone if the move fails.
+
+Every listing and every write lands in the local cache, and that is what `push`
+checks version names against: a version you just created can go in
+`fix_versions:` straight away, and one that does not exist is refused at plan
+time — exit 2, in `--dry-run`, before anything is sent — rather than as a 400
+halfway through a push.
 
 ### Sub-tasks
 

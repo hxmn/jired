@@ -201,6 +201,26 @@ impl JiraApi for DataCenter {
         self.rest.update_sprint(id, update).await
     }
 
+    async fn project(&self, key: &str) -> Result<Project> {
+        self.rest.project(key).await
+    }
+
+    async fn versions(&self, project: &str) -> Result<Vec<Version>> {
+        self.rest.versions(project).await
+    }
+
+    async fn version(&self, id: &str) -> Result<Version> {
+        self.rest.version(id).await
+    }
+
+    async fn create_version(&self, input: &VersionInput) -> Result<Version> {
+        self.rest.create_version(input).await
+    }
+
+    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version> {
+        self.rest.update_version(id, update).await
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         self.rest.search(query).await
     }

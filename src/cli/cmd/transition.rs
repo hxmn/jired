@@ -58,7 +58,7 @@ pub fn run(g: &GlobalArgs, args: &TransitionArgs, out: Out) -> Result<ExitCode> 
         .issues
         .iter()
         .map(|k| crate::project::naming::key_from_input(k))
-        .collect();
+        .collect::<crate::error::Result<_>>()?;
 
     if args.list {
         // The listing is one issue's position in its workflow; a combined list

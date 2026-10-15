@@ -347,7 +347,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         .issues
         .iter()
         .map(|k| crate::project::naming::key_from_input(k))
-        .collect();
+        .collect::<crate::error::Result<_>>()?;
 
     // `--resume` narrows the run to issues an interrupted push left unfinished.
     // Replaying is safe because base was never advanced for them: the working
@@ -388,6 +388,32 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         groups: None,
         warnings: Vec::new(),
     };
+
+    // A key that was named and is not here is a failure of its own, not an
+    // empty push: "nothing to push" for `jired push TSK-578` read as TSK-578
+    // being clean, when the workspace had never heard of it.
+    let present: std::collections::BTreeSet<String> = engine
+        .state
+        .issues()?
+        .into_iter()
+        .map(|row| row.key)
+        .filter(|key| files.contains_key(key))
+        .collect();
+    for key in wanted.iter().filter(|k| !present.contains(*k)) {
+        report.results.push(IssueResult::failed(
+            key,
+            &JiredError::usage(format!("`{key}` is not in this workspace"))
+                .with_detail("issue", key.clone())
+                .with_hint("run `jired pull` first, or check the key"),
+        ));
+    }
+    wanted.retain(|k| present.contains(k));
+    // Everything named was missing: there is nothing left to narrow to, and an
+    // empty `wanted` means "every issue" below.
+    if wanted.is_empty() && !report.results.is_empty() {
+        report.summary.failed = report.results.len();
+        return Ok(report);
+    }
 
     // Locally created issues go first: an existing issue may name one as its
     // parent or epic, and that reference has to resolve to a real key.
@@ -828,6 +854,13 @@ fn create_issue(
             JiredError::missing_value(format!("{temp_key} has no project"))
                 .with_hint("set workspace.project, or recreate the issue with --project")
         })?;
+
+    for (field, values) in [
+        ("fix_versions", &doc.frontmatter.fix_versions),
+        ("affects_versions", &doc.frontmatter.affects_versions),
+    ] {
+        check_versions(&engine.state, temp_key, &project, field, &[], values)?;
+    }
 
     let markup = engine.markup();
     let mut fields = serde_json::Map::new();
@@ -1459,6 +1492,98 @@ fn resolved_link(
     }))
 }
 
+/// Refuse a version name the project does not have, before anything is sent.
+///
+/// Jira answers an unknown name in `fixVersions` with a 400 — after the issues
+/// ahead of it in the push have already gone out — so it is checked here, at
+/// plan time, the way an undefined link direction is: exit 2, the known names
+/// listed, and visible under `--dry-run`. Only names the edit *adds* are
+/// checked. The ones already on the issue came from the server, and refusing
+/// them over a cache that has not caught up would block an unrelated edit.
+///
+/// Checked only against a complete listing. A workspace that has never listed
+/// the project's versions has no grounds to call a name unknown.
+fn check_versions(
+    state: &crate::store::state::StateStore,
+    key: &str,
+    project: &str,
+    field: &str,
+    before: &[String],
+    after: &[String],
+) -> Result<()> {
+    if before == after || !state.versions_complete(project)? {
+        return Ok(());
+    }
+    unknown_versions(
+        key,
+        project,
+        field,
+        before,
+        after,
+        &state.versions(project)?,
+    )
+}
+
+fn unknown_versions(
+    key: &str,
+    project: &str,
+    field: &str,
+    before: &[String],
+    after: &[String],
+    known: &[crate::api::Version],
+) -> Result<()> {
+    // Case-blind on purpose: the server matches a version name without regard
+    // to case, so a refusal over `RC1` against `rc1` would be jired's alone.
+    let has =
+        |list: &[String], name: &str| list.iter().any(|n| n.trim().eq_ignore_ascii_case(name));
+    let unknown: Vec<&str> = after
+        .iter()
+        .map(|n| n.trim())
+        .filter(|n| !has(before, n))
+        .filter(|n| !known.iter().any(|v| v.name.eq_ignore_ascii_case(n)))
+        .collect();
+    let Some(first) = unknown.first() else {
+        return Ok(());
+    };
+    // Archived versions are left out of the suggestions: Jira hides them from
+    // every picker, and offering one would be offering what the web UI won't.
+    let names: Vec<&str> = known
+        .iter()
+        .filter(|v| !v.archived)
+        .map(|v| v.name.as_str())
+        .collect();
+    Err(JiredError::usage(match unknown.len() {
+        1 => format!("{key}: `{first}` is not a version of {project}"),
+        n => format!(
+            "{key}: {n} names in `{field}` are not versions of {project}: {}",
+            unknown.join(", ")
+        ),
+    })
+    .with_detail("issue", key.to_string())
+    .with_detail("field", field.to_string())
+    .with_detail("versions", json!(unknown))
+    .with_detail("known", json!(names))
+    .with_hint(match names.is_empty() {
+        true => format!(
+            "{project} has no versions yet — create one with `jired release create \"{first}\"`"
+        ),
+        false => format!(
+            "one of: {} — or create it with `jired release create \"{first}\"`",
+            names.join(", ")
+        ),
+    }))
+}
+
+/// The project an issue belongs to: the one its snapshot names, else the one its
+/// key starts with.
+fn project_of(key: &str, base_raw: &Value) -> String {
+    base_raw
+        .pointer("/fields/project/key")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| key.split('-').next().unwrap_or(key).to_string())
+}
+
 /// The `(inwardIssue, outwardIssue)` of the create call, given which side this
 /// issue is on. `{key}` stands for an issue not yet created.
 fn link_ends(self_key: &str, other: &str, self_is_inward: bool) -> (String, String) {
@@ -1760,6 +1885,18 @@ fn plan(
 
     let bf = &base.frontmatter;
     let wf = &working.frontmatter;
+
+    let project = project_of(&bf.key, base_raw);
+    for (field, before, after) in [
+        ("fix_versions", &bf.fix_versions, &wf.fix_versions),
+        (
+            "affects_versions",
+            &bf.affects_versions,
+            &wf.affects_versions,
+        ),
+    ] {
+        check_versions(&engine.state, &bf.key, &project, field, before, after)?;
+    }
 
     // Every editable field, compared the way `diff` compares it and mapped the
     // way `create` maps it. A field jired cannot send says so here rather than
@@ -2970,6 +3107,61 @@ mod tests {
         let hint = err.hint.as_deref().unwrap();
         assert!(hint.contains("is blocked by"), "{hint}");
         assert!(hint.contains("blocks"), "{hint}");
+    }
+
+    /// An unknown version is exit 2 naming the ones there are; a name the issue
+    /// already had is never checked, and neither is the case of a name.
+    #[test]
+    fn an_unknown_version_is_refused_naming_the_known_ones() {
+        let v = |name: &str, archived: bool| crate::api::Version {
+            id: name.to_string(),
+            name: name.to_string(),
+            project_id: None,
+            description: None,
+            released: false,
+            archived,
+            start_date: None,
+            release_date: None,
+        };
+        let known = [v("0.4.0", false), v("0.5.0", false), v("0.1.0", true)];
+        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        let err = unknown_versions(
+            "TSK-487",
+            "TSK",
+            "fix_versions",
+            &names(&["0.4.0"]),
+            &names(&["0.4.0", "0.9.0"]),
+            &known,
+        )
+        .unwrap_err();
+        assert_eq!(err.exit_code().as_i32(), 2);
+        assert!(err.message.contains("`0.9.0` is not a version of TSK"));
+        // Archived versions are out of every picker, so out of the hint too.
+        let hint = err.hint.as_deref().unwrap();
+        assert!(hint.starts_with("one of: 0.4.0, 0.5.0 —"), "{hint}");
+
+        // Already on the issue: the server put it there.
+        let gone = names(&["0.0.1"]);
+        assert!(unknown_versions("TSK-487", "TSK", "fix_versions", &gone, &gone, &known).is_ok());
+        assert!(unknown_versions(
+            "TSK-487",
+            "TSK",
+            "fix_versions",
+            &[],
+            &names(&["0.5.0", "0.1.0"]),
+            &known
+        )
+        .is_ok());
+        assert!(unknown_versions(
+            "TSK-487",
+            "TSK",
+            "fix_versions",
+            &[],
+            &names(&["RC"]),
+            &[v("rc", false)]
+        )
+        .is_ok());
     }
 
     /// A deletion aims at the link's own id, which only the base snapshot

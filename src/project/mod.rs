@@ -86,7 +86,7 @@ impl Projector {
     /// for a file somebody renamed by hand into a different case than the key
     /// it carries.
     pub fn locate(&self, input: &str) -> Result<Option<FoundFile>> {
-        let key = naming::key_from_input(input);
+        let key = naming::key_from_input(input)?;
         let files = self.scan()?;
         if let Some(found) = files.get(&key) {
             return Ok(Some(found.clone()));

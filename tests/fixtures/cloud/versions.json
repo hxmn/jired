@@ -1,0 +1,53 @@
+[
+  {
+    "id": "10400",
+    "name": "2.1",
+    "projectId": 10000,
+    "description": "The SSO groundwork",
+    "released": true,
+    "archived": false,
+    "startDate": "2026-05-04",
+    "releaseDate": "2026-06-01"
+  },
+  {
+    "id": "10401",
+    "name": "2.2.0",
+    "projectId": 10000,
+    "released": true,
+    "archived": true,
+    "releaseDate": "2026-07-01"
+  },
+  {
+    "id": "10402",
+    "name": "2.3.0",
+    "projectId": 10000,
+    "released": true,
+    "archived": false,
+    "startDate": "2026-07-06",
+    "releaseDate": "2026-08-01"
+  },
+  {
+    "id": "10403",
+    "name": "2.4.0",
+    "projectId": 10000,
+    "description": "Login flow and IdP rotation",
+    "released": false,
+    "archived": false,
+    "startDate": "2026-08-03",
+    "releaseDate": "2026-09-30"
+  },
+  {
+    "id": "10404",
+    "name": "2.5.0",
+    "projectId": 10000,
+    "released": false,
+    "archived": false
+  },
+  {
+    "id": "10500",
+    "name": "ops-2026",
+    "projectId": 10001,
+    "released": false,
+    "archived": false
+  }
+]

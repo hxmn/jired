@@ -172,7 +172,7 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
         .issues
         .iter()
         .map(|k| crate::project::naming::key_from_input(k))
-        .collect();
+        .collect::<crate::error::Result<_>>()?;
 
     let mut issues = Vec::new();
     let mut stat = Stat::default();

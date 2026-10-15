@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/release-update/1",
+  "title": "jired release edit and archive result",
+  "description": "A change to a version that already exists",
+  "type": "object",
+  "required": [
+    "schema",
+    "dry_run",
+    "project",
+    "version",
+    "request"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/release-update/1"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "True when --dry-run was given: nothing was sent and `version` is null"
+    },
+    "project": {
+      "type": "string"
+    },
+    "version": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "id",
+        "name",
+        "released",
+        "archived"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "released": {
+          "type": "boolean"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "start_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A day, `2026-10-15`: Jira keeps a version's dates without a time or a zone"
+        },
+        "release_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A day, `2026-10-29`"
+        }
+      },
+      "description": "The version as the server now holds it; null on a dry run"
+    },
+    "request": {
+      "type": "object",
+      "required": [
+        "method",
+        "path",
+        "body"
+      ],
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "body": {
+          "type": "object"
+        }
+      },
+      "description": "The API call, sent unless dry_run. Only the fields that change are in the body: the endpoint merges"
+    }
+  }
+}

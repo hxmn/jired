@@ -113,6 +113,18 @@ fn run() -> Result<()> {
             &scrubber.scrub(&serde_json::to_value(&projects)?),
         )?;
 
+        let versions = client.versions(&args.project).await?;
+        write(
+            &args.out,
+            "versions.json",
+            &scrubber.scrub(&Value::Array(
+                versions
+                    .iter()
+                    .map(jired::api::fixture::version_to_json)
+                    .collect(),
+            )),
+        )?;
+
         let fields = client.fields().await?;
         write(
             &args.out,

@@ -261,6 +261,11 @@ pub enum Command {
     Pull(cmd::pull::PullArgs),
     /// Send local changes to Jira
     Push(cmd::push::PushArgs),
+    /// Work with project versions: create, edit, ship, archive
+    #[command(subcommand)]
+    Release(cmd::release::ReleaseCmd),
+    /// List the project's versions
+    Releases(cmd::release::ReleasesArgs),
     /// Read the working copy back as figures
     #[command(subcommand)]
     Report(cmd::report::ReportCmd),
@@ -368,6 +373,8 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Projects(a) => cmd::list::run_projects(g, a, out),
         Command::Pull(a) => cmd::pull::run(g, a, out),
         Command::Push(a) => cmd::push::run(g, a, out),
+        Command::Release(a) => cmd::release::run(g, a, out),
+        Command::Releases(a) => cmd::release::run_list(g, a, out),
         Command::Report(a) => cmd::report::run(g, a, out),
         Command::Reset(a) => cmd::reset::run(g, a, out),
         Command::Resolve(a) => cmd::resolve::run(g, a, out),

@@ -43,7 +43,7 @@ pub struct ShowArgs {
 pub fn run(g: &GlobalArgs, args: &ShowArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let engine = Engine::open(&mut ctx)?;
-    let key = crate::project::naming::key_from_input(&args.issue);
+    let key = crate::project::naming::key_from_input(&args.issue)?;
 
     if args.raw {
         let raw = lookup::raw(&engine, &key)?;

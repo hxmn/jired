@@ -76,6 +76,14 @@ impl Deployment {
         }
     }
 
+    /// Where the platform REST API is mounted: v3 on Cloud, v2 on Data Center.
+    pub fn api_prefix(self) -> &'static str {
+        match self {
+            Deployment::Cloud => "/rest/api/3",
+            Deployment::DataCenter => "/rest/api/2",
+        }
+    }
+
     /// The rich-text format this deployment stores descriptions and comments in.
     pub fn markup(self) -> Markup {
         match self {

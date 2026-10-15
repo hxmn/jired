@@ -106,7 +106,7 @@ fn resolve_assignee(ctx: &mut Context, args: &AssignArgs, out: Out) -> Result<Op
     // refuse is worse than offering none. With several issues the first one
     // scopes the search — one person is being written everywhere, and an issue
     // that person cannot hold gets the server's own refusal at push time.
-    let key = crate::project::naming::key_from_input(&args.issues[0]);
+    let key = crate::project::naming::key_from_input(&args.issues[0])?;
     let matches =
         crate::api::block_on(client.search_users(query, crate::api::UserScope::Issue(&key)))?;
 

@@ -335,6 +335,41 @@ impl FixtureClient {
     }
 }
 
+impl FixtureClient {
+    /// The project's versions as they stand, in the server's own shape on disk
+    /// so a recording can be pasted in from a real answer.
+    fn stored_versions(&self) -> Vec<Version> {
+        read_json(&self.dir, "versions.json")
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(crate::api::rest::version_from_json)
+            .collect()
+    }
+
+    fn save_versions(&self, versions: &[Version]) {
+        let wire: Vec<Value> = versions.iter().map(version_to_json).collect();
+        if let Ok(text) = serde_json::to_string_pretty(&wire) {
+            let _ = std::fs::write(self.dir.join("versions.json"), text);
+        }
+    }
+}
+
+/// A version back in the server's shape — what `versions.json` holds, and what
+/// `jired-record` writes there.
+pub fn version_to_json(v: &Version) -> Value {
+    json!({
+        "id": v.id,
+        "name": v.name,
+        "projectId": v.project_id.as_deref().and_then(|p| p.parse::<i64>().ok()),
+        "description": v.description,
+        "released": v.released,
+        "archived": v.archived,
+        "startDate": v.start_date.as_ref().map(format_day),
+        "releaseDate": v.release_date.as_ref().map(format_day),
+    })
+}
+
 /// Which custom field this fixture's issues keep their sprint in.
 ///
 /// Recognized by shape, the way `normalize` recognizes it, because `/field`
@@ -558,6 +593,115 @@ impl JiraApi for FixtureClient {
         }
         let updated = found.clone();
         self.save_sprints(&all);
+        Ok(updated)
+    }
+
+    async fn project(&self, key: &str) -> Result<Project> {
+        self.projects()
+            .await?
+            .into_iter()
+            .find(|p| p.key.eq_ignore_ascii_case(key))
+            .ok_or_else(|| {
+                JiredError::usage(format!("no project with key {key}")).with_hint(FIXTURE_HINT)
+            })
+    }
+
+    async fn versions(&self, project: &str) -> Result<Vec<Version>> {
+        // A recording without the file is one that never asked, which is not
+        // the same answer as a project with no versions: an empty list here
+        // would have push refusing every name in `fix_versions:`.
+        if !self.dir.join("versions.json").is_file() {
+            return Err(JiredError::usage("versions.json was not recorded").with_hint(FIXTURE_HINT));
+        }
+        let id = self.project(project).await.ok().map(|p| p.id);
+        Ok(self
+            .stored_versions()
+            .into_iter()
+            // A recorded version that names no project belongs to whichever
+            // one is asked about: the fixture has one project worth asking.
+            .filter(|v| v.project_id.is_none() || v.project_id == id)
+            .collect())
+    }
+
+    async fn version(&self, id: &str) -> Result<Version> {
+        self.stored_versions()
+            .into_iter()
+            .find(|v| v.id == id)
+            .ok_or_else(|| {
+                JiredError::usage(format!("no version with id {id}")).with_hint(FIXTURE_HINT)
+            })
+    }
+
+    async fn create_version(&self, input: &VersionInput) -> Result<Version> {
+        let path = format!("{}/version", self.deployment.api_prefix());
+        self.record("POST", &path, input.to_body())?;
+        let mut all = self.stored_versions();
+        // Jira refuses a second version of one name in a project, and a fixture
+        // that took it would let a duplicate through to a real server.
+        if all.iter().any(|v| {
+            v.name.eq_ignore_ascii_case(&input.name)
+                && v.project_id.as_deref() == Some(input.project_id.as_str())
+        }) {
+            return Err(JiredError::generic(format!(
+                "A version with this name already exists in this project: {}",
+                input.name
+            )));
+        }
+        // Above every id already on disk rather than from a counter: each
+        // `jired` run is a fresh process, and a counter would start again.
+        let next = all
+            .iter()
+            .filter_map(|v| v.id.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
+            .max(90000)
+            + 1;
+        let version = Version {
+            id: next.to_string(),
+            name: input.name.clone(),
+            project_id: Some(input.project_id.clone()),
+            description: input.description.clone(),
+            released: false,
+            archived: false,
+            start_date: input.start,
+            release_date: input.release,
+        };
+        all.push(version.clone());
+        self.save_versions(&all);
+        Ok(version)
+    }
+
+    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version> {
+        let path = format!("{}/version/{id}", self.deployment.api_prefix());
+        self.record("PUT", &path, update.to_body())?;
+        let mut all = self.stored_versions();
+        let found = all.iter_mut().find(|v| v.id == id).ok_or_else(|| {
+            JiredError::usage(format!("no version with id {id}")).with_hint(FIXTURE_HINT)
+        })?;
+        if !self.applies("PUT", &path) {
+            return Ok(found.clone());
+        }
+        // Merged, as the endpoint merges.
+        if let Some(name) = &update.name {
+            found.name = name.clone();
+        }
+        if let Some(text) = &update.description {
+            found.description = Some(text.clone()).filter(|t| !t.is_empty());
+        }
+        if update.start.is_some() {
+            found.start_date = update.start;
+        }
+        if update.release.is_some() {
+            found.release_date = update.release;
+        }
+        if let Some(released) = update.released {
+            found.released = released;
+        }
+        if let Some(archived) = update.archived {
+            found.archived = archived;
+        }
+        let updated = found.clone();
+        self.save_versions(&all);
         Ok(updated)
     }
 

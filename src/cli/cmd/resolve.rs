@@ -57,7 +57,7 @@ pub fn run(g: &GlobalArgs, args: &ResolveArgs, out: Out) -> Result<ExitCode> {
         .issues
         .iter()
         .map(|k| crate::project::naming::key_from_input(k))
-        .collect();
+        .collect::<crate::error::Result<_>>()?;
     let conflicts: Vec<_> = engine
         .state
         .conflicts()?

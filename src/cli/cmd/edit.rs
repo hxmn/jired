@@ -244,7 +244,7 @@ pub fn push_these(ctx: &mut Context, keys: &[String], dry_run: bool) -> Result<P
         issues: keys
             .iter()
             .map(|k| crate::project::naming::key_from_input(k))
-            .collect(),
+            .collect::<crate::error::Result<_>>()?,
         dry_run,
         ..Default::default()
     };

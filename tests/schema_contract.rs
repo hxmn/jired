@@ -252,6 +252,11 @@ fn command_output_matches_its_published_schema() {
         vec!["sprint", "close", "Sprint 42"],
         vec!["sprint", "start", "Sprint 43"],
         vec!["sprint", "edit", "Sprint 43", "--goal", "Ship SSO."],
+        vec!["releases", "--all"],
+        vec!["release", "create", "2.6.0", "--issues", "PROJ-142"],
+        vec!["release", "edit", "2.6.0", "--release-date", "2026-11-30"],
+        vec!["release", "ship", "2.4.0", "--move-unfixed-to", "2.6.0"],
+        vec!["release", "archive", "2.3.0"],
     ];
 
     let mut checked = 0;

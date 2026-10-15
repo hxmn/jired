@@ -211,7 +211,7 @@ pub fn plan(ctx: &mut Context, args: &ResetArgs) -> Result<Plan> {
         .issues
         .iter()
         .map(|k| crate::project::naming::key_from_input(k))
-        .collect();
+        .collect::<crate::error::Result<_>>()?;
 
     let files = engine.projector.scan()?;
     let rows = engine.state.issues()?;

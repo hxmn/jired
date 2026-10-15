@@ -8,6 +8,57 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.18.0] — 2026-10-15
+
+### Breaking
+
+- **One argument holding several issue keys is refused, exit 2.** `jired push
+  "TSK-487 TSK-556 TSK-578"` — which is what zsh hands over for an unsplit
+  `$keys` — read exactly like a file name, a key followed by a summary, so it
+  pushed TSK-487 alone, reported `ok: 1` and said nothing about the other two.
+  Every command that takes an issue now refuses an argument made of nothing but
+  keys, naming them and saying how to pass them. A real file name — a key and
+  then a summary, or anything ending in `.md` — is one issue, as before.
+- **`jired push KEY` for an issue the workspace does not have fails, exit 2.**
+  It answered "nothing to push" and exit 0, which read as the issue being clean.
+  It is now a failed result of its own, beside the results of the issues that
+  were there; named alone, it no longer widens into "every issue".
+- **The state database moves to schema 4**, for the version cache below. An
+  older jired refuses a workspace a newer one has opened; deleting
+  `.jired/state.db` and running `jired fetch` rebuilds it, as always.
+
+### Added
+
+- **`jired releases` and `jired release create|edit|ship|archive`** — a
+  project's versions, without the web UI. `fix_versions:` could name a version
+  and nothing could make one, so a sprint whose tasks were already scripted
+  still needed a browser for the version its release task points at. `releases`
+  lists them — unreleased by default, `--all` for the history — and `create`
+  makes one, with `--start`, `--release-date`, `--description`, and `--issues`
+  to add it to those issues' `fix_versions:` (staged, or sent with `--push`).
+  `edit` renames, re-dates or re-describes, `archive` archives, and `ship` marks
+  it released: like `sprint close` it names the issues in the version that are
+  not done, by status category, and `--move-unfixed-to` moves them to the next
+  version and pushes that before releasing. Like the sprint commands these go
+  straight to the server and take `-n/--dry-run`, a version is named by its name
+  or its id, and what Jira would answer with a 400 — a duplicate name, a release
+  date before the start, releasing what is already released — is exit 2 first.
+  The group is `release` because `jired version` already says which binary this
+  is. Cloud and Data Center both; the routes are checked against Data Center
+  10.7.4's own description of its API.
+
+### Changed
+
+- **An unknown version in `fix_versions:` or `affects_versions:` is refused at
+  plan time.** Jira answers one with a 400 after the issues ahead of it in the
+  push have already gone out. A name an edit adds is now checked against the
+  project's versions before anything is sent — exit 2, shown by `--dry-run`,
+  with the versions there are and the `jired release create` that would make
+  the missing one — the way an undefined link direction already was. The list
+  is the one `fetch`, `releases` and every `release` write keep in the cache,
+  so a version made a moment ago can be used with no fetch in between; a
+  workspace that has never listed them checks nothing.
+
 ## [0.17.0] — 2026-09-10
 
 ### Changed

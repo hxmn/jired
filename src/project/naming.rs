@@ -150,7 +150,49 @@ pub fn key_from_file_name(name: &str) -> Option<String> {
 /// Case is not simply uppercased: a locally created `NEW-8bf7b6` carries a hex
 /// suffix that was generated in lowercase, and uppercasing it invents a key the
 /// workspace does not have.
-pub fn key_from_input(input: &str) -> String {
+///
+/// One spelling is refused: several keys in one argument. `"TSK-487 TSK-556"`
+/// reads exactly like a file name — a key, then a summary — so it used to come
+/// out as `TSK-487` with the rest dropped as the summary, and a push named
+/// three issues, sent one and reported success. It is what an unsplit shell
+/// variable produces (zsh does not word-split `$keys`), and nothing about it
+/// is a file name: the summary half is made of nothing but keys.
+pub fn key_from_input(input: &str) -> crate::error::Result<String> {
+    if let Some(keys) = crammed_keys(input) {
+        return Err(crate::error::JiredError::usage(format!(
+            "`{}` is {} issue keys in one argument",
+            input.trim(),
+            keys.len()
+        ))
+        .with_detail("argument", input.to_string())
+        .with_detail("keys", serde_json::json!(keys))
+        .with_hint(format!(
+            "pass them as separate arguments — `{}` — or split the variable \
+             (`${{=keys}}` in zsh)",
+            keys.join(" ")
+        )));
+    }
+    Ok(key_of(input))
+}
+
+/// The keys an argument holds when it is nothing but keys, two or more of them.
+fn crammed_keys(input: &str) -> Option<Vec<String>> {
+    let input = input.trim().trim_matches('"');
+    // A path or a file name is one issue, whatever its summary says.
+    if input.contains(['/', '\\']) || input.ends_with(".md") {
+        return None;
+    }
+    let tokens: Vec<&str> = input
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|t| !t.is_empty())
+        .collect();
+    let all_keys = tokens
+        .iter()
+        .all(|t| crate::doc::is_issue_key(&t.to_ascii_uppercase()) || crate::doc::is_temp_key(t));
+    (tokens.len() > 1 && all_keys).then(|| tokens.iter().map(|t| key_of(t)).collect())
+}
+
+fn key_of(input: &str) -> String {
     let input = input.trim().trim_matches('"');
     // A path from tab-completion; the last component is the file name.
     let tail = input.rsplit(['/', '\\']).next().unwrap_or(input);
@@ -338,7 +380,35 @@ mod tests {
             "/tmp/ws/PROJ-0142. Fix login flow.md",
             "\"PROJ-142\"",
         ] {
-            assert_eq!(key_from_input(input), "PROJ-142", "{input}");
+            assert_eq!(key_from_input(input).unwrap(), "PROJ-142", "{input}");
+        }
+    }
+
+    /// An unsplit shell variable is several keys in one argument, and reads
+    /// exactly like a file name; only a summary made of nothing but keys tells
+    /// the two apart.
+    #[test]
+    fn several_keys_in_one_argument_are_refused_and_a_summary_is_not() {
+        for input in [
+            "TSK-487 TSK-556 TSK-578",
+            "tsk-487 tsk-556",
+            "TSK-487,TSK-556",
+            " TSK-487\tTSK-556 ",
+        ] {
+            let err = key_from_input(input).unwrap_err();
+            assert_eq!(err.exit_code().as_i32(), 2, "{input}");
+            assert!(
+                err.hint.as_deref().unwrap().contains("TSK-487 TSK-556"),
+                "{input}"
+            );
+        }
+        for input in [
+            "TSK-487 Fix login",
+            "TSK-0487. TSK-556 is a duplicate.md",
+            "./TSK-487 TSK-556",
+            "TSK-487",
+        ] {
+            assert_eq!(key_from_input(input).unwrap(), "TSK-487", "{input}");
         }
     }
 
@@ -352,7 +422,7 @@ mod tests {
             "NEW-8BF7B6",
             "NEW-8bf7b6. [CARE] Забота о сотрудниках в спринте №6.md",
         ] {
-            assert_eq!(key_from_input(input), "NEW-8bf7b6", "{input}");
+            assert_eq!(key_from_input(input).unwrap(), "NEW-8bf7b6", "{input}");
         }
     }
 

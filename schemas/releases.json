@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/releases/1",
+  "title": "jired releases result",
+  "description": "A project's versions, as the server holds them now",
+  "type": "object",
+  "required": [
+    "schema",
+    "project",
+    "versions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/releases/1"
+    },
+    "project": {
+      "type": "string"
+    },
+    "versions": {
+      "type": "array",
+      "description": "Every version, released and archived ones included; the text listing hides those without --all",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "released",
+          "archived"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "released": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "start_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A day, `2026-10-15`: Jira keeps a version's dates without a time or a zone"
+          },
+          "release_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A day, `2026-10-29`"
+          }
+        }
+      }
+    }
+  }
+}

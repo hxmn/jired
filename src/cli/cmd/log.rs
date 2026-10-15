@@ -277,7 +277,8 @@ pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
     let one = args
         .issue
         .as_deref()
-        .map(crate::project::naming::key_from_input);
+        .map(crate::project::naming::key_from_input)
+        .transpose()?;
     let rows = match &one {
         Some(key) => match engine.state.issue(key)? {
             Some(row) => vec![row],

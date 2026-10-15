@@ -6,7 +6,7 @@
 //! a record that moves with whoever reads it is not a record.
 
 use crate::api::Markup;
-use chrono::{DateTime, Local, TimeZone, Utc};
+use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -149,6 +149,138 @@ impl SprintUpdate {
         }
         serde_json::Value::Object(body)
     }
+}
+
+/// A project version — the thing `fix_versions:` and `affects_versions:` name.
+///
+/// Its dates are days, not instants: Jira stores a version's start and release
+/// as a calendar date with no time and no zone, and turning one into a
+/// timestamp would invent an hour the server does not have and a zone that
+/// moves the day for whoever reads it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Version {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub released: bool,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub start_date: Option<NaiveDate>,
+    #[serde(default)]
+    pub release_date: Option<NaiveDate>,
+}
+
+impl Version {
+    /// The one word a listing shows. Archived wins over released because it is
+    /// the one that changes what can be done with the version: Jira hides an
+    /// archived one from every picker, released or not.
+    pub fn state(&self) -> &'static str {
+        if self.archived {
+            "archived"
+        } else if self.released {
+            "released"
+        } else {
+            "unreleased"
+        }
+    }
+}
+
+/// A version on its way to the server.
+#[derive(Debug, Clone, Default)]
+pub struct VersionInput {
+    pub name: String,
+    pub project_id: String,
+    pub description: Option<String>,
+    pub start: Option<NaiveDate>,
+    pub release: Option<NaiveDate>,
+}
+
+impl VersionInput {
+    /// The request body a version creation sends, on either deployment.
+    pub fn to_body(&self) -> serde_json::Value {
+        // A number on the wire, as `originBoardId` is for a sprint, and passed
+        // through as written when it is not one.
+        let project: serde_json::Value = match self.project_id.parse::<i64>() {
+            Ok(n) => n.into(),
+            Err(_) => self.project_id.clone().into(),
+        };
+        let mut body = serde_json::json!({ "name": self.name, "projectId": project });
+        if let Some(text) = self.description.as_deref().filter(|d| !d.trim().is_empty()) {
+            body["description"] = serde_json::json!(text);
+        }
+        if let Some(start) = &self.start {
+            body["startDate"] = serde_json::json!(format_day(start));
+        }
+        if let Some(release) = &self.release {
+            body["releaseDate"] = serde_json::json!(format_day(release));
+        }
+        body
+    }
+}
+
+/// A change to a version that already exists.
+///
+/// The endpoint merges, as the sprint one does, so every field is optional and
+/// only what was set is sent: `description: Some("")` clears it and `None`
+/// leaves it alone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VersionUpdate {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub start: Option<NaiveDate>,
+    pub release: Option<NaiveDate>,
+    pub released: Option<bool>,
+    pub archived: Option<bool>,
+}
+
+impl VersionUpdate {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn to_body(&self) -> serde_json::Value {
+        let mut body = serde_json::Map::new();
+        if let Some(name) = &self.name {
+            body.insert("name".into(), serde_json::json!(name));
+        }
+        if let Some(text) = &self.description {
+            body.insert("description".into(), serde_json::json!(text));
+        }
+        if let Some(start) = &self.start {
+            body.insert("startDate".into(), serde_json::json!(format_day(start)));
+        }
+        if let Some(release) = &self.release {
+            body.insert("releaseDate".into(), serde_json::json!(format_day(release)));
+        }
+        if let Some(released) = self.released {
+            body.insert("released".into(), serde_json::json!(released));
+        }
+        if let Some(archived) = self.archived {
+            body.insert("archived".into(), serde_json::json!(archived));
+        }
+        serde_json::Value::Object(body)
+    }
+}
+
+/// A day as Jira writes a version's dates: `2026-10-29`.
+pub fn format_day(day: &NaiveDate) -> String {
+    day.format("%Y-%m-%d").to_string()
+}
+
+/// A day out of a version payload or off the command line.
+///
+/// Only the date is read: a payload's `2026-10-29` and a typed `2026-10-29` are
+/// the same day, and a timestamp's time of day is dropped rather than letting a
+/// zone move the date.
+pub fn parse_day(text: &str) -> Option<NaiveDate> {
+    let text = text.trim();
+    let head = text.get(..10).unwrap_or(text);
+    NaiveDate::parse_from_str(head, "%Y-%m-%d").ok()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -674,6 +806,39 @@ mod tests {
     fn a_worklog_start_time_carries_milliseconds_and_a_bare_offset() {
         let dt = parse_timestamp("2026-08-15T09:00:00Z").unwrap();
         assert_eq!(format_worklog_started(&dt), "2026-08-15T09:00:00.000+0000");
+    }
+
+    /// A version's dates are days on the wire, and an update carries only
+    /// what it was given — the endpoint merges, like the sprint one.
+    #[test]
+    fn a_version_body_carries_days_and_only_what_was_set() {
+        let day = parse_day("2026-10-29").unwrap();
+        assert_eq!(parse_day("2026-10-29T23:30:00+03:00"), Some(day));
+        assert_eq!(parse_day("29/Oct/26"), None);
+
+        let body = VersionInput {
+            name: "0.5.0".to_string(),
+            project_id: "10000".to_string(),
+            release: Some(day),
+            description: Some("  ".to_string()),
+            ..Default::default()
+        }
+        .to_body();
+        assert_eq!(
+            body,
+            serde_json::json!({ "name": "0.5.0", "projectId": 10000, "releaseDate": "2026-10-29" })
+        );
+
+        let update = VersionUpdate {
+            released: Some(true),
+            description: Some(String::new()),
+            ..Default::default()
+        };
+        assert_eq!(
+            update.to_body(),
+            serde_json::json!({ "description": "", "released": true })
+        );
+        assert!(VersionUpdate::default().is_empty());
     }
 
     /// The endpoint merges, so a key that is not in the body is a field the

@@ -269,6 +269,25 @@ direction refuses the issue while nothing has been sent. `epic` remains the
 one editable field with no call behind it; a change to it is warned about
 rather than sent.
 
+`fix_versions:` and `affects_versions:` go out by name in the field update, and
+Jira answers a name the project does not have with a 400 — after the issues
+ahead of it in the push have already gone. So a name an edit *adds* is checked at
+plan time against the project's versions (exit 2, visible in `--dry-run`, the
+hint listing the versions there are and the `jired release create` that would
+make the missing one). Only added names: the ones already on the issue came from
+the server. The list is the one `fetch`, `jired releases` and every `jired
+release` write leave in the cache, so a version created a moment ago passes with
+no fetch in between. A workspace that has never listed the project's versions
+checks nothing — it has no grounds to call a name unknown. Matching ignores case,
+as the server's does.
+
+An `ISSUE` that is not in the workspace is a failed result of its own (exit 2),
+not an empty push: `jired push TSK-578` answering "nothing to push" read as the
+issue being clean. And one argument holding several keys — `"TSK-487 TSK-556"`,
+which is what zsh hands over for an unsplit `$keys` — is refused on every command
+that takes an issue, naming the keys: it used to read as a file name, a key and
+then a summary, and push the first issue alone.
+
 `## Checklist` is a field update like any other — the checklist plugin's text
 field, carried in the same `PUT /issue` as the rest, and a follow-up after a
 create because a plugin's field is rarely on the create screen. What goes out is
@@ -972,6 +991,68 @@ left them staged would be the stranding again, one step removed. A target that i
 itself closed, or is the sprint being closed, is exit 2; so is closing a `future`
 sprint, or one already closed.
 JSON: `{"schema":"jired/sprint-close/1","dry_run":false,"closed":true,"sprint":{…}|null,"request":{…},"incomplete":[{"key","file","status"}],"carried_to":{"id","name"}|null,"issues":[{"key","file","changed"}],"push":{…}|null}`.
+
+### `jired releases [--all]`
+The project's versions — what `fix_versions:` and `affects_versions:` name — as
+the server holds them now (`GET …/project/{key}/versions`): id, state, name, and
+the start and release dates. Released and archived versions are hidden without
+`--all`, the way `sprints` hides closed sprints; `--json` always carries all of
+them. The listing replaces the cached one, which is what `push` checks version
+names against. The project is `--project`, else `workspace.project`.
+JSON: `{"schema":"jired/releases/1","project":"TSK","versions":[{"id","name","project_id","description","released","archived","start_date","release_date"}]}`.
+
+### `jired release create NAME [--start D] [--release-date D] [--description T] [--issues K1,K2] [--push] [-n]`
+Versions had no command at all, so a sprint whose tasks were scripted still
+needed the web UI for the version the release task points at. The group is
+`release` because `jired version` already says which binary this is.
+
+Like `sprint create`, it posts there and then (`POST …/version`) — a version has
+no file to stage it in — and `-n/--dry-run` prints the call. The body names the
+project by `projectId`, the spelling both deployments take; Cloud documents the
+key as deprecated. The id comes from any version the project already has, or
+from `GET …/project/{key}` for its first. A name the project already has is exit
+2 naming it, rather than Jira's 400. Dates are days (`2026-10-29`), because that
+is all Jira keeps of a version's; a release date before the start is exit 2.
+
+The new version goes into the cache on the way out, so `fix_versions:` can name
+it straight away. `--issues` adds it to those issues' `fix_versions:` — appended,
+the rest of the list kept — as staged edits, and `--push` sends them.
+JSON: `{"schema":"jired/release-create/1","dry_run":false,"project":"TSK","version":{…}|null,"request":{"method","path","body"},"issues":[{"key","file","changed"}],"push":{…}|null}`.
+
+### `jired release edit VERSION [--name T] [--description T] [--start D] [--release-date D] [-n]` · `jired release archive VERSION [-n]`
+One endpoint under both, `PUT …/version/{id}`, which merges: only what was
+given is in the body, and `--description ''` is how a description comes off.
+`VERSION` is a name or an id, matched against the project's listing as the server
+returns it — the id first, then the name without regard to case. A miss is exit
+2 listing the unreleased versions. `edit` with no flags is exit 7 before anything
+is asked; renaming onto a name that exists is exit 2. Issue files spell a version
+by name, and renaming one does not touch the issues, so an ordinary fetch does
+not see it: a rename ends with a hint to `jired fetch --full` and then `pull`.
+`archive` sets `archived`, which takes the version out of Jira's pickers; one
+already archived says so.
+JSON: `{"schema":"jired/release-update/1","dry_run":false,"project":"TSK","version":{…}|null,"request":{…}}`.
+
+### `jired release ship VERSION [--date D] [--move-unfixed-to VERSION] [-n]`
+Marks the version released, and does for it what `sprint close` does for a
+sprint: names the issues in the working copy whose `fix_versions:` hold it and
+whose status *category* is not `done` — `2 issue(s) are not done and stay in the
+released version: TSK-181, TSK-198` — and with `--move-unfixed-to` moves them on
+first. The move swaps the one version for the other in each list, keeping any
+other version the issue is in, and is pushed in the same command; if it fails,
+the version is left unreleased. Releasing goes after the move because a version
+that shipped with work still pointing at it is the state the flag exists to
+prevent.
+
+This is jired's own move, not Jira's `moveUnfixedIssuesTo`: that one moves what
+is *unresolved* — a different question from "not done" on a workflow that never
+sets a resolution — and moves it out of sight of the working copy. Here the set
+that moves is the set that was listed.
+
+The release date is `--date`, else the date the version was planned for, else
+today, and is only sent when it differs from what the version holds. A version
+already released, or archived, is exit 2; so is moving to itself, or to one that
+has shipped.
+JSON: `{"schema":"jired/release-ship/1","dry_run":false,"released":true,"project":"TSK","version":{…}|null,"request":{…},"unfinished":[{"key","file","status"}],"moved_to":{"id","name"}|null,"issues":[{"key","file","changed"}],"push":{…}|null}`.
 
 ### `jired create` — the field flags
 `--assignee`, `--sprint`, `--labels`, `--priority`, `--component` (repeatable),

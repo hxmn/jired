@@ -130,6 +130,10 @@ pub const READ_ONLY: &[ReadOnly] = &[
     ro(&["jired", "boards"], "lists boards"),
     ro(&["jired", "sprints"], "lists sprints"),
     ro(
+        &["jired", "releases"],
+        "lists the project's versions and refreshes the local copy of the list",
+    ),
+    ro(
         &["jired", "list"],
         "matches issues in the working copy; reads files and sends nothing",
     ),
@@ -749,7 +753,9 @@ pub fn render() -> String {
         "`--keys` is what makes the rest composable: `jired list --sprint \
          \"Sprint 7\" --status \"To Do\" --keys` feeds `jired set`, `jired label`, \
          `jired transition` or `jired sprint add`, all of which take several \
-         keys. Searching the *server* rather than the working copy is `jired \
+         keys — as separate arguments: one argument holding several keys, which \
+         is what an unsplit shell variable gives, is exit 2. \
+         Searching the *server* rather than the working copy is `jired \
          search JQL`.\n\n",
     );
     s.push_str(
@@ -870,6 +876,26 @@ pub fn render() -> String {
          issue cannot be got out of a sprint that is already closed. \"Unfinished\" \
          is the status *category* rather than a status name, so it reads the same \
          on a workflow that says `Done` and one that does not.\n\n",
+    );
+    s.push_str("## Versions\n\n");
+    s.push_str(
+        "`fix_versions:` and `affects_versions:` name the project's versions. \
+         `jired releases [--all]` lists them; `jired release create NAME \
+         [--start D] [--release-date D] [--description T] [--issues K1,K2] [--push]` \
+         makes one, `jired release edit VERSION` renames or re-dates it, `jired \
+         release ship VERSION [--date D] [--move-unfixed-to VERSION]` releases it and \
+         `jired release archive VERSION` archives it. Like the sprint commands they \
+         go straight to the server and take `-n/--dry-run`; `VERSION` is a name or an \
+         id. Dates are days, `2026-10-29`. `ship` names the issues in the version \
+         that are not done, by status category, and `--move-unfixed-to` moves them \
+         on and pushes that before releasing.\n\n",
+    );
+    s.push_str(
+        "A version name a push adds to `fix_versions:` or `affects_versions:` is \
+         checked against the project's versions before anything is sent: an unknown \
+         one is exit 2 at plan time, shown by `push --dry-run`, with the known names \
+         in the hint. Create it with `jired release create` first — the new version \
+         is usable immediately, with no fetch in between.\n\n",
     );
     s.push_str(
         "`jired boards --json` names the project a board is filed under in \
@@ -1141,6 +1167,11 @@ mod tests {
                 "sprint",
                 "stages a sprint move, and creates, starts, edits or closes a \
                  sprint on the server",
+            ),
+            (
+                "release",
+                "creates, edits, releases or archives a version on the server, \
+                 and stages `fix_versions:` edits",
             ),
             (
                 "watch",

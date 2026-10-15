@@ -69,6 +69,14 @@ pub fn run_with(
         if let Err(e) = cache_agile(engine, client, &project) {
             tracing::debug!("agile metadata unavailable: {}", e.message);
         }
+        // What `fix_versions:` is checked against at push time. Best-effort for
+        // the same reason the boards are: a listing that fails leaves the old
+        // one standing, or none — and with none, push checks nothing rather
+        // than refusing every name.
+        match crate::api::block_on(client.versions(&project)) {
+            Ok(versions) => engine.state.replace_versions(&project, &versions)?,
+            Err(e) => tracing::warn!("cannot refresh the versions of {project}: {}", e.message),
+        }
     }
 
     let watermark = engine.state.last_fetch_at()?;
@@ -78,7 +86,7 @@ pub fn run_with(
     let jql = build_jql(ctx, args, since.as_ref())?;
     tracing::debug!(%jql, "searching");
 
-    let scope_is_whole_project = args.wanted_issues().is_empty() && args.jql.is_none();
+    let scope_is_whole_project = args.wanted_issues()?.is_empty() && args.jql.is_none();
 
     // A first fetch of a few hundred issues is several round trips; without
     // this it looks like a hang.
@@ -181,7 +189,7 @@ pub fn build_jql(
 ) -> Result<String> {
     let mut clauses: Vec<String> = Vec::new();
 
-    let named = args.wanted_issues();
+    let named = args.wanted_issues()?;
     if !named.is_empty() {
         clauses.push(format!("key in ({})", named.join(", ")));
     } else if let Some(jql) = &args.jql {

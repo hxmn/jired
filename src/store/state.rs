@@ -132,6 +132,20 @@ CREATE INDEX changelog_issue ON changelog(issue_key, created);
         version: 3,
         sql: "ALTER TABLE issue ADD COLUMN viewed_at TEXT;",
     },
+    // A project's versions, so `fix_versions:` can be checked at plan time and a
+    // version `release create` has just made resolves before the next fetch.
+    Migration {
+        version: 4,
+        sql: r#"
+CREATE TABLE version (
+  id      TEXT PRIMARY KEY,
+  project TEXT NOT NULL,
+  name    TEXT NOT NULL,
+  raw     TEXT NOT NULL
+);
+CREATE INDEX version_project ON version(project, name);
+"#,
+    },
 ];
 
 /// The last state jired successfully synced to a file.
@@ -717,6 +731,82 @@ impl StateStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    // ---- versions ------------------------------------------------------------
+
+    /// Replace everything known about a project's versions with a full listing.
+    ///
+    /// Wholesale rather than merged: a version deleted on the server has to
+    /// leave the cache too, or a push would be told a name is fine that the
+    /// server will refuse. Only a full listing may do this, which is also what
+    /// marks the list as complete — see [`StateStore::versions_complete`].
+    pub fn replace_versions(&self, project: &str, versions: &[crate::api::Version]) -> Result<()> {
+        let project = project.to_ascii_uppercase();
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM version WHERE project = ?1", [&project])?;
+        for v in versions {
+            tx.execute(
+                "INSERT INTO version (id, project, name, raw) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET
+                   project = excluded.project, name = excluded.name, raw = excluded.raw",
+                params![v.id, project, v.name, serde_json::to_string(v)?],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO workspace (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![versions_key(&project), now_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Put versions one command has just written into the cache, leaving the
+    /// rest of the project's list alone.
+    pub fn save_versions(&self, project: &str, versions: &[crate::api::Version]) -> Result<()> {
+        let project = project.to_ascii_uppercase();
+        let tx = self.conn.unchecked_transaction()?;
+        for v in versions {
+            tx.execute(
+                "INSERT INTO version (id, project, name, raw) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET
+                   project = excluded.project, name = excluded.name, raw = excluded.raw",
+                params![v.id, project, v.name, serde_json::to_string(v)?],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A project's versions as last seen, oldest id first — the order Jira
+    /// creates them in, which is the order a person reads a release history.
+    pub fn versions(&self, project: &str) -> Result<Vec<crate::api::Version>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT raw FROM version WHERE project = ?1")?;
+        let rows = stmt.query_map([project.to_ascii_uppercase()], |r| r.get::<_, String>(0))?;
+        let mut out: Vec<crate::api::Version> = Vec::new();
+        for raw in rows {
+            // A row this binary cannot read is a cache miss, not a corrupt
+            // database: the next fetch rewrites it.
+            if let Ok(v) = serde_json::from_str(&raw?) {
+                out.push(v);
+            }
+        }
+        out.sort_by(|a, b| version_order(&a.id, &b.id));
+        Ok(out)
+    }
+
+    /// Whether the cached list for a project came from a full listing.
+    ///
+    /// The difference between "this project has no version called 0.9.0" and
+    /// "this workspace has never asked": a workspace fetched before versions
+    /// were cached, or one whose fetch could not read them, holds at most the
+    /// versions `release` itself wrote, and refusing a name on the strength of
+    /// that would refuse every version made in the web UI.
+    pub fn versions_complete(&self, project: &str) -> Result<bool> {
+        Ok(self.get_meta(&versions_key(project))?.is_some())
+    }
+
     // ---- changelog -----------------------------------------------------------
 
     pub fn save_changelog(
@@ -1060,6 +1150,18 @@ const ISSUE_COLUMNS: &str = "key, id, base_raw, base_updated, base_desc, base_md
      remote_raw, remote_updated, remote_fetched_at, file_path, parent_key, deleted_remote,
      viewed_at";
 
+fn versions_key(project: &str) -> String {
+    format!("versions_listed:{}", project.to_ascii_uppercase())
+}
+
+/// Ids are numbers on every Jira, compared as such so `10010` follows `9999`.
+fn version_order(a: &str, b: &str) -> std::cmp::Ordering {
+    match (a.parse::<u64>(), b.parse::<u64>()) {
+        (Ok(x), Ok(y)) => x.cmp(&y),
+        _ => a.cmp(b),
+    }
+}
+
 fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
     // Read first: a message about a corrupt row is close to useless without the
     // key of the row it is about.
@@ -1332,6 +1434,57 @@ mod tests {
         assert_eq!(content_hash("a"), content_hash("a"));
         assert_ne!(content_hash("a"), content_hash("b"));
         assert!(content_hash("a").starts_with("sha256:"));
+    }
+
+    fn version(id: &str, name: &str) -> crate::api::Version {
+        crate::api::Version {
+            id: id.to_string(),
+            name: name.to_string(),
+            project_id: Some("10000".to_string()),
+            description: None,
+            released: false,
+            archived: false,
+            start_date: None,
+            release_date: None,
+        }
+    }
+
+    /// Only a full listing makes the list one push may refuse names against;
+    /// a version one command wrote is kept, but proves nothing about the rest.
+    #[test]
+    fn a_version_list_is_complete_only_after_a_full_listing() {
+        let s = StateStore::in_memory().unwrap();
+        s.save_versions("tsk", &[version("12", "0.5.0")]).unwrap();
+        assert!(!s.versions_complete("TSK").unwrap());
+        assert_eq!(s.versions("TSK").unwrap().len(), 1);
+
+        s.replace_versions(
+            "TSK",
+            &[version("9999", "0.3.0"), version("10010", "0.4.0")],
+        )
+        .unwrap();
+        assert!(s.versions_complete("tsk").unwrap());
+        // Wholesale: a version gone from the server is gone from here, and the
+        // ids sort as numbers, oldest first.
+        let names: Vec<String> = s
+            .versions("TSK")
+            .unwrap()
+            .into_iter()
+            .map(|v| v.name)
+            .collect();
+        assert_eq!(names, ["0.3.0", "0.4.0"]);
+
+        // A rename is an upsert by id, not a second version.
+        s.save_versions("TSK", &[version("10010", "0.4.1")])
+            .unwrap();
+        let names: Vec<String> = s
+            .versions("TSK")
+            .unwrap()
+            .into_iter()
+            .map(|v| v.name)
+            .collect();
+        assert_eq!(names, ["0.3.0", "0.4.1"]);
+        assert!(s.versions("OPS").unwrap().is_empty());
     }
 
     #[test]

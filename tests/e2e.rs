@@ -8713,3 +8713,448 @@ fn silent_keeps_the_json_document_and_the_warnings_in_it() {
         "{report}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// release
+// ---------------------------------------------------------------------------
+
+/// The versions the "server" holds now, read off its own file, so a test can
+/// see what a command really changed rather than what it reported.
+fn remote_versions(ws: &Ws) -> Vec<Value> {
+    let text = std::fs::read_to_string(ws.fixtures.join("versions.json")).unwrap();
+    serde_json::from_str::<Value>(&text)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// A version's whole life without the web UI, on both deployments: the routes
+/// are the platform API's, which Cloud serves under v3 and Data Center under
+/// v2, and a path that only works on one of them is the failure this guards.
+#[test]
+fn a_version_can_be_created_listed_renamed_released_and_archived() {
+    for deployment in [Deployment::Cloud, Deployment::DataCenter] {
+        let ws = Ws::of(deployment);
+        ws.init();
+        let prefix = match deployment {
+            Deployment::Cloud => "/rest/api/3",
+            Deployment::DataCenter => "/rest/api/2",
+        };
+        let project_id = match deployment {
+            Deployment::Cloud => 10000,
+            Deployment::DataCenter => 10200,
+        };
+
+        let created = ws.json(&[
+            "release",
+            "create",
+            "0.5.0",
+            "--start",
+            "2026-10-15",
+            "--release-date",
+            "2026-10-29",
+            "--description",
+            "Sprint 5",
+        ]);
+        assert_eq!(created["schema"], "jired/release-create/1");
+        assert_eq!(created["request"]["method"], "POST");
+        assert_eq!(created["request"]["path"], format!("{prefix}/version"));
+        // `projectId`, which both deployments take; Cloud documents the key
+        // spelling as deprecated.
+        assert_eq!(created["request"]["body"]["projectId"], project_id);
+        assert_eq!(created["request"]["body"]["startDate"], "2026-10-15");
+        assert_eq!(created["request"]["body"]["releaseDate"], "2026-10-29");
+        assert_eq!(created["version"]["released"], false);
+        let id = created["version"]["id"].as_str().unwrap().to_string();
+
+        // Listed straight away, unreleased, with its dates as days.
+        let listed = ws.json(&["releases"]);
+        assert_eq!(listed["schema"], "jired/releases/1");
+        let ours = listed["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == id.as_str())
+            .unwrap_or_else(|| panic!("{listed}"))
+            .clone();
+        assert_eq!(ours["name"], "0.5.0");
+        assert_eq!(ours["start_date"], "2026-10-15");
+
+        // By name or by id, the same version.
+        let renamed = ws.json(&["release", "edit", "0.5.0", "--name", "0.5.1"]);
+        assert_eq!(renamed["schema"], "jired/release-update/1");
+        assert_eq!(renamed["request"]["method"], "PUT");
+        assert_eq!(renamed["request"]["path"], format!("{prefix}/version/{id}"));
+        // The endpoint merges, so only the change goes out.
+        assert_eq!(
+            renamed["request"]["body"],
+            serde_json::json!({ "name": "0.5.1" })
+        );
+
+        let shipped = ws.json(&["release", "ship", &id, "--date", "2026-10-28"]);
+        assert_eq!(shipped["schema"], "jired/release-ship/1");
+        assert_eq!(shipped["released"], true);
+        assert_eq!(
+            shipped["request"]["body"],
+            serde_json::json!({ "released": true, "releaseDate": "2026-10-28" })
+        );
+
+        let archived = ws.json(&["release", "archive", "0.5.1"]);
+        assert_eq!(
+            archived["request"]["body"],
+            serde_json::json!({ "archived": true })
+        );
+
+        let remote = remote_versions(&ws);
+        let ours = remote.iter().find(|v| v["id"] == id.as_str()).unwrap();
+        assert_eq!(ours["name"], "0.5.1", "{deployment:?}");
+        assert_eq!(ours["released"], true);
+        assert_eq!(ours["archived"], true);
+        assert_eq!(ours["releaseDate"], "2026-10-28");
+
+        // A released, archived version is history: hidden unless asked for.
+        let shown = ws.cmd(&["releases"]).output().unwrap();
+        assert!(!String::from_utf8_lossy(&shown.stdout).contains("0.5.1"));
+        let all = ws.cmd(&["releases", "--all"]).output().unwrap();
+        assert!(String::from_utf8_lossy(&all.stdout).contains("0.5.1"));
+    }
+}
+
+/// What can be said before anything is sent is said then, as exit 2, and a
+/// dry run sends nothing at all.
+#[test]
+fn a_version_jira_would_refuse_is_refused_here_and_a_dry_run_sends_nothing() {
+    let ws = Ws::new();
+    ws.init();
+
+    let err = ws.json_err(&["release", "create", "2.4.0"], 2);
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("already has a version called `2.4.0`"),
+        "{err}"
+    );
+    let err = ws.json_err(
+        &[
+            "release",
+            "create",
+            "3.0.0",
+            "--start",
+            "2026-10-29",
+            "--release-date",
+            "2026-10-15",
+        ],
+        2,
+    );
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("due out before it starts"));
+    assert_eq!(
+        ws.json_err(&["release", "ship", "2.3.0"], 2)["details"]["state"],
+        "released"
+    );
+    assert_eq!(
+        ws.json_err(&["release", "archive", "2.2.0"], 2)["details"]["state"],
+        "archived"
+    );
+    let err = ws.json_err(&["release", "edit", "9.9.9", "--name", "x"], 2);
+    assert!(
+        err["hint"].as_str().unwrap().contains("2.4.0 (10403)"),
+        "{err}"
+    );
+    // No flags is a mistake about the command, not about the version.
+    ws.json_err(&["release", "edit", "2.4.0"], 7);
+
+    let before = remote_versions(&ws);
+    let dry = ws.json(&["release", "create", "3.0.0", "-n", "--issues", "PROJ-142"]);
+    assert_eq!(dry["dry_run"], true);
+    assert_eq!(dry["version"], Value::Null);
+    assert_eq!(dry["request"]["body"]["name"], "3.0.0");
+    ws.json(&["release", "ship", "2.4.0", "-n"]);
+    ws.json(&["release", "archive", "2.4.0", "-n"]);
+    assert_eq!(remote_versions(&ws), before);
+}
+
+/// The acceptance case from the request: a version made a moment ago can be
+/// written into `fix_versions:` and pushed with nothing fetched in between.
+#[test]
+fn a_new_version_can_be_set_and_pushed_without_a_fetch() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    ws.json(&["release", "create", "0.5.0"]);
+    ws.json(&[
+        "set",
+        "--field",
+        "fix_versions",
+        "--value",
+        "0.5.0",
+        "PROJ-142",
+    ]);
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    assert_eq!(
+        dry["results"][0]["ops"][0]["request"]["body"]["fields"]["fixVersions"],
+        serde_json::json!([{ "name": "0.5.0" }]),
+        "{dry}"
+    );
+    let push = ws.json(&["push"]);
+    assert_eq!(push["results"][0]["ok"], true, "{push}");
+    assert!(ws.read(ISSUE_FILE).contains("- 0.5.0"));
+}
+
+/// `--issues` stages the version on each issue the way `sprint create --issues`
+/// stages the sprint, and `--push` sends it.
+#[test]
+fn a_version_can_be_created_and_put_on_issues_in_one_go() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws.json(&[
+        "release",
+        "create",
+        "0.5.0",
+        "--issues",
+        "PROJ-142,PROJ-150",
+        "--push",
+    ]);
+    assert_eq!(out["issues"].as_array().unwrap().len(), 2);
+    assert_eq!(out["push"]["results"][0]["ok"], true, "{out}");
+    // Added, not substituted: the version the issue was already in stays.
+    let text = ws.read(ISSUE_FILE);
+    assert!(
+        text.contains("- 2.4.0") && text.contains("- 0.5.0"),
+        "{text}"
+    );
+}
+
+/// Jira answers an unknown name in `fixVersions` with a 400 after the push has
+/// started. Checked at plan time instead, so `--dry-run` shows it and nothing
+/// goes out — on an update and on a create alike.
+#[test]
+fn an_unknown_version_is_refused_at_plan_time() {
+    for deployment in [Deployment::Cloud, Deployment::DataCenter] {
+        let ws = Ws::of(deployment);
+        ws.init();
+        ws.json(&["pull"]);
+        let file = deployment.issue_file();
+
+        let text = ws.read(file);
+        let edited = text.replacen("fix_versions:\n- ", "fix_versions:\n- 9.9.9\n- ", 1);
+        assert_ne!(text, edited, "{text}");
+        ws.write(file, &edited);
+
+        let dry = ws.json_code(&["push", "--dry-run"], 2);
+        let result = &dry["results"][0];
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error_kind"], "usage");
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("`9.9.9` is not a version of"),
+            "{dry}"
+        );
+        let hint = result["hint"].as_str().unwrap();
+        assert!(hint.contains("jired release create \"9.9.9\""), "{hint}");
+
+        let journal = ws.path().join("calls.jsonl");
+        let out = ws
+            .cmd(&["push"])
+            .arg("--json")
+            .env("JIRED_FIXTURE_JOURNAL", &journal)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2));
+        assert!(!journal.exists(), "nothing may be sent for a refused issue");
+
+        // A case difference is not a different version: the server matches
+        // without regard to case, so neither does the check.
+        let known = match deployment {
+            Deployment::Cloud => "2.5.0",
+            Deployment::DataCenter => "2026.09",
+        };
+        ws.write(
+            file,
+            &text.replacen(
+                "fix_versions:\n- ",
+                &format!("fix_versions:\n- {known}\n- "),
+                1,
+            ),
+        );
+        let dry = ws.json(&["push", "--dry-run"]);
+        assert_eq!(dry["results"][0]["ok"], true, "{dry}");
+    }
+
+    // A new issue is checked before its create call, not after.
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let report = ws.json(&["create", "--summary", "Ship it"]);
+    let file = report["file"].as_str().unwrap().to_string();
+    ws.write(
+        &file,
+        &ws.read(&file)
+            .replace("fix_versions: []", "fix_versions:\n- 9.9.9"),
+    );
+    let dry = ws.json_code(&["push", "--dry-run"], 2);
+    assert!(
+        dry["results"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("9.9.9"),
+        "{dry}"
+    );
+}
+
+/// A workspace that has never listed the project's versions has no grounds to
+/// call a name unknown, and must not refuse every version made in the web UI.
+#[test]
+fn a_workspace_that_never_listed_versions_checks_nothing() {
+    let ws = Ws::new();
+    std::fs::remove_file(ws.fixtures.join("versions.json")).unwrap();
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("- 2.4.0", "- made-in-the-web-ui");
+    ws.write(ISSUE_FILE, &text);
+    let dry = ws.json(&["push", "--dry-run"]);
+    assert_eq!(dry["results"][0]["ok"], true, "{dry}");
+}
+
+/// Shipping names the issues that are not finished, and `--move-unfixed-to`
+/// moves them on and pushes that before the version is released.
+#[test]
+fn shipping_a_version_names_what_is_unfinished_and_can_move_it_on() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    // Two issues in 2.4.0, one of which is finished.
+    ws.json(&[
+        "set",
+        "--field",
+        "fix_versions",
+        "--value",
+        "2.4.0",
+        "PROJ-150",
+        "--push",
+    ]);
+    ws.json(&["transition", "PROJ-150", "--to", "Done", "--push"]);
+    ws.json(&["pull"]);
+
+    let seen = ws.json(&["release", "ship", "2.4.0", "--dry-run"]);
+    assert_eq!(seen["released"], false);
+    let unfinished: Vec<&str> = seen["unfinished"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        unfinished,
+        ["PROJ-142"],
+        "the Done one is finished and stays"
+    );
+    // Its planned date is already set, so releasing does not resend it.
+    assert_eq!(
+        seen["request"]["body"],
+        serde_json::json!({ "released": true })
+    );
+
+    let err = ws.json_err(
+        &["release", "ship", "2.4.0", "--move-unfixed-to", "2.3.0"],
+        2,
+    );
+    assert!(
+        err["message"].as_str().unwrap().contains("is released"),
+        "{err}"
+    );
+    ws.json_err(
+        &["release", "ship", "2.4.0", "--move-unfixed-to", "2.4.0"],
+        2,
+    );
+
+    let out = ws.json(&["release", "ship", "2.4.0", "--move-unfixed-to", "2.5.0"]);
+    assert_eq!(out["released"], true);
+    assert_eq!(out["version"]["released"], true);
+    assert_eq!(out["moved_to"]["name"], "2.5.0");
+    assert_eq!(out["issues"][0]["key"], "PROJ-142");
+    assert_eq!(out["push"]["results"][0]["ok"], true);
+
+    let text = ws.read(ISSUE_FILE);
+    assert!(
+        text.contains("- 2.5.0") && !text.contains("- 2.4.0"),
+        "{text}"
+    );
+    assert!(ws
+        .read("PROJ-0150. Rotate IdP certificate.md")
+        .contains("- 2.4.0"));
+}
+
+/// zsh does not word-split `$keys`, so `jired push $keys` hands over one
+/// argument holding every key. That read as a file name — a key and a summary
+/// — and pushed the first issue alone, reporting success.
+#[test]
+fn several_keys_in_one_argument_are_refused_rather_than_cut_to_the_first() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.write(
+        ISSUE_FILE,
+        &ws.read(ISSUE_FILE)
+            .replace("Fix login flow", "Fix the login flow"),
+    );
+
+    let err = ws.json_err(&["push", "PROJ-142 PROJ-150 PROJ-143"], 2);
+    assert_eq!(
+        err["details"]["keys"],
+        serde_json::json!(["PROJ-142", "PROJ-150", "PROJ-143"])
+    );
+    ws.json_err(&["diff", "PROJ-142 PROJ-150"], 2);
+
+    // A file name with a summary is still one issue.
+    let ok = ws.json(&["push", "--dry-run", ISSUE_FILE]);
+    assert_eq!(ok["results"][0]["key"], "PROJ-142");
+}
+
+/// A key the workspace does not have is a failure, not an empty push: "nothing
+/// to push" read as the issue being clean.
+#[test]
+fn a_named_issue_the_workspace_does_not_have_fails_the_push() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.write(
+        ISSUE_FILE,
+        &ws.read(ISSUE_FILE)
+            .replace("Fix login flow", "Fix the login flow"),
+    );
+
+    let out = ws.json_code(&["push", "--dry-run", "PROJ-142", "PROJ-9999"], 2);
+    let by_key = |key: &str| {
+        out["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["key"] == key)
+            .unwrap_or_else(|| panic!("{out}"))
+            .clone()
+    };
+    assert_eq!(by_key("PROJ-142")["ok"], true);
+    let missing = by_key("PROJ-9999");
+    assert_eq!(missing["ok"], false);
+    assert!(missing["error"]
+        .as_str()
+        .unwrap()
+        .contains("not in this workspace"));
+
+    // Named alone, it must not widen into "every issue".
+    let out = ws.json_code(&["push", "--dry-run", "PROJ-9999"], 2);
+    assert_eq!(out["results"].as_array().unwrap().len(), 1, "{out}");
+}

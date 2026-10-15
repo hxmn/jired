@@ -95,7 +95,7 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
     // After the template and before the flags: "like that one, but…" is what
     // `--like` means, and the flags are the "but".
     if let Some(model) = &args.like {
-        let key = crate::project::naming::key_from_input(model);
+        let key = crate::project::naming::key_from_input(model)?;
         let (from, _) = crate::cli::cmd::lookup::doc(&engine, &key)?;
         copy_from(&mut doc.frontmatter, &from.frontmatter);
     }

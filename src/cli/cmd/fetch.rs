@@ -46,17 +46,19 @@ pub struct FetchArgs {
 
 impl FetchArgs {
     /// Every issue named, from either spelling, resolved to keys.
-    pub fn wanted_issues(&self) -> Vec<String> {
+    pub fn wanted_issues(&self) -> crate::error::Result<Vec<String>> {
         let mut all: Vec<String> = self
             .positional_issues
             .iter()
             .chain(self.issues.iter())
             .map(|r| crate::project::naming::key_from_input(r))
+            .collect::<crate::error::Result<Vec<_>>>()?
+            .into_iter()
             .filter(|k| !k.is_empty())
             .collect();
         all.sort();
         all.dedup();
-        all
+        Ok(all)
     }
 }
 

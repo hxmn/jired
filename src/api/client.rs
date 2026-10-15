@@ -144,6 +144,17 @@ pub trait JiraApi: Send + Sync {
     /// to change. Returns the sprint as the server now holds it.
     async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint>;
 
+    /// One project by key — for its id, which creating a version needs.
+    async fn project(&self, key: &str) -> Result<Project>;
+    /// Every version a project has, released and archived ones included.
+    async fn versions(&self, project: &str) -> Result<Vec<Version>>;
+    /// One version by id, as the server holds it now.
+    async fn version(&self, id: &str) -> Result<Version>;
+    async fn create_version(&self, input: &VersionInput) -> Result<Version>;
+    /// Change a version that exists. A merge, like [`JiraApi::update_sprint`]:
+    /// what the update does not name is what the version keeps.
+    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version>;
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage>;
     async fn issue(&self, key: &str) -> Result<RemoteIssue>;
     async fn changelog(&self, key: &str) -> Result<Vec<ChangelogEntry>>;

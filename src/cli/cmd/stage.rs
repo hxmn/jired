@@ -39,7 +39,7 @@ pub fn stage(
     let mut staged = Vec::new();
     let mut failed = 0;
     for issue in issues {
-        let key = crate::project::naming::key_from_input(issue);
+        let key = crate::project::naming::key_from_input(issue)?;
         let mut changed = false;
         let edited = edit_issue(ctx, &key, |doc| {
             changed = edit(doc)?;

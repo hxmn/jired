@@ -52,7 +52,7 @@ pub struct AttachmentsListArgs {
 pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
-    let key = crate::project::naming::key_from_input(&args.issue);
+    let key = crate::project::naming::key_from_input(&args.issue)?;
 
     let engine = Engine::open(&mut ctx)?;
     let max_upload = ctx
@@ -125,7 +125,7 @@ fn list(g: &GlobalArgs, args: &AttachmentsListArgs, out: Out) -> Result<ExitCode
         .issues
         .iter()
         .map(|k| crate::project::naming::key_from_input(k))
-        .collect();
+        .collect::<crate::error::Result<_>>()?;
 
     let mut rows = Vec::new();
     for row in engine.state.issues()? {
@@ -170,7 +170,7 @@ fn pull(g: &GlobalArgs, args: &AttachmentsPullArgs, out: Out) -> Result<ExitCode
         .issues
         .iter()
         .map(|k| crate::project::naming::key_from_input(k))
-        .collect();
+        .collect::<crate::error::Result<_>>()?;
     // No ceiling by default. `attachments.auto_download_max` governs what a
     // *pull* grabs eagerly; asking for attachments by name is an explicit
     // request, and silently skipping the big ones is the opposite of the answer.

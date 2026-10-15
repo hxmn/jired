@@ -38,7 +38,7 @@ pub struct ParentArgs {
 
 pub fn run(g: &GlobalArgs, args: &ParentArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let to = crate::project::naming::key_from_input(&args.to);
+    let to = crate::project::naming::key_from_input(&args.to)?;
     if !crate::doc::is_issue_key(&to) {
         return Err(
             JiredError::usage(format!("`{}` is not an issue key", args.to))

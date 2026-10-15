@@ -1,0 +1,28 @@
+[
+  {
+    "id": "11300",
+    "name": "2026.07",
+    "projectId": 10200,
+    "released": true,
+    "archived": false,
+    "startDate": "2026-07-01",
+    "releaseDate": "2026-07-31"
+  },
+  {
+    "id": "11301",
+    "name": "2026.08",
+    "projectId": 10200,
+    "description": "August maintenance window",
+    "released": false,
+    "archived": false,
+    "startDate": "2026-08-01",
+    "releaseDate": "2026-08-31"
+  },
+  {
+    "id": "11302",
+    "name": "2026.09",
+    "projectId": 10200,
+    "released": false,
+    "archived": false
+  }
+]

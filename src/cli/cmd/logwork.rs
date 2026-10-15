@@ -72,7 +72,7 @@ pub fn run(g: &GlobalArgs, args: &LogworkArgs, out: Out) -> Result<ExitCode> {
     }
 
     let started = booking.started.clone();
-    let key = crate::project::naming::key_from_input(&booking.issue);
+    let key = crate::project::naming::key_from_input(&booking.issue)?;
 
     let file = edit_issue(&mut ctx, &key, |doc| {
         doc.worklogs.push(WorklogEntry {
