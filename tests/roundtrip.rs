@@ -318,3 +318,34 @@ fn an_edited_region_is_detected_as_edited() {
         vec![raw[0].id.clone()],
     );
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(300))]
+
+    /// Whatever Markdown rich text renders to has to survive the issue file
+    /// around it: written into the description and a comment, the file written
+    /// and read back, the text must come back as it went in. Headings are the
+    /// hazard — the file's own sections are `## ` headings, and a description's
+    /// `h2.` used to be taken for one and moved out of it on every rewrite.
+    #[test]
+    fn rich_text_survives_the_issue_file_around_it(doc in document()) {
+        let md = markdown::render(&doc, &RawStore::new()).trim().to_string();
+        let mut issue = jired::doc::IssueDoc::parse(
+            "---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n",
+        )
+        .unwrap();
+        issue.description = md.clone();
+        issue.comments.push(jired::doc::CommentBlock {
+            id: jired::doc::CommentId::Existing("1".into()),
+            author: "A".into(),
+            timestamp: "t".into(),
+            note: String::new(),
+            body: md.clone(),
+        });
+        let file = issue.render().unwrap();
+        let back = jired::doc::IssueDoc::parse(&file).unwrap();
+        prop_assert_eq!(&back.description, &md, "\n--- file ---\n{}", file);
+        prop_assert_eq!(&back.comments[0].body, &md, "\n--- file ---\n{}", file);
+        prop_assert!(back.extra_sections.is_empty(), "\n--- file ---\n{}", file);
+    }
+}

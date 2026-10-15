@@ -127,6 +127,7 @@ impl IssueDoc {
         let mut current: Option<(String, Vec<&str>)> = None;
         let mut preamble: Vec<&str> = Vec::new();
 
+        let mut tracker = Sections::default();
         for line in ScanLines::new(&body) {
             match line {
                 Scanned::Heading { level: 1, text, .. }
@@ -134,7 +135,7 @@ impl IssueDoc {
                 {
                     heading = text.to_string();
                 }
-                Scanned::Heading { level: 2, text, .. } => {
+                Scanned::Heading { level, text, .. } if tracker.opens(level, text) => {
                     if let Some((name, lines)) = current.take() {
                         sections.push((name, lines.join("\n")));
                     }
@@ -297,12 +298,88 @@ pub fn section_headings(text: &str) -> Vec<String> {
     let Ok((_, body)) = split_frontmatter(text) else {
         return Vec::new();
     };
+    let mut tracker = Sections::default();
     ScanLines::new(&body)
         .filter_map(|line| match line {
-            Scanned::Heading { level: 2, text, .. } => Some(text.to_string()),
+            Scanned::Heading { level, text, .. } if tracker.opens(level, text) => {
+                Some(text.to_string())
+            }
             _ => None,
         })
         .collect()
+}
+
+/// Which `## ` headings in a body open a section of the file, and which are
+/// content of the section they sit in.
+///
+/// The file's sections are `## ` headings, and so are the headings a
+/// description, a comment or a worklog brings from Jira: an `h2.` renders as
+/// `## Задача`. Reading every one as a section ended the description at its
+/// first heading, and a rewrite then moved the rest below `## Attachments` —
+/// and a push sent the truncated description back. So inside the three
+/// sections that hold rich text, only the name of one of jired's own sections
+/// ends it; anywhere else, any `## ` heading opens a section, which is how a
+/// section someone added by hand is kept.
+///
+/// `## Comments` and `## Worklogs` count as holding text only once their first
+/// entry has been seen. Before that there is no body for a heading to belong
+/// to, and a hand-added section there would otherwise be swallowed and lost.
+#[derive(Default)]
+struct Sections {
+    current: Option<String>,
+    in_entry: bool,
+}
+
+impl Sections {
+    /// Feed one heading; says whether it opens a section.
+    fn opens(&mut self, level: u8, text: &str) -> bool {
+        let current = self.current.as_deref();
+        if level == 3 && matches!(current, Some(SECTION_COMMENTS | SECTION_WORKLOGS)) {
+            self.in_entry |= is_entry_heading(text);
+            return false;
+        }
+        if level != 2 {
+            return false;
+        }
+        let holds_text = match current {
+            Some(SECTION_DESCRIPTION) => true,
+            Some(SECTION_COMMENTS | SECTION_WORKLOGS) => self.in_entry,
+            _ => false,
+        };
+        if holds_text && !is_file_section(text) {
+            return false;
+        }
+        self.current = Some(text.to_string());
+        self.in_entry = false;
+        true
+    }
+}
+
+/// The sections jired renders, by name.
+fn is_file_section(name: &str) -> bool {
+    matches!(
+        name,
+        SECTION_DESCRIPTION
+            | SECTION_CHECKLIST
+            | SECTION_CHILDREN
+            | SECTION_COMMENTS
+            | SECTION_WORKLOGS
+            | SECTION_ATTACHMENTS
+    )
+}
+
+/// A comment's or a worklog's own heading — `### [c-10812] …`, `### [new]` —
+/// as opposed to a heading inside its body. Every one jired writes, and every
+/// one a person is told to write, starts with the bracketed marker.
+///
+/// A heading that opens with a link — `### [the spec](https://…)` — starts with
+/// a bracket too, and is body.
+fn is_entry_heading(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with('[')
+        && text
+            .find(']')
+            .is_some_and(|end| !text[end + 1..].starts_with('('))
 }
 
 /// `[marker]` headings that sit outside the two sections that own them, and
@@ -318,19 +395,19 @@ pub fn misplaced_comment_headings(text: &str) -> Vec<String> {
     let Ok((_, body)) = split_frontmatter(text) else {
         return Vec::new();
     };
-    let mut section = String::new();
+    let mut tracker = Sections::default();
     let mut out = Vec::new();
     for line in ScanLines::new(&body) {
-        match line {
-            Scanned::Heading { level: 2, text, .. } => section = text.to_string(),
-            Scanned::Heading { level: 3, text, .. }
-                if section != SECTION_COMMENTS
-                    && section != SECTION_WORKLOGS
-                    && text.trim_start().starts_with('[') =>
+        if let Scanned::Heading { level, text, .. } = line {
+            let section = tracker.current.clone().unwrap_or_default();
+            tracker.opens(level, text);
+            if level == 3
+                && section != SECTION_COMMENTS
+                && section != SECTION_WORKLOGS
+                && is_entry_heading(text)
             {
                 out.push(format!("### {text}"));
             }
-            _ => {}
         }
     }
     out
@@ -583,7 +660,13 @@ fn parse_comments(content: &str) -> Result<Vec<CommentBlock>> {
 
     for line in ScanLines::new(content) {
         match line {
-            Scanned::Heading { level: 3, text, .. } => {
+            // A heading inside an entry's body is body, unless it carries an
+            // entry's marker. Before the first entry there is no body to put
+            // it in, and the heading is read as an entry so a missing marker
+            // is reported rather than dropped.
+            Scanned::Heading { level: 3, text, .. }
+                if current.is_none() || is_entry_heading(text) =>
+            {
                 if let Some(mut c) = current.take() {
                     c.body = body.join("\n").trim().to_string();
                     out.push(c);
@@ -672,7 +755,13 @@ fn parse_worklogs(content: &str) -> Result<Vec<WorklogEntry>> {
 
     for line in ScanLines::new(content) {
         match line {
-            Scanned::Heading { level: 3, text, .. } => {
+            // A heading inside an entry's body is body, unless it carries an
+            // entry's marker. Before the first entry there is no body to put
+            // it in, and the heading is read as an entry so a missing marker
+            // is reported rather than dropped.
+            Scanned::Heading { level: 3, text, .. }
+                if current.is_none() || is_entry_heading(text) =>
+            {
                 if let Some(mut w) = current.take() {
                     w.body = body.join("\n").trim().to_string();
                     out.push(w);
@@ -1055,13 +1144,56 @@ mod tests {
         assert_eq!(section_headings(&s), vec![SECTION_CHECKLIST]);
     }
 
+    /// A section someone adds by hand where the file has no text of its own —
+    /// after `## Attachments`, where jired keeps them — is kept as a section.
     #[test]
     fn unknown_sections_are_preserved() {
         let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
-        s.push_str("## Description\n\nd\n\n## Notes\n\nkeep me\n");
+        s.push_str("## Description\n\nd\n\n## Attachments\n\n## Notes\n\nkeep me\n");
         let doc = IssueDoc::parse(&s).unwrap();
         assert_eq!(doc.extra_sections, vec![("Notes".into(), "keep me".into())]);
+        assert_eq!(doc.description, "d");
         assert!(doc.render().unwrap().contains("keep me"));
+
+        // Before a comments section's first entry there is no body to put a
+        // heading in, so it is a section there too, not swallowed.
+        let s = s.replace("## Attachments\n\n", "## Comments\n\n");
+        let doc = IssueDoc::parse(&s).unwrap();
+        assert_eq!(doc.extra_sections, vec![("Notes".into(), "keep me".into())]);
+    }
+
+    /// An `h2.` in a description, a comment or a worklog renders as `## `, and
+    /// is part of that text — not a section of the file. Reading it as one cut
+    /// the description short and moved the rest below `## Attachments`.
+    #[test]
+    fn headings_inside_rich_text_stay_in_it() {
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Description\n\n## Задача\n\ndo it\n\n# Notes\n\nn\n\n");
+        s.push_str("## Checklist\n\n## Comments\n\n### [c-1] A — t\n\nfirst\n\n## Log\n\n");
+        s.push_str("### Next\n\nmore\n\n### [new]\n\nmine\n\n");
+        s.push_str(
+            "## Worklogs\n\n### [w-2] 1h — A — 2026-08-15T09:00:00Z\n\n## Why\n\nbecause\n\n",
+        );
+        s.push_str("## Attachments\n");
+        let doc = IssueDoc::parse(&s).unwrap();
+        assert_eq!(doc.description, "## Задача\n\ndo it\n\n# Notes\n\nn");
+        assert_eq!(doc.comments.len(), 2);
+        assert_eq!(doc.comments[0].body, "first\n\n## Log\n\n### Next\n\nmore");
+        assert_eq!(doc.comments[1].body, "mine");
+        assert_eq!(doc.worklogs[0].body, "## Why\n\nbecause");
+        assert!(doc.extra_sections.is_empty());
+        // And it reads back the same after a rewrite.
+        assert_eq!(IssueDoc::parse(&doc.render().unwrap()).unwrap(), doc);
+        assert_eq!(
+            section_headings(&s),
+            [
+                "Description",
+                "Checklist",
+                "Comments",
+                "Worklogs",
+                "Attachments"
+            ]
+        );
     }
 
     #[test]

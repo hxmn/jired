@@ -523,7 +523,9 @@ pub fn render() -> String {
         "YAML frontmatter, then fixed sections in this order: `# <summary>`, \
          `## Description`, `## Checklist`, `## Children`, `## Comments`, \
          `## Worklogs`, `## Attachments`. Keep the section order and heading \
-         text intact.\n\n",
+         text intact. A description, comment or worklog can hold headings of its \
+         own — Jira's `h2.` is a `## ` here — and they are part of that text: \
+         inside one, only those section names end it.\n\n",
     );
     // Rendered from the same constants the parser enforces. A hand-copied list
     // silently becomes a lie the first time a field is added, and an agent that

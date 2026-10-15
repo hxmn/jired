@@ -1574,6 +1574,47 @@ fn unknown_versions(
     }))
 }
 
+/// Refuse a file that an earlier jired cut a description or a comment short in.
+///
+/// Before the file reader knew a description's own `## ` headings from the
+/// file's sections, every command that rewrote a file to stage a field moved
+/// them out: the text from the first heading on went below `## Attachments` as
+/// sections of their own, leaving the description cut short — empty, when it
+/// opened with a heading — and a push then sent that. The reader is fixed, but
+/// a file it already rewrote still says so, and pushing it would empty the
+/// description in Jira. The sign is a section of the file named after a `## `
+/// heading the snapshot's rich text has.
+fn refuse_displaced_headings(key: &str, base: &IssueDoc, working: &IssueDoc) -> Result<()> {
+    let bodies = std::iter::once(base.description.as_str())
+        .chain(base.comments.iter().map(|c| c.body.as_str()))
+        .chain(base.worklogs.iter().map(|w| w.body.as_str()));
+    let headings: std::collections::BTreeSet<&str> = bodies
+        .flat_map(str::lines)
+        .filter_map(|line| line.strip_prefix("## "))
+        .map(str::trim)
+        .collect();
+    let displaced: Vec<&str> = working
+        .extra_sections
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| headings.contains(name))
+        .collect();
+    let Some(first) = displaced.first() else {
+        return Ok(());
+    };
+    Err(JiredError::usage(format!(
+        "{key}: `## {first}` belongs inside the description or a comment, but the file \
+         has it as a section of its own — an earlier jired moved it there when it \
+         rewrote the file, and pushing would cut that text short in Jira"
+    ))
+    .with_detail("issue", key.to_string())
+    .with_detail("sections", json!(displaced))
+    .with_hint(format!(
+        "`jired reset {key}` puts the file back as the server has it; then stage the \
+         change again"
+    )))
+}
+
 /// The project an issue belongs to: the one its snapshot names, else the one its
 /// key starts with.
 fn project_of(key: &str, base_raw: &Value) -> String {
@@ -1885,6 +1926,8 @@ fn plan(
 
     let bf = &base.frontmatter;
     let wf = &working.frontmatter;
+
+    refuse_displaced_headings(&bf.key, base, working)?;
 
     let project = project_of(&bf.key, base_raw);
     for (field, before, after) in [

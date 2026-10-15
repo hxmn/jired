@@ -234,10 +234,16 @@ it under `custom:` as well is two names for one value.
 
 ### Sections
 
-The order is fixed — `# <summary>`, `## Description`, `## Children`,
-`## Checklist`, `## Comments`, `## Attachments` — because both the parser and the
-next reader locate content by heading. Sections you invent are kept and re-rendered after the
-known ones.
+The order is fixed — `# <summary>`, `## Description`, `## Checklist`,
+`## Children`, `## Comments`, `## Worklogs`, `## Attachments` — because both the
+parser and the next reader locate content by heading. Sections you invent are kept
+and re-rendered after the known ones.
+
+A description, a comment or a worklog note can carry headings of its own — Jira's
+`h2.` is a `## ` here — and they belong to that text, not to the file: under
+`## Description`, and inside a comment or a worklog, only one of the section names
+above ends it. So a `## Notes` you add there is part of the description and goes
+to Jira with it; one you add after `## Attachments` stays yours.
 
 **Comments.** An existing one is `### [c-10812] Jane D — 2026-08-15T10:32:00Z`;
 edit the body under it to update it. To add one, append a section headed

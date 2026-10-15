@@ -21,9 +21,10 @@
 //! marker placement and list numbering stay under our control and stay
 //! byte-stable across comrak upgrades.
 //!
-//! Heading levels are written verbatim here; the +2 demotion that keeps
-//! issue-body headings under the file's `##` skeleton is applied by the
-//! projector, not by this module.
+//! Heading levels are written verbatim, here and in the issue file. The file
+//! reader is what keeps a description's `## ` apart from the file's own `## `
+//! sections — see `crate::doc` — rather than a demotion, which could not move
+//! h5 and h6 two levels down without folding them into one.
 //!
 //! A handful of documents cannot survive the trip unchanged because Markdown
 //! itself cannot tell the two forms apart. These normalise instead, always in

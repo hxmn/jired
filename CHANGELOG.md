@@ -8,6 +8,41 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.18.1] — 2026-10-15
+
+### Fixed
+
+- **Staging a field no longer cuts a description short at its first heading.**
+  Jira's `h2.` is a `## ` in the file, and so are the file's own sections; the
+  reader took the one for the other. A description that opened with a heading
+  read as empty, the text from its first heading on was moved below
+  `## Attachments` by any command that rewrites a file to stage a field — `set`,
+  `transition`, `assign`, `label`, `sprint add`, `release create --issues` — and
+  the push planned an `update_description` that would have emptied it in Jira.
+  A comment or a worklog with a `## ` heading was cut short the same way, and
+  one with an `h3.` stopped the file parsing at all. Inside the description,
+  a comment or a worklog, only one of jired's own section names now ends the
+  text, and staging a frontmatter field leaves the body of a file jired wrote
+  byte for byte as it was.
+- **A file an earlier rewrite already damaged is refused, not pushed.** Its
+  description's headings are still sitting below `## Attachments` as sections
+  of their own. Push now recognises a section named after a heading the
+  issue's description, comments or worklogs have on the server, and refuses
+  that issue at plan time — exit 2, in `--dry-run` — with `jired reset KEY` as
+  the way back. Run `jired push --dry-run` to find any.
+- **A comment with Windows line endings in a code block is no longer planned
+  as an edit.** The `\r` survived into the snapshot's rendering and not into
+  the file read back, so once the issue was staged for anything else the
+  untouched comment compared as edited. Rich text is written with `\n` alone.
+
+### Changed
+
+- **A `## ` heading written under `## Description` is part of the
+  description.** It used to become a section of its own, kept locally and
+  moved below `## Attachments` on the next rewrite; it now goes to Jira with
+  the description, which is what its place in the file says. A section added
+  after `## Attachments` is still yours alone.
+
 ## [0.18.0] — 2026-10-15
 
 ### Breaking

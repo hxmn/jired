@@ -95,7 +95,7 @@ custom-field schema) has been observed yet.
 - [x] `JiredAst` node model (all bidirectional node types + `Raw(id)`)
 - [x] ADF parser → JiredAst; unknown/lossy nodes captured into `raw_block` with approx rendering
 - [x] Markdown renderer incl. `<!--jired:raw:ID-->` markers, mentions `@[Name](id)`, issue-key links
-- [ ] Heading demotion (+2) so issue-body headings sit under the file's `##` skeleton
+- [x] ~~Heading demotion (+2)~~ — replaced: issue-body headings keep their levels, and the file reader tells them from the `##` skeleton by section name (0.18.1)
 - [ ] Snapshot tests (insta) over an ADF corpus: panels, media, mentions, tables, task lists, code blocks, expands
 - **Done when:** every corpus document renders deterministically and every lossy node has a raw_block row.
 

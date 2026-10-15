@@ -9158,3 +9158,108 @@ fn a_named_issue_the_workspace_does_not_have_fails_the_push() {
     let out = ws.json_code(&["push", "--dry-run", "PROJ-9999"], 2);
     assert_eq!(out["results"].as_array().unwrap().len(), 1, "{out}");
 }
+
+// ---------------------------------------------------------------------------
+// headings and line endings inside rich text
+// ---------------------------------------------------------------------------
+
+/// Staging a frontmatter field must leave the body alone. A description whose
+/// own headings are `h2.` renders them as `## `, which the file reader took for
+/// sections of the file: the description ended at the first one, the rest was
+/// moved below `## Attachments` on the rewrite, and the push planned an
+/// `update_description` that would have emptied it in Jira. A comment with a
+/// heading of its own was the same, and an `h3.` in one stopped the file
+/// parsing at all. And a code block with CRLF endings lost its `\r` when the
+/// file was read back, so the untouched comment was planned as an edit.
+#[test]
+fn staging_a_field_leaves_headings_and_line_endings_in_rich_text_alone() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.mutate_remote("DC-77", |issue| {
+        issue["fields"]["description"] = Value::from(
+            "h2. Задача\n\nRotate the bind account.\n\nh2. Критерии\n\n* the new secret works\n\nh1. Notes\n\nnone",
+        );
+        issue["fields"]["comment"]["comments"][0]["body"] = Value::from(
+            "Done.\n\nh2. Log\n\n{code}\r\nbind: ok\r\nsearch: ok\r\n{code}\n\nh3. Next\n\nnothing",
+        );
+    });
+    ws.init();
+    ws.json(&["pull"]);
+    let file = ws.issue_file();
+    let before = ws.read(file);
+    let body_of = |text: &str| text.split_once("\n---\n").unwrap().1.to_string();
+
+    ws.json(&[
+        "set",
+        "--field",
+        "fix_versions",
+        "--value",
+        "2026.09",
+        "DC-77",
+    ]);
+    let after = ws.read(file);
+    assert_eq!(
+        body_of(&before),
+        body_of(&after),
+        "only the frontmatter may change"
+    );
+
+    let diff = ws.json(&["diff", "DC-77"]);
+    let fields: Vec<&str> = diff["issues"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["field"].as_str().unwrap())
+        .collect();
+    assert_eq!(fields, ["fix_versions"], "{diff}");
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    let kinds: Vec<&str> = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["update_fields"], "{dry}");
+}
+
+/// A file an earlier jired already rewrote has its description's headings below
+/// `## Attachments` and the description cut short. The reader is fixed, but the
+/// file still says so: pushing it is refused at plan time, and `reset` is the
+/// way back.
+#[test]
+fn a_description_an_earlier_rewrite_cut_short_is_not_pushed() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.mutate_remote("DC-77", |issue| {
+        issue["fields"]["description"] =
+            Value::from("h2. Задача\n\nRotate the bind account.\n\nh2. Критерии\n\n* it works");
+    });
+    ws.init();
+    ws.json(&["pull"]);
+    let file = ws.issue_file();
+    let clean = ws.read(file);
+
+    // What the old reader wrote back: the description emptied, and its
+    // sections moved to the end of the file.
+    let (head, rest) = clean.split_once("## Description\n\n").unwrap();
+    let (description, rest) = rest.split_once("## Checklist").unwrap();
+    let damaged = format!("{head}## Description\n\n## Checklist{rest}\n{description}")
+        .replace("fix_versions:\n- 2026.08", "fix_versions:\n- 2026.09");
+    ws.write(file, &damaged);
+
+    let dry = ws.json_code(&["push", "--dry-run"], 2);
+    let result = &dry["results"][0];
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("`## Задача` belongs inside"),
+        "{dry}"
+    );
+    assert!(result["hint"]
+        .as_str()
+        .unwrap()
+        .contains("jired reset DC-77"));
+
+    ws.json(&["reset", "DC-77", "--yes"]);
+    assert_eq!(ws.read(file), clean);
+}

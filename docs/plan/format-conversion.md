@@ -65,15 +65,21 @@ Fixed by rotating the IdP cert — see attached HAR.
 ````
 
 Fixed section order, parseable by heading: `# summary` → `## Description` →
-`## Checklist` → `## Children` → `## Comments` → `## Attachments`. Frontmatter
-`summary` is the source of truth over the `#` heading (D6).
+`## Checklist` → `## Children` → `## Comments` → `## Worklogs` → `## Attachments`.
+Frontmatter `summary` is the source of truth over the `#` heading (D6).
+
+Rich text keeps its own headings at their own levels — Jira's `h2.` is `## ` in
+the file too. Inside `## Description`, and inside a comment or a worklog body,
+only one of the section names above ends the text; anywhere else a `## ` heading
+opens a section. The +2 demotion this plan first called for was never built, and
+is not wanted: it cannot represent h5 and h6, and without it a file reads as the
+issue does.
 
 ## Conversion pipeline
 
 `ADF ⇄ JiredAst ⇄ Markdown ⇄ JiredAst ⇄ wiki` — one internal AST (D25).
 
-Bidirectionally supported: paragraphs; headings 1–6 (Jira headings demoted +2 under
-the file skeleton, so Jira h1 renders `###`); bold/italic/strike/code/links;
+Bidirectionally supported: paragraphs; headings 1–6, at their own levels; bold/italic/strike/code/links;
 bullet/ordered lists; task lists (ADF `taskList`; wiki has none → lossy); code
 blocks with language; blockquotes; GFM tables; rules; mentions `@[Name](id)`
 (accountId on Cloud, username on DC); emoji as unicode; bare issue keys ⇄ Jira

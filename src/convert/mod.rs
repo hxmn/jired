@@ -34,7 +34,13 @@ pub fn to_markdown(rich: &RichText) -> Converted {
         RichText::Empty => return Converted::default(),
     };
     Converted {
-        markdown: markdown::render(&doc, &store),
+        // A file is read back a line at a time, and `\r\n` comes back as `\n`:
+        // a code block pasted from Windows into Jira kept its `\r` on the way
+        // into the snapshot's rendering and lost it on the way out of the file,
+        // so a comment nobody had touched compared as edited and was planned as
+        // one. Line endings are not content worth an edit to someone else's
+        // comment; they are written the one way the file can keep.
+        markdown: markdown::render(&doc, &store).replace("\r\n", "\n"),
         raw: store.into_blocks(),
     }
 }
