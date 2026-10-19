@@ -274,6 +274,10 @@ status the instance configured itself, a syntax this plugin version spells
 differently — the edit is refused out loud rather than sent with the rest of the
 field dropped. The plugin's fields are found by name; `checklist.field` names
 the writable one where they are called something jired does not recognise.
+On Data Center the list goes to Smart Checklist's own issue property rather than
+the field, so it does not matter whether an administrator put the field on the
+issue type's edit screen; a write the plugin does not take up is reported as a
+failure with the edit left in the file. On Cloud it is the field.
 
 ### Lossy regions and conflicts
 

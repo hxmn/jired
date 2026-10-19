@@ -8,6 +8,42 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.19.0] — 2026-10-19
+
+### Breaking
+
+- **On Data Center a checklist edit is an `update_checklist` op, not part of
+  `update_fields`.** It is written to Smart Checklist's issue property,
+  `PUT /issue/{key}/properties/com.railsware.SmartChecklist.checklist`, instead
+  of the `Checklists` text field. A script that looked for the checklist inside
+  an `update_fields` request body finds it as the body of its own op. Cloud is
+  unchanged.
+- **A follow-up to a create that fails now fails the push.** The issue's result
+  is `"ok": false` with `new_key` set, it counts in `summary.failed`, and the
+  exit code is the failure's — where it used to be `ok: true` and exit 0.
+
+### Fixed
+
+- **A checklist can be written on Data Center whatever the edit screens carry.**
+  `PUT /issue` takes a custom field only where the issue type's edit screen has
+  it, and an instance whose `Checklists` field was on no screen refused every
+  checklist — at plan time with exit 2, or with a 400 from the server. The
+  plugin's issue property is not a field, so no screen governs it; it is the
+  route the vendor documents for Data Center, and the plugin keeps it in sync
+  with its own storage. The re-read checks the plugin took it up: a property
+  nothing reads fails the op at exit 10 with the edit still in the file.
+- **A new issue keeps the part of its file a failed follow-up did not apply.**
+  A checklist the server refused after the create came back as an empty
+  `## Checklist`, base advanced over it, `status` called the issue clean and the
+  text was gone. The file is now renamed to the real key with that part — the
+  checklist, the sprint, the status or the links — still in it. `status` reports
+  it as an edit, `pending_ops` carries the op under the real key, and
+  `push --resume` sends it as an ordinary update.
+- **`transition --fields` and `boards --project` are accepted.** Each command's
+  own `--field` and `--for-project` replaced the global flag that shares its
+  internal name, so both commands refused the global one while every other
+  command took it.
+
 ## [0.18.2] — 2026-10-19
 
 ### Fixed

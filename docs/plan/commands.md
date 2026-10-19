@@ -299,9 +299,24 @@ which is what zsh hands over for an unsplit `$keys` — is refused on every comm
 that takes an issue, naming the keys: it used to read as a file name, a key and
 then a summary, and push the first issue alone.
 
-`## Checklist` is a field update like any other — the checklist plugin's text
-field, carried in the same `PUT /issue` as the rest, and a follow-up after a
-create because a plugin's field is rarely on the create screen. What goes out is
+`## Checklist` goes out by a different route on each deployment. On Cloud it is
+a field update like any other — the checklist plugin's text field, carried in
+the same `PUT /issue` as the rest. On Data Center it is an `update_checklist`
+op of its own, `PUT /issue/{key}/properties/com.railsware.SmartChecklist.checklist`
+with the text as the property's whole JSON document. The text field is an
+ordinary custom field, which `PUT /issue` takes only where the issue type's
+edit screen carries it, and Smart Checklist does not need it there: an instance
+with the field on no screen at all refused every checklist with a 400, and the
+screen check refused it at plan time. The property is not a field, so no screen
+governs it. It is the route the vendor documents for Data Center automation,
+and since 5.0, when the plugin moved its primary storage into the database, one
+of the storages it keeps in sync; Cloud's Forge app no longer reads it, which is
+why Cloud stays on the field. A property takes any document whether or not
+anything reads it — another checklist app behind the same field name, the
+plugin switched off for the project — so the re-read is the proof: a checklist
+that does not read back as what was sent fails the op at exit 10, with the edit
+left in the file. On a `NEW-*` issue either route is a follow-up after the
+create, because a plugin's field is rarely on the create screen. What goes out is
 the plugin's own syntax rebuilt from the section: `# ` for a `### ` group, `-`
 `~` `+` `x` for the four statuses the checkbox and its backticked name spell,
 and a note on the line below its item. The derived fields are never written: the
@@ -320,6 +335,22 @@ pair is the writable text one (`string`) and which the object (`any`);
 `checklist.field` names it outright where an instance calls them something else.
 An instance that exposes no text field keeps the section read-only, and says so
 when it is edited.
+
+What a `NEW-*` issue's create call cannot carry — the checklist, the sprint, a
+status the workflow does not start in, its links — is a follow-up op, planned
+before the create so `--dry-run` lists it, and sent once there is a key to aim
+it at. A follow-up that fails, or that the re-read shows was not applied, does
+not undo the create; it makes the result `"ok": false` with `new_key` set and
+the failure's `error_kind`, counted in `summary.failed`. The file is renamed to
+the real key and rebuilt from the server, except for the part the failed
+follow-up owns, which stays as the file said it. Base is the server's rendering,
+so `status` reports that part as an edit to an issue that exists, `pending_ops`
+carries the op under the real key, and `push --resume` (or a plain `push`)
+re-plans it as an ordinary update. The issue is not sent again in the push that
+created it. No follow-up is checked against an edit screen: the edit screen is
+described per issue, and before the create there is none to ask about. None
+needs to be — Data Center's only follow-up write is the checklist property, and
+Cloud's screens are not checked.
 
 A sub-task's `parent:` is an operation of its own on Data Center, not a field
 update: `PUT /issue` accepts the payload, answers success and ignores it, and

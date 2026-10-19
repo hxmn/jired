@@ -640,7 +640,10 @@ pub fn render() -> String {
          writable — the four statuses its markers spell (`TO DO`, `IN PROGRESS`, \
          `DONE`, `SKIPPED`), groups, notes. Anything else in the field (a mandatory \
          item, a status the instance configured itself) makes push refuse the whole \
-         section and say so, rather than send it with that part dropped.\n\n",
+         section and say so, rather than send it with that part dropped. On Data \
+         Center the list is written to Smart Checklist's issue property \
+         (`update_checklist` in the plan), which no edit screen governs; on Cloud \
+         it is the plugin's text field, in the same `PUT /issue` as the rest.\n\n",
     );
 
     s.push_str("## New issues\n\n");
@@ -707,7 +710,11 @@ pub fn render() -> String {
          rewrites the file. One that is not is `\"status\": \"failed\"` with the \
          request that was sent, the issue is `\"ok\": false`, and base does not \
          advance: nothing is overwritten and the edit is still in the file for \
-         the next `push`.\n\n",
+         the next `push`. A new issue is the same: what follows its create — the \
+         checklist, the sprint, the status, its links — is an operation of its \
+         own, and one that fails leaves the issue `\"ok\": false` with \
+         `new_key` set, the file renamed to the real key with that part still in \
+         it, and the operation in `pending_ops`.\n\n",
     );
     s.push_str(
         "Those operations stay on the queue afterwards, and `jired status` \

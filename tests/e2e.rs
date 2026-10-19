@@ -5441,12 +5441,14 @@ fn a_change_the_server_accepts_and_ignores_fails_the_push() {
     assert_eq!(ws.json(&["status"])["dirty"][0]["key"], "PROJ-142");
 }
 
-/// The same silence can meet a follow-up to a create. There is nothing left to
-/// protect there — the file is being rebuilt around a key it did not have — so
-/// it is reported rather than refused, which is all a create that did happen can
-/// honestly do.
+/// The same silence can meet a follow-up to a create, and the create cannot be
+/// taken back — but the edit can still be kept. Rebuilding the file from the
+/// server alone is how a checklist the plugin refused came back empty with a
+/// success to show for it: base advanced over the edit and `status` called the
+/// issue clean. What did not happen stays in the file, the issue is not `ok`,
+/// and the op waits in the journal like a failed update's.
 #[test]
-fn a_swallowed_follow_up_to_a_create_is_reported_not_hidden() {
+fn a_swallowed_follow_up_to_a_create_fails_the_issue_and_keeps_the_edit() {
     let ws = Ws::new();
     ws.write_fixture(
         "ignored.json",
@@ -5463,8 +5465,18 @@ fn a_swallowed_follow_up_to_a_create_is_reported_not_hidden() {
         "Sprint 43",
     ]);
 
-    let report = ws.json(&["push", "--yes"]);
-    let ops = report["results"][0]["ops"].as_array().unwrap();
+    let report = ws.json_code(&["push", "--yes"], 10);
+    assert_eq!(report["summary"]["ok"], 0, "{report}");
+    assert_eq!(report["summary"]["failed"], 1, "{report}");
+    let result = &report["results"][0];
+    assert_eq!(result["ok"], false, "{report}");
+    assert_eq!(result["error_kind"], "unsupported_server", "{report}");
+    let new_key = result["new_key"].as_str().expect("the issue was created");
+    assert!(
+        result["error"].as_str().unwrap().contains(new_key),
+        "{report}"
+    );
+    let ops = result["ops"].as_array().unwrap();
     assert_eq!(ops[0]["kind"], "create_issue");
     assert_eq!(ops[0]["status"], "done", "{report}");
     assert_eq!(ops[1]["kind"], "move_sprint");
@@ -5473,6 +5485,49 @@ fn a_swallowed_follow_up_to_a_create_is_reported_not_hidden() {
         ops[1]["error"].as_str().unwrap().contains("Sprint 43"),
         "{report}"
     );
+
+    // Renamed to its real key, with the sprint it was not moved into still
+    // written in it — an edit to an issue that exists, which `status` sees.
+    let number = new_key.rsplit('-').next().unwrap();
+    let file = format!("PROJ-{number:0>4}. Audit the SSO config.md");
+    assert!(
+        ws.read(&file).contains("sprint: Sprint 43"),
+        "{}",
+        ws.read(&file)
+    );
+    let status = ws.json(&["status"]);
+    let dirty = status["dirty"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == new_key)
+        .unwrap_or_else(|| panic!("{new_key} is not dirty: {status}"));
+    assert!(
+        dirty["fields"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("sprint")),
+        "{status}"
+    );
+    let pending = status["pending_ops"].as_array().unwrap();
+    assert!(
+        pending
+            .iter()
+            .any(|op| op["issue_key"] == new_key && op["kind"] == "move_sprint"),
+        "{status}"
+    );
+
+    // And `--resume` takes it up as the update it now is, rather than as a
+    // second create.
+    let dry = ws.json(&["push", "--resume", "--dry-run"]);
+    let kinds: Vec<&str> = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(dry["results"][0]["key"], new_key, "{dry}");
+    assert_eq!(kinds, ["move_sprint"], "{dry}");
 }
 
 /// A sprint has no file to stage it in, so `sprint create` is a write that goes
@@ -7360,11 +7415,18 @@ fn a_checklist_edit_is_pushed_as_the_plugins_own_syntax() {
         "{status}"
     );
 
-    // One `PUT /issue`, carrying the text field and nothing derived from it.
+    // One write of the plugin's property, carrying the text and nothing
+    // derived from it — and no `PUT /issue` at all.
     let dry = ws.json(&["push", "--dry-run"]);
-    let body = &dry["results"][0]["ops"][0]["request"]["body"]["fields"];
+    let ops = dry["results"][0]["ops"].as_array().unwrap();
+    assert_eq!(ops.len(), 1, "{dry}");
+    assert_eq!(ops[0]["kind"], "update_checklist", "{dry}");
     assert_eq!(
-        body["customfield_10206"],
+        ops[0]["request"]["path"], "/issue/{key}/properties/com.railsware.SmartChecklist.checklist",
+        "{dry}"
+    );
+    assert_eq!(
+        ops[0]["request"]["body"],
         Value::from(
             "~ Generate the replacement secret\n\
              >> Coordinate the window with @jane\n\
@@ -7375,8 +7437,6 @@ fn a_checklist_edit_is_pushed_as_the_plugins_own_syntax() {
         ),
         "{dry}"
     );
-    assert!(body.get("customfield_10205").is_none(), "{dry}");
-    assert!(body.get("customfield_10207").is_none(), "{dry}");
 
     // And the file settles: what comes back is what was sent, so a second push
     // has nothing left to do.
@@ -7412,7 +7472,7 @@ fn a_checklist_can_be_written_onto_an_issue_that_had_none() {
 
     let dry = ws.json(&["push", "DC-78", "--dry-run"]);
     assert_eq!(
-        dry["results"][0]["ops"][0]["request"]["body"]["fields"]["customfield_10206"],
+        dry["results"][0]["ops"][0]["request"]["body"],
         Value::from("# Analysis\n- Draft the plan\n+ Book the window\n"),
         "{dry}"
     );
@@ -7425,8 +7485,8 @@ fn a_checklist_can_be_written_onto_an_issue_that_had_none() {
         "{after}"
     );
 
-    // And emptying the section empties the checklist: `null` is what the server
-    // itself holds for an issue that has none.
+    // And emptying the section empties the checklist: the property is given
+    // an empty text, which is a checklist with nothing in it.
     ws.write(
         file,
         &after.replace(
@@ -7435,9 +7495,10 @@ fn a_checklist_can_be_written_onto_an_issue_that_had_none() {
         ),
     );
     let dry = ws.json(&["push", "DC-78", "--dry-run"]);
+    assert_eq!(dry["results"][0]["ops"][0]["kind"], "update_checklist");
     assert_eq!(
-        dry["results"][0]["ops"][0]["request"]["body"]["fields"]["customfield_10206"],
-        Value::Null,
+        dry["results"][0]["ops"][0]["request"]["body"],
+        Value::from(""),
         "{dry}"
     );
     ws.json(&["push", "DC-78"]);
@@ -7446,7 +7507,8 @@ fn a_checklist_can_be_written_onto_an_issue_that_had_none() {
 
 /// The round trip the report was about: an issue created from the CLI arrives
 /// with its checklist. The create call cannot carry it — a plugin's field is not
-/// on an instance's create screen — so it is a follow-up, listed in the plan.
+/// on an instance's create screen — so it is a follow-up, listed in the plan,
+/// and on Data Center it is the plugin's property, which no screen governs.
 #[test]
 fn a_new_issue_gets_its_checklist_after_the_create() {
     let ws = Ws::of(Deployment::DataCenter);
@@ -7464,7 +7526,7 @@ fn a_new_issue_gets_its_checklist_after_the_create() {
     let dry = ws.json(&["push", "--dry-run"]);
     let ops = dry["results"][0]["ops"].as_array().unwrap();
     let kinds: Vec<&str> = ops.iter().map(|o| o["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds, ["create_issue", "update_fields"], "{dry}");
+    assert_eq!(kinds, ["create_issue", "update_checklist"], "{dry}");
     assert!(
         ops[0]["request"]["body"]["fields"]
             .get("customfield_10206")
@@ -7472,7 +7534,7 @@ fn a_new_issue_gets_its_checklist_after_the_create() {
         "the create screen is not asked to carry it: {dry}"
     );
     assert_eq!(
-        ops[1]["request"]["body"]["fields"]["customfield_10206"],
+        ops[1]["request"]["body"],
         Value::from("- Draft the plan\n- Review it\n"),
         "{dry}"
     );
@@ -7485,6 +7547,161 @@ fn a_new_issue_gets_its_checklist_after_the_create() {
         section(&created, "## Checklist").trim(),
         "- [ ] Draft the plan\n- [ ] Review it",
         "{created}"
+    );
+}
+
+/// The instance this was reported against has Smart Checklist's text field on
+/// no edit screen at all, so `PUT /issue` refused every checklist with a 400 —
+/// and, once screens were checked, `push` refused it before sending. The
+/// property is not a field, and the screen has no say in it.
+#[test]
+fn a_checklist_is_written_where_no_edit_screen_carries_its_field() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "editmeta-DC-77.json",
+        serde_json::json!({"fields": {
+            "summary": {"name": "Summary", "required": true, "operations": ["set"]},
+            "description": {"name": "Description", "required": false, "operations": ["set"]},
+        }}),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+    let file = Deployment::DataCenter.issue_file();
+    ws.write(
+        file,
+        &ws.read(file).replace(
+            "- [ ] Update the connector config\n",
+            "- [x] Update the connector config\n",
+        ),
+    );
+
+    let dry = ws.json(&["push", "--dry-run"]);
+    assert_eq!(dry["results"][0]["ok"], true, "{dry}");
+    assert_eq!(dry["results"][0]["ops"][0]["kind"], "update_checklist");
+
+    let push = ws.json(&["push"]);
+    assert_eq!(push["summary"]["ok"], 1, "{push}");
+    assert!(
+        ws.read(file).contains("- [x] Update the connector config"),
+        "{}",
+        ws.read(file)
+    );
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// A property takes whatever it is given, read or not — another checklist app
+/// behind the same field name, Smart Checklist switched off for the project. A
+/// write the plugin did not take up is not reported as one it did.
+#[test]
+fn a_checklist_property_nothing_reads_fails_and_keeps_the_edit() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "ignored.json",
+        serde_json::json!(["PUT /issue/DC-77/properties/com.railsware.SmartChecklist.checklist"]),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+    let file = Deployment::DataCenter.issue_file();
+    let edited = ws.read(file).replace(
+        "- [ ] Update the connector config\n",
+        "- [x] Update the connector config\n",
+    );
+    ws.write(file, &edited);
+
+    let push = ws.json_code(&["push"], 10);
+    let result = &push["results"][0];
+    assert_eq!(result["ok"], false, "{push}");
+    assert_eq!(result["ops"][0]["status"], "failed", "{push}");
+    assert!(
+        result["ops"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("com.railsware.SmartChecklist.checklist"),
+        "{push}"
+    );
+    assert_eq!(ws.read(file), edited, "the edit is still in the file");
+}
+
+/// The report's second half. A checklist the server would not take, on an
+/// issue being created: the issue exists, so the create stands — but the
+/// result is a failure, the checklist is still in the renamed file, `status`
+/// sees it, and the op waits in `pending_ops`. It used to be `ok: true` with an
+/// empty `## Checklist` and nothing anywhere to say what had been lost.
+#[test]
+fn a_new_issues_checklist_the_server_refused_stays_in_its_file() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let report = ws.json(&["create", "--summary", "Wire the audit log"]);
+    let file = report["file"].as_str().unwrap().to_string();
+    ws.write(
+        &file,
+        &ws.read(&file).replace(
+            "## Checklist\n",
+            "## Checklist\n\n- [ ] Draft the plan\n- [ ] Review it\n",
+        ),
+    );
+    // The key the fixture will hand out, so the refusal can be scripted for
+    // it: ids count from 90001 in a fresh fixture.
+    ws.write_fixture(
+        "faults.json",
+        serde_json::json!({
+            "PUT /issue/DC-90001/properties/com.railsware.SmartChecklist.checklist": {
+                "kind": "generic",
+                "message": "HTTP 400: Field 'customfield_10206' cannot be set."
+            }
+        }),
+    );
+
+    let push = ws.json_code(&["push"], 1);
+    assert_eq!(push["summary"]["ok"], 0, "{push}");
+    assert_eq!(push["summary"]["failed"], 1, "{push}");
+    let result = &push["results"][0];
+    assert_eq!(result["ok"], false, "{push}");
+    assert_eq!(result["new_key"], "DC-90001", "{push}");
+    assert_eq!(result["ops"][0]["status"], "done", "{push}");
+    assert_eq!(result["ops"][1]["kind"], "update_checklist", "{push}");
+    assert_eq!(result["ops"][1]["status"], "failed", "{push}");
+
+    let created = ws.read("DC-90001. Wire the audit log.md");
+    assert_eq!(
+        section(&created, "## Checklist").trim(),
+        "- [ ] Draft the plan\n- [ ] Review it",
+        "{created}"
+    );
+    let status = ws.json(&["status"]);
+    assert!(
+        status["dirty"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["key"] == "DC-90001"
+                && d["fields"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&Value::from("checklist"))),
+        "{status}"
+    );
+    assert!(
+        status["pending_ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["issue_key"] == "DC-90001" && op["kind"] == "update_checklist"),
+        "{status}"
+    );
+
+    // Once the server takes it, `--resume` finishes the job as an update.
+    ws.write_fixture("faults.json", serde_json::json!({}));
+    let resumed = ws.json(&["push", "--resume"]);
+    assert_eq!(resumed["summary"]["ok"], 1, "{resumed}");
+    assert_eq!(resumed["results"][0]["key"], "DC-90001", "{resumed}");
+    assert_eq!(resumed["results"][0]["ops"][0]["kind"], "update_checklist");
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+    assert!(
+        status["pending_ops"].as_array().unwrap().is_empty(),
+        "{status}"
     );
 }
 

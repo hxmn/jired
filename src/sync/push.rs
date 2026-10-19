@@ -247,6 +247,12 @@ struct Op {
 enum Action {
     UpdateFields(Value),
     UpdateDescription(RichText),
+    /// Replace the checklist through Smart Checklist's issue property — Data
+    /// Center's route, which no edit screen stands in the way of. The text is
+    /// kept so the re-read can be asked whether the plugin took it up.
+    SetChecklist {
+        text: String,
+    },
     Transition {
         to_status: String,
     },
@@ -470,6 +476,12 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         if row.key.starts_with("NEW-") {
             continue;
         }
+        // Created a moment ago, and already reported. A follow-up that failed
+        // left its part in the file, so the issue reads as dirty — and sending
+        // that again here would retry the same failure in the same push.
+        if rekeyed.iter().any(|(_, to)| *to == row.key) {
+            continue;
+        }
         if !wanted.is_empty() && !wanted.contains(&row.key) {
             continue;
         }
@@ -675,7 +687,11 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     // `--resume` still has something to retry. An issue in `results` already
     // tells its own story.
     for op in engine.state.pending_ops()? {
-        if report.results.iter().any(|r| r.key == op.issue_key) {
+        if report
+            .results
+            .iter()
+            .any(|r| r.key == op.issue_key || r.new_key.as_deref() == Some(&op.issue_key))
+        {
             continue;
         }
         report.warnings.push(format!(
@@ -968,6 +984,7 @@ fn create_issue(
     // until the file came back without it.
     let (follow_ups, follow_up_warnings) = follow_ups_after_create(
         &doc,
+        engine.account.deployment,
         &sprints,
         field_map.checklist_text.as_deref(),
         link_types,
@@ -1035,10 +1052,13 @@ fn create_issue(
     engine.state.forget_new_issue_project(temp_key)?;
 
     // The operations the create call could not carry, now that there is a key
-    // to aim them at. One that fails is worth saying out loud and reporting as
-    // a failed op, but not worth failing an issue the server has already
-    // created — and each is reported, so a `--dry-run` plan and what actually
-    // happened line up op for op.
+    // to aim them at. One that fails does not stop the others — the issue
+    // exists either way — and each is reported, so a `--dry-run` plan and what
+    // actually happened line up op for op.
+    //
+    // The kind of each failure, beside its report: the result carries the
+    // first, and the exit code is read off it.
+    let mut failure_kinds: Vec<Option<&'static str>> = vec![None];
     let mut reports = vec![OpReport {
         kind: "create_issue",
         status: "done",
@@ -1048,18 +1068,22 @@ fn create_issue(
     }];
     for f in &follow_ups {
         match perform(client, &new_key, &f.action) {
-            Ok(()) => reports.push(OpReport {
-                kind: f.kind,
-                status: "done",
-                summary: Some(f.summary.clone()),
-                request: None,
-                error: None,
-            }),
+            Ok(()) => {
+                failure_kinds.push(None);
+                reports.push(OpReport {
+                    kind: f.kind,
+                    status: "done",
+                    summary: Some(f.summary.clone()),
+                    request: None,
+                    error: None,
+                })
+            }
             Err(e) => {
                 ctx.out.warn(format!(
                     "{new_key} was created, but {}: {}",
                     f.summary, e.message
                 ));
+                failure_kinds.push(Some(e.kind.as_str()));
                 reports.push(OpReport {
                     kind: f.kind,
                     status: "failed",
@@ -1074,12 +1098,15 @@ fn create_issue(
     let confirmed = crate::api::block_on(client.issue(&new_key))?;
 
     // The same silence a follow-up can meet: a sub-task created into a sprint
-    // gets a 204 from the board and stays wherever its parent is. Unlike an
-    // update there is nothing to protect — the file is being rebuilt around a
-    // key it did not have, and the sprint it comes back with is the truth about
-    // the issue — so this reports rather than refuses, which is all a create
-    // that did happen can honestly do.
-    for (f, report) in follow_ups.iter().zip(reports.iter_mut().skip(1)) {
+    // gets a 204 from the board and stays wherever its parent is, and a
+    // checklist property nothing reads is taken just as quietly. The create
+    // cannot be taken back, but a swallowed follow-up is a failure all the same,
+    // treated below exactly like one the server refused out loud.
+    for ((f, report), kind) in follow_ups
+        .iter()
+        .zip(reports.iter_mut().skip(1))
+        .zip(failure_kinds.iter_mut().skip(1))
+    {
         if report.status != "done" {
             continue;
         }
@@ -1091,21 +1118,110 @@ fn create_issue(
         report.status = "failed";
         report.request = Some(f.request.clone());
         report.error = Some(why);
+        *kind = Some("unsupported_server");
     }
 
+    // The file is rebuilt around the key it now has, from what the server
+    // holds — except for what a failed follow-up did not make true there,
+    // which stays as the file said it. Rebuilt from the server alone, a
+    // checklist the plugin refused came back empty, base advanced over it, and
+    // `status` called the issue clean: the edit was gone with a success to
+    // show for it. Kept, it is an ordinary edit to an issue that exists, which
+    // `status` sees and the next push plans.
+    let failed: Vec<&FollowUp> = follow_ups
+        .iter()
+        .zip(reports.iter().skip(1))
+        .filter(|(_, r)| r.status == "failed")
+        .map(|(f, _)| f)
+        .collect();
     let base_url = engine.base_url().to_string();
-    rewrite_after_push(engine, &confirmed, file, markup, &base_url)?;
+    rewrite_keeping(engine, &confirmed, file, markup, &base_url, |rebuilt| {
+        for f in &failed {
+            keep_unapplied(rebuilt, &doc, &f.action);
+        }
+    })?;
     engine.state.clear_ops(&new_key)?;
 
+    if failed.is_empty() {
+        return Ok(IssueResult {
+            key: temp_key.to_string(),
+            ok: true,
+            new_key: Some(new_key),
+            error: None,
+            error_kind: None,
+            hint: None,
+            ops: reports,
+        });
+    }
+
+    // Journaled under the real key, the way a failed update is: `pending_ops`
+    // lists them and `push --resume` retries them, re-planned from the file.
+    let rows: Vec<(String, String)> = failed
+        .iter()
+        .map(|f| (f.kind.to_string(), f.request.to_string()))
+        .collect();
+    let ids = engine.state.journal_ops(&new_key, &rows)?;
+    let errors = reports.iter().skip(1).filter(|r| r.status == "failed");
+    for (id, report) in ids.iter().zip(errors) {
+        engine
+            .state
+            .mark_op(*id, "failed", report.error.as_deref())?;
+    }
+    let reasons: Vec<String> = reports
+        .iter()
+        .filter(|r| r.status == "failed")
+        .map(|r| {
+            format!(
+                "{}: {}",
+                r.summary.as_deref().unwrap_or(r.kind),
+                r.error.as_deref().unwrap_or("failed")
+            )
+        })
+        .collect();
     Ok(IssueResult {
         key: temp_key.to_string(),
-        ok: true,
-        new_key: Some(new_key),
-        error: None,
-        error_kind: None,
-        hint: None,
+        ok: false,
+        new_key: Some(new_key.clone()),
+        error: Some(format!(
+            "{new_key} was created, but not all of it: {}",
+            reasons.join("; ")
+        )),
+        error_kind: failure_kinds
+            .into_iter()
+            .flatten()
+            .next()
+            .map(str::to_string),
+        hint: Some(format!(
+            "the issue exists, and what did not reach it is still in its file; \
+             fix the cause, then `jired push --resume` (or `jired push {new_key}`)"
+        )),
         ops: reports,
     })
+}
+
+/// Put back into a freshly created issue's file the part of it a failed
+/// follow-up did not make true on the server.
+///
+/// Each follow-up owns one part of the file, so the part is taken whole from
+/// what the file said before the push: a link that did go out is in both, and
+/// only the one that did not comes out as a difference.
+fn keep_unapplied(rebuilt: &mut IssueDoc, original: &IssueDoc, action: &Action) {
+    match action {
+        // A follow-up's field update is only ever the checklist's.
+        Action::SetChecklist { .. } | Action::UpdateFields(_) => {
+            rebuilt.checklist = original.checklist.clone();
+        }
+        Action::MoveSprint { .. } => {
+            rebuilt.frontmatter.sprint = original.frontmatter.sprint.clone();
+        }
+        Action::Transition { .. } => {
+            rebuilt.frontmatter.status = original.frontmatter.status.clone();
+        }
+        Action::CreateLink { .. } => {
+            rebuilt.frontmatter.links = original.frontmatter.links.clone();
+        }
+        _ => {}
+    }
 }
 
 /// Check a worklog's duration before it can cost an API call.
@@ -1396,6 +1512,7 @@ struct FollowUp {
 /// unnoticed until it came back missing.
 fn follow_ups_after_create(
     doc: &IssueDoc,
+    deployment: crate::api::Deployment,
     sprints: &[crate::store::state::SprintRow],
     checklist_field: Option<&str>,
     link_types: &mut LinkTypes<'_>,
@@ -1407,20 +1524,39 @@ fn follow_ups_after_create(
     // create screen of an instance that has not put it there — which would
     // refuse the whole create rather than the checklist. An update of its own,
     // once the issue exists, is what the plugin's own UI does too.
+    //
+    // Nor is it on every edit screen, and there is no asking: the edit screen
+    // is described per issue, and before the create there is no issue to ask
+    // about. Data Center sidesteps the question — its write is the plugin's
+    // property, which no screen governs — and Cloud's screens are not checked
+    // at all (see `check_screen`), so nothing planned here is a field the edit
+    // screen could refuse.
     if !doc.checklist.is_empty() {
         match checklist_field {
             Some(id) => {
                 match crate::api::checklist::to_text(&doc.checklist, crate::api::checklist::NOTE) {
-                    Ok(text) => {
-                        let payload = json!({ id: text });
-                        out.push(FollowUp {
-                            kind: "update_fields",
-                            summary: format!("checklist ({} lines)", text.lines().count()),
-                            request: json!({"method": "PUT", "path": "/issue/{key}",
-                                        "body": {"fields": payload}}),
-                            action: Action::UpdateFields(payload),
-                        });
-                    }
+                    Ok(text) => match checklist_write(deployment, id, text) {
+                        ChecklistWrite::Field(id, value) => {
+                            let summary = format!(
+                                "checklist ({} lines)",
+                                value.as_str().unwrap_or_default().lines().count()
+                            );
+                            let payload = json!({ id: value });
+                            out.push(FollowUp {
+                                kind: "update_fields",
+                                summary,
+                                request: json!({"method": "PUT", "path": "/issue/{key}",
+                                                "body": {"fields": payload}}),
+                                action: Action::UpdateFields(payload),
+                            });
+                        }
+                        ChecklistWrite::Property(op) => out.push(FollowUp {
+                            kind: op.kind,
+                            summary: op.summary,
+                            request: op.request,
+                            action: op.action,
+                        }),
+                    },
                     Err(why) => {
                         warnings.push(format!("the Checklist section was not sent because {why}"))
                     }
@@ -1900,25 +2036,28 @@ fn worth_creating(value: &Value) -> bool {
 /// configured itself, a syntax this plugin version spells differently — there is
 /// something in the field jired does not model, and writing the field would drop
 /// it. That refusal is said out loud, with the checklist left alone.
+///
+/// What comes back is the text to write, empty for a checklist that was
+/// cleared; where it goes is [`checklist_write`]'s business.
 fn plan_checklist(
     key: &str,
     base: &IssueDoc,
     working: &IssueDoc,
     base_raw: &Value,
     field: Option<&str>,
-    fields: &mut serde_json::Map<String, Value>,
     warnings: &mut Vec<String>,
-) {
+) -> Option<String> {
     use crate::api::checklist;
 
     if working.checklist == base.checklist {
-        return;
+        return None;
     }
     let refuse = |warnings: &mut Vec<String>, why: String| {
         warnings.push(format!(
             "{key}: the Checklist section was not pushed because {why}; \
              the next pull restores what the server holds"
         ));
+        None
     };
     let Some(id) = field else {
         return refuse(
@@ -1952,16 +2091,48 @@ fn plan_checklist(
     }
 
     match checklist::to_text(&working.checklist, note) {
-        // Clearing the section clears the checklist, which is `null` on the
-        // wire: it is what the server itself holds for an issue that has none.
-        Ok(text) if text.is_empty() => {
-            fields.insert(id.to_string(), Value::Null);
-        }
-        Ok(text) => {
-            fields.insert(id.to_string(), json!(text));
-        }
+        Ok(text) => Some(text),
         Err(why) => refuse(warnings, why),
     }
+}
+
+/// How a checklist's text reaches the server.
+enum ChecklistWrite {
+    /// A field in a `PUT /issue`: the text, or `null` for a cleared checklist —
+    /// what the server itself holds for an issue that has none.
+    Field(String, Value),
+    /// An operation of its own, through the plugin's issue property.
+    Property(Op),
+}
+
+/// Cloud writes the text field; Data Center the plugin's issue property,
+/// because the field is refused wherever the edit screen does not carry it and
+/// the property is not a field at all. See [`crate::api::checklist::PROPERTY`].
+fn checklist_write(
+    deployment: crate::api::Deployment,
+    field: &str,
+    text: String,
+) -> ChecklistWrite {
+    if deployment == crate::api::Deployment::Cloud {
+        let value = match text.is_empty() {
+            true => Value::Null,
+            false => json!(text),
+        };
+        return ChecklistWrite::Field(field.to_string(), value);
+    }
+    let summary = match text.lines().count() {
+        0 => "checklist (cleared)".to_string(),
+        n => format!("checklist ({n} lines)"),
+    };
+    ChecklistWrite::Property(Op {
+        kind: "update_checklist",
+        summary,
+        request: json!({"method": "PUT",
+                        "path": format!("/issue/{{key}}/properties/{}",
+                                        crate::api::checklist::PROPERTY),
+                        "body": text}),
+        action: Action::SetChecklist { text },
+    })
 }
 
 /// Build the ordered operation list for one issue (decision D23).
@@ -2065,15 +2236,18 @@ fn plan(
         warnings,
     );
 
-    plan_checklist(
-        &bf.key,
-        base,
-        working,
-        base_raw,
+    let mut checklist_op = None;
+    if let (Some(text), Some(id)) = (
+        plan_checklist(&bf.key, base, working, base_raw, checklist_field, warnings),
         checklist_field,
-        &mut fields,
-        warnings,
-    );
+    ) {
+        match checklist_write(engine.account.deployment, id, text) {
+            ChecklistWrite::Field(id, value) => {
+                fields.insert(id, value);
+            }
+            ChecklistWrite::Property(op) => checklist_op = Some(op),
+        }
+    }
 
     if !fields.is_empty() {
         let payload = Value::Object(fields);
@@ -2084,6 +2258,7 @@ fn plan(
             action: Action::UpdateFields(payload),
         });
     }
+    ops.extend(checklist_op);
 
     if let Some(to) = assign {
         let body = crate::api::assignee_body(engine.account.deployment, to.as_deref());
@@ -2563,6 +2738,23 @@ fn unapplied(action: &Action, confirmed: &RemoteIssue) -> Option<String> {
                 None => format!("the parent is still unset, not {to}"),
             })
         }
+        // A property takes any document it is given whether or not anything
+        // reads it — another checklist app behind the same field name, Smart
+        // Checklist switched off for the project — so the checklist the issue
+        // now reads as is the only proof the plugin took it up. Compared as
+        // text, the way the plan proved jired speaks this plugin's dialect.
+        Action::SetChecklist { text } => {
+            use crate::api::checklist;
+            let now = checklist::to_text(&confirmed.fields.checklist, checklist::note_marker(text));
+            match now {
+                Ok(now) if checklist::normalized(&now) == checklist::normalized(text) => None,
+                _ => Some(format!(
+                    "the checklist did not change: nothing on the server took up the `{}` \
+                     property",
+                    checklist::PROPERTY
+                )),
+            }
+        }
         // Read through the workspace's field map, so an instance whose `/field`
         // does not name a Sprint field would report every move as unapplied.
         // That workspace cannot render `sprint:` at all and is already broken
@@ -2791,6 +2983,11 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                     .update_fields(key, json!({ "description": rich.to_field_value() }))
                     .await
             }
+            Action::SetChecklist { text } => {
+                client
+                    .set_issue_property(key, crate::api::checklist::PROPERTY, json!(text))
+                    .await
+            }
             Action::TransitionOther {
                 key: other,
                 to_status,
@@ -2889,6 +3086,23 @@ fn rewrite_after_push(
     markup: Markup,
     base_url: &str,
 ) -> Result<()> {
+    rewrite_keeping(engine, issue, file, markup, base_url, |_| {})
+}
+
+/// [`rewrite_after_push`], with `keep` given the rebuilt file to put local
+/// edits back into before it is written.
+///
+/// Base is the server's rendering either way, and its hash is that
+/// rendering's, not the written file's — the same split a merging pull makes —
+/// so whatever `keep` puts back is a difference `status` and `push` see.
+fn rewrite_keeping(
+    engine: &Engine,
+    issue: &RemoteIssue,
+    file: &str,
+    markup: Markup,
+    base_url: &str,
+    keep: impl FnOnce(&mut IssueDoc),
+) -> Result<()> {
     // The issue just came back from the client, whose field map knows nothing
     // about this workspace's config, so the ignore list is applied here.
     let ignored = engine.field_map()?.ignored;
@@ -2900,10 +3114,19 @@ fn rewrite_after_push(
             ignored_custom: &ignored,
         },
     )?;
-    let mut doc = rendered.doc;
-    doc.frontmatter.jired.content_hash = String::new();
-    let provisional = doc.render()?;
-    doc.frontmatter.jired.content_hash = crate::store::state::content_hash(&provisional);
+    // The hash in the frontmatter describes the file that contains it, so each
+    // rendering is hashed in two passes: render, hash, render again.
+    let seal = |doc: &mut IssueDoc| -> Result<String> {
+        doc.frontmatter.jired.content_hash = String::new();
+        let provisional = doc.render()?;
+        doc.frontmatter.jired.content_hash = crate::store::state::content_hash(&provisional);
+        Ok(crate::store::state::content_hash(&doc.render()?))
+    };
+    let mut base_doc = rendered.doc;
+    let base_hash = seal(&mut base_doc)?;
+    let mut doc = base_doc.clone();
+    keep(&mut doc);
+    seal(&mut doc)?;
 
     let outcome = engine.projector.write(&doc, Some(file))?;
     engine
@@ -2917,7 +3140,7 @@ fn rewrite_after_push(
     engine.state.set_base_from_remote(
         issue,
         &rendered.description_storage,
-        &outcome.content_hash,
+        &base_hash,
         &outcome.relative,
     )
 }
@@ -2944,6 +3167,39 @@ mod tests {
 
     fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
         crate::api::model::parse_timestamp(text).expect("a timestamp")
+    }
+
+    /// Cloud's Forge app reads the field and no longer the property; Data
+    /// Center's field is refused wherever the edit screen does not carry it,
+    /// and the property is not a field. The Cloud fixture has no checklist to
+    /// show the first half end to end, so it is pinned here.
+    #[test]
+    fn a_checklist_goes_to_the_field_on_cloud_and_the_property_on_data_center() {
+        use crate::api::Deployment;
+        let ChecklistWrite::Field(id, value) =
+            checklist_write(Deployment::Cloud, "customfield_10206", "- a\n".into())
+        else {
+            panic!("Cloud writes the field");
+        };
+        assert_eq!((id.as_str(), value), ("customfield_10206", json!("- a\n")));
+        let ChecklistWrite::Field(_, value) =
+            checklist_write(Deployment::Cloud, "customfield_10206", String::new())
+        else {
+            panic!("Cloud writes the field");
+        };
+        assert_eq!(value, Value::Null, "a cleared checklist is `null` there");
+
+        let ChecklistWrite::Property(op) =
+            checklist_write(Deployment::DataCenter, "customfield_10206", "- a\n".into())
+        else {
+            panic!("Data Center writes the property");
+        };
+        assert_eq!(op.kind, "update_checklist");
+        assert_eq!(
+            op.request["path"],
+            "/issue/{key}/properties/com.railsware.SmartChecklist.checklist"
+        );
+        assert!(matches!(op.action, Action::SetChecklist { ref text } if text == "- a\n"));
     }
 
     /// The drift this mapping exists to prevent: `assignee` was handled for an

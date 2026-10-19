@@ -444,6 +444,38 @@ mod tests {
         Cli::command().debug_assert();
     }
 
+    /// clap names an argument after its struct field, and a command's own
+    /// argument sharing an id with a global one replaces it there: a
+    /// `--field` stored in `fields` was how `transition --fields` came to be
+    /// refused. Every global flag has to reach every command, at every depth.
+    #[test]
+    fn every_command_takes_every_global_flag() {
+        let mut root = Cli::command();
+        root.build();
+        let globals: Vec<&str> = root
+            .get_arguments()
+            .filter(|a| a.is_global_set())
+            .filter_map(|a| a.get_long())
+            .collect();
+        assert!(globals.contains(&"fields"), "{globals:?}");
+
+        fn walk(cmd: &clap::Command, path: &str, globals: &[&str], missing: &mut Vec<String>) {
+            // clap's generated `help` takes a command name and nothing else.
+            for sub in cmd.get_subcommands().filter(|s| s.get_name() != "help") {
+                let path = format!("{path} {}", sub.get_name());
+                for long in globals {
+                    if !sub.get_arguments().any(|a| a.get_long() == Some(long)) {
+                        missing.push(format!("{path} --{long}"));
+                    }
+                }
+                walk(sub, &path, globals, missing);
+            }
+        }
+        let mut missing = Vec::new();
+        walk(&root, "jired", &globals, &mut missing);
+        assert!(missing.is_empty(), "global flags refused: {missing:?}");
+    }
+
     #[test]
     fn global_flags_are_accepted_after_the_subcommand() {
         let cli = Cli::try_parse_from(["jired", "status", "--json", "--no-input"]).unwrap();

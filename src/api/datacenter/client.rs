@@ -299,6 +299,10 @@ impl JiraApi for DataCenter {
         self.rest.delete_link(link_id).await
     }
 
+    async fn set_issue_property(&self, key: &str, property: &str, value: Value) -> Result<()> {
+        self.rest.set_issue_property(key, property, value).await
+    }
+
     async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
         self.rest.assign(key, user_id).await
     }

@@ -28,7 +28,10 @@ pub struct TransitionArgs {
     #[arg(long)]
     pub list: bool,
     /// Fields required by the transition screen, as key=value
-    #[arg(long = "field", value_name = "KEY=VALUE")]
+    // An id of its own: clap names an argument after its field, and `fields`
+    // is the global `--fields` too — whose definition this one replaced, so
+    // `transition --fields` was refused while every other command took it.
+    #[arg(long = "field", id = "transition_field", value_name = "KEY=VALUE")]
     pub fields: Vec<String>,
     /// Apply immediately instead of leaving the change staged
     #[arg(long)]

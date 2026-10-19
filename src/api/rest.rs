@@ -1037,6 +1037,20 @@ impl JiraApi for Rest {
             .await
     }
 
+    async fn set_issue_property(&self, key: &str, property: &str, value: Value) -> Result<()> {
+        self.http
+            .put_json(
+                &self.url(
+                    &routes::SET_ISSUE_PROPERTY,
+                    &[("issueIdOrKey", key), ("propertyKey", property)],
+                    &[],
+                ),
+                value,
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
         self.http
             .put_json(

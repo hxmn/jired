@@ -224,6 +224,18 @@ pub trait JiraApi: Send + Sync {
     /// `issuelinks` entry, not either issue's.
     async fn delete_link(&self, link_id: &str) -> Result<()>;
 
+    /// Write one of an issue's entity properties, replacing whatever it held.
+    ///
+    /// `value` is the property's whole document — a bare JSON string is a
+    /// document too, and is what Smart Checklist keeps its text in. Not a field
+    /// edit, so the edit screen has no say in it: that is the reason to use it.
+    async fn set_issue_property(
+        &self,
+        key: &str,
+        property: &str,
+        value: serde_json::Value,
+    ) -> Result<()>;
+
     /// Set or clear an issue's assignee.
     ///
     /// Its own route rather than a field edit. Jira offers `PUT

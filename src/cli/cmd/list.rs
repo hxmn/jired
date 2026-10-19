@@ -16,7 +16,9 @@ pub struct ProjectsArgs {}
 #[derive(Args, Debug, Clone, Default)]
 pub struct BoardsArgs {
     /// Only boards for this project (defaults to the workspace project)
-    #[arg(long = "for-project", value_name = "KEY")]
+    // Not `project`: that id is the global `--project`, which this would
+    // replace, leaving `boards --project` refused.
+    #[arg(long = "for-project", id = "for_project", value_name = "KEY")]
     pub project: Option<String>,
 }
 

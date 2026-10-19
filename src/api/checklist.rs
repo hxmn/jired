@@ -41,6 +41,19 @@ const IMPLIED: [(&str, bool); 2] = [("TO DO", false), ("DONE", true)];
 /// note to learn from.
 pub const NOTE: &str = ">>";
 
+/// The issue property Smart Checklist keeps a checklist's text in.
+///
+/// Data Center writes go here rather than to the text field: the field is an
+/// ordinary custom field, so `PUT /issue` takes it only where an administrator
+/// has put it on the issue type's edit screen, and the plugin does not need it
+/// there — on the instance this was reported against it was on none, and every
+/// checklist write was refused. The property is what the vendor's own Data
+/// Center automation guide writes, and since 5.0, when the plugin moved its
+/// primary storage into the database, it is still one of the storages the
+/// plugin keeps in sync. Cloud is the other way round: the Forge app no longer
+/// reads the property, and the field is the documented route there.
+pub const PROPERTY: &str = "com.railsware.SmartChecklist.checklist";
+
 /// Parse whatever the checklist field held into checklist lines.
 pub fn from_field(value: &Value) -> Vec<ChecklistEntry> {
     match value {

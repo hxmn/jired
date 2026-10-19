@@ -908,6 +908,35 @@ impl JiraApi for FixtureClient {
     /// sent through the route from one that was smuggled into a field payload,
     /// and `ignored.json` can make this "server" answer it and do nothing,
     /// which is the failure the real one is capable of.
+    /// Kept under the issue's `properties`, and — for Smart Checklist's own
+    /// property only — copied into the checklist's text field, which is what
+    /// the plugin does on a real server and the only way a re-read can see the
+    /// write. `ignored.json` stands in for an instance where nothing listens:
+    /// another checklist app, or Smart Checklist switched off for the project.
+    async fn set_issue_property(&self, key: &str, property: &str, value: Value) -> Result<()> {
+        let path = format!("/issue/{key}/properties/{property}");
+        self.record("PUT", &path, value.clone())?;
+        if !self.applies("PUT", &path) {
+            return Ok(());
+        }
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            if let Some(issue) = issues.get_mut(key) {
+                issue["properties"][property] = value.clone();
+                if property == crate::api::checklist::PROPERTY {
+                    if let Some(field) = &self.field_map.checklist_text {
+                        issue["fields"][field] = match value.as_str() {
+                            Some("") | None => Value::Null,
+                            Some(_) => value,
+                        };
+                    }
+                }
+            }
+        }
+        self.bump_updated(key);
+        Ok(())
+    }
+
     async fn assign(&self, key: &str, user_id: Option<&str>) -> Result<()> {
         let path = format!("/issue/{key}/assignee");
         let body = crate::api::assignee_body(self.deployment, user_id);
@@ -953,7 +982,12 @@ impl JiraApi for FixtureClient {
             .unwrap_or("NEW")
             .to_string();
         let id = self.next_id();
-        let key = format!("{project}-{}", &id[id.len().saturating_sub(3)..]);
+        // The whole id, as a real server's counter would give it. Its last
+        // three digits made `PROJ-001`, a key no Jira hands out: the file is
+        // named `PROJ-0001`, which reads back as `PROJ-1`, so the scan never
+        // matched a created issue's file to its row and `status` called every
+        // edit to one clean.
+        let key = format!("{project}-{id}");
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
         let mut issue = json!({"id": id, "key": key, "fields": fields});
         issue["fields"]["created"] = json!(now);

@@ -380,6 +380,18 @@ route!(
 );
 
 route!(
+    /// Write one of an issue's entity properties: a JSON document an app keeps
+    /// beside the issue rather than in a field. Smart Checklist's own storage on
+    /// Data Center, and the one route to a checklist that does not depend on
+    /// the field being on the issue's edit screen.
+    SET_ISSUE_PROPERTY,
+    "setProperty",
+    "PUT",
+    Api,
+    "issue/{issueIdOrKey}/properties/{propertyKey}",
+);
+
+route!(
     ADD_ATTACHMENT,
     "addAttachment",
     "POST",
@@ -536,6 +548,7 @@ pub const ALL: &[&Route] = &[
     &ISSUE_LINK_TYPES,
     &CREATE_ISSUE_LINK,
     &DELETE_ISSUE_LINK,
+    &SET_ISSUE_PROPERTY,
     &ADD_ATTACHMENT,
     &ADD_WATCHER,
     &REMOVE_WATCHER,
@@ -674,6 +687,7 @@ mod tests {
             "getIssueLinkTypes",
             "linkIssues",
             "deleteIssueLink",
+            "setProperty",
             "addAttachment",
             "addWatcher",
             "removeWatcher",
@@ -691,7 +705,7 @@ mod tests {
         ] {
             assert!(listed.contains(&id), "{id} is missing from ALL");
         }
-        assert_eq!(ALL.len(), 44, "a route was added without a test naming it");
+        assert_eq!(ALL.len(), 45, "a route was added without a test naming it");
 
         // `getIssue` is a method id in both modules, so nothing may key on the
         // id alone — the contract test keys on (method, path).
