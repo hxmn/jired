@@ -5064,6 +5064,148 @@ fn a_sub_task_moves_to_another_parent_on_data_center() {
     assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
 }
 
+/// Jira does not touch a parent when a sub-task is created under it, so the
+/// parent is never part of the next incremental fetch, and `## Children` stayed
+/// empty however many pulls followed. The push knows where each new sub-task
+/// went, and the parent's file says so before the command returns.
+#[test]
+fn a_pushed_sub_task_is_listed_under_its_parent_at_once() {
+    for_each_deployment(|ws| {
+        let parent = ws.issue_file();
+        let before = ws.read(parent);
+        ws.json(&[
+            "create",
+            "--type",
+            "Sub-task",
+            "--parent",
+            ws.deployment.key(),
+            "-s",
+            "Write the migration note",
+        ]);
+        let push = ws.json(&["push"]);
+        let new_key = push["results"][0]["new_key"].as_str().expect("created");
+
+        let after = ws.read(parent);
+        assert!(
+            after.contains(&format!("- [ ] {new_key} Write the migration note")),
+            "{:?}: {after}",
+            ws.deployment
+        );
+        // What was listed before is still listed, in the same place.
+        let listed = |text: &str| -> Vec<String> {
+            text.split("## Children")
+                .nth(1)
+                .and_then(|rest| rest.split("\n## ").next())
+                .unwrap_or_default()
+                .lines()
+                .filter(|l| l.starts_with("- ["))
+                .map(str::to_string)
+                .collect()
+        };
+        assert_eq!(listed(&after)[..listed(&before).len()], listed(&before)[..]);
+
+        // Rewritten as a sync, not as an edit: nothing to push, nothing to
+        // pull, and the next pull leaves the file alone.
+        let status = ws.json(&["status"]);
+        assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+        assert!(status["behind"].as_array().unwrap().is_empty(), "{status}");
+        let pulled = ws.json(&["pull"]);
+        assert!(pulled["updated"].as_array().unwrap().is_empty(), "{pulled}");
+        assert_eq!(ws.read(parent), after);
+    });
+}
+
+/// A parent with unpushed edits of its own is merged into, not overwritten,
+/// when a sub-task pushed on its own lands under it.
+#[test]
+fn a_pushed_sub_task_merges_into_a_parent_with_local_edits() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("- backend\n", "- backend\n- local-only\n");
+    ws.write(ISSUE_FILE, &text);
+    let created = ws.json(&[
+        "create",
+        "--type",
+        "Sub-task",
+        "--parent",
+        "PROJ-142",
+        "-s",
+        "Write the migration note",
+    ]);
+    let temp_key = created["key"].as_str().unwrap();
+    let push = ws.json(&["push", temp_key]);
+    let new_key = push["results"][0]["new_key"].as_str().expect("created");
+
+    let after = ws.read(ISSUE_FILE);
+    assert!(after.contains("- local-only"), "the local edit survived");
+    assert!(after.contains(&format!("{new_key} Write the migration note")));
+    assert_eq!(ws.json(&["status"])["dirty"][0]["key"], "PROJ-142");
+}
+
+/// The same staleness from the other side: a sub-task created or moved in the
+/// web UI arrives in the next fetch on its own, and its parent — old and new —
+/// has to follow it in that one pull.
+#[test]
+fn a_sub_task_created_or_moved_on_the_server_reaches_its_parent_in_one_pull() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    const DC_ROLLBACK: &str = "DC-0078. Document the LDAP rollback plan.md";
+
+    let path = ws.fixtures.join("issues.json");
+    let mut issues: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut created = issues
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["key"] == "DC-79")
+        .unwrap()
+        .clone();
+    created["id"] = "20504".into();
+    created["key"] = "DC-80".into();
+    created["fields"]["summary"] = "Rehearse the rollback".into();
+    created["fields"]["parent"] = serde_json::json!({"key": "DC-78"});
+    created["fields"]["updated"] = jired::store::now_rfc3339().into();
+    issues.as_array_mut().unwrap().push(created);
+    std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
+
+    let report = ws.json(&["pull"]);
+    let updated: Vec<&str> = report["updated"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(updated, ["DC-78"], "{report}");
+    assert!(ws
+        .read(DC_ROLLBACK)
+        .contains("- [ ] DC-80 Rehearse the rollback"));
+
+    ws.mutate_remote("DC-79", |issue| {
+        issue["fields"]["parent"] = serde_json::json!({"key": "DC-78"});
+    });
+    ws.json(&["pull"]);
+    let rollback = ws.read(DC_ROLLBACK);
+    assert!(
+        rollback.contains("- [ ] DC-79 Update the connector config")
+            && rollback.contains("- [ ] DC-80 Rehearse the rollback"),
+        "{rollback}"
+    );
+    assert!(
+        !ws.read(Deployment::DataCenter.issue_file())
+            .contains("DC-79 "),
+        "and gone from the old parent"
+    );
+
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+    assert!(status["behind"].as_array().unwrap().is_empty(), "{status}");
+}
+
 /// The wizard answers in HTML, so a step that renders is not a move that
 /// happened. The push re-reads the issue, and a parent that did not move fails
 /// the operation with the edit still in the file — the same protection the
@@ -8279,9 +8421,14 @@ fn a_push_that_moves_nothing_leaves_the_folders_alone() {
 #[test]
 fn a_child_summary_ending_in_a_space_is_not_a_change() {
     let ws = Ws::new();
+    // Both sides, as Jira holds it: the sub-task's own summary is what its
+    // parent's list is kept in step with.
     ws.mutate_remote("PROJ-142", |issue| {
         issue["fields"]["subtasks"][0]["fields"]["summary"] =
             "Реализовать иерархию ".to_string().into();
+    });
+    ws.mutate_remote("PROJ-143", |issue| {
+        issue["fields"]["summary"] = "Реализовать иерархию ".to_string().into();
     });
     ws.init();
     ws.json(&["pull"]);

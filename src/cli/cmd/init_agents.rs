@@ -626,7 +626,9 @@ pub fn render() -> String {
         "- `## Children` lists the subtasks as `- [ ] PROJ-143 Title`, each of them an \
          issue of its own. Ticking a box applies a done-transition only when \
          `children.done_transition` is configured; otherwise it is reported and ignored. \
-         Adding a line does not create a subtask — use `jired create --parent PROJ-142`.\n",
+         Adding a line does not create a subtask — use `jired create --parent PROJ-142`; \
+         the push that creates it adds it to the parent's file, so there is nothing to pull \
+         afterwards.\n",
     );
     s.push_str(
         "- `## Checklist` is the checklist plugin's list inside this issue, as \

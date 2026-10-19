@@ -118,6 +118,9 @@ pub fn run_with(
     }
     storing.finish();
     changed_keys.sort();
+    // A parent is not part of an incremental fetch when only its sub-tasks
+    // changed, so the list it carries is brought up to date from theirs.
+    engine.state.reconcile_subtasks()?;
 
     // Only a full-scope fetch can tell "gone" from "outside this query".
     let deleted = if scope_is_whole_project && !incremental {

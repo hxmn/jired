@@ -490,30 +490,34 @@ fn issue_links(v: Option<&Value>) -> Vec<IssueLink> {
 
 fn subtasks(v: Option<&Value>) -> Vec<SubtaskRef> {
     v.and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|s| {
-                    let f = s.get("fields")?;
-                    let status_category = f
-                        .get("status")
-                        .and_then(|st| st.get("statusCategory"))
-                        .and_then(|c| c.get("key"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    Some(SubtaskRef {
-                        key: s.get("key")?.as_str()?.to_string(),
-                        summary: f
-                            .get("summary")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string(),
-                        status: nested_name(f, "status").unwrap_or_default(),
-                        done: status_category == "done",
-                    })
-                })
-                .collect()
-        })
+        .map(|a| a.iter().filter_map(subtask_ref).collect())
         .unwrap_or_default()
+}
+
+/// The sub-tasks a stored issue payload lists, as `## Children` renders them.
+pub fn subtasks_of(raw: &Value) -> Vec<SubtaskRef> {
+    subtasks(raw.pointer("/fields/subtasks"))
+}
+
+/// One entry of an issue's `subtasks` list.
+pub fn subtask_ref(s: &Value) -> Option<SubtaskRef> {
+    let f = s.get("fields")?;
+    let status_category = f
+        .get("status")
+        .and_then(|st| st.get("statusCategory"))
+        .and_then(|c| c.get("key"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    Some(SubtaskRef {
+        key: s.get("key")?.as_str()?.to_string(),
+        summary: f
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        status: nested_name(f, "status").unwrap_or_default(),
+        done: status_category == "done",
+    })
 }
 
 /// The text mirror is read first because it is the half jired writes: reading

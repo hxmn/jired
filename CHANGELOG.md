@@ -8,6 +8,23 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.18.2] — 2026-10-19
+
+### Fixed
+
+- **A parent's `## Children` lists its sub-tasks as soon as they exist.**
+  Jira does not touch a parent's `updated` when a sub-task is created under it,
+  moved away, renamed or resolved, so an incremental fetch never brought the
+  parent back and its children stayed whatever they were the day the parent
+  itself was last edited — seven sub-tasks created and pushed left an empty
+  `## Children` through any number of pulls. A parent's list is now kept in step
+  with the sub-tasks' own snapshots after every fetch and push: the push that
+  creates or moves a sub-task rewrites the old and new parents' files before it
+  returns, and one created or moved in Jira's UI reaches its parent in the next
+  `pull`. A parent with edits of its own is merged into, not overwritten, and
+  `status` calls it clean afterwards. A workspace already in this state heals on
+  its next `pull`.
+
 ## [0.18.1] — 2026-10-15
 
 ### Fixed

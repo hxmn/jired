@@ -959,6 +959,17 @@ impl JiraApi for FixtureClient {
         issue["fields"]["created"] = json!(now);
         issue["fields"]["updated"] = json!(now);
         issue["fields"]["status"] = json!({"name": "To Do", "id": "1"});
+        // A real server answers with the type it resolved the name to, flag
+        // and all, and the flag is what says whether `parent` makes this a
+        // sub-task. The fixture knows its types by name only.
+        if let Some(t) = issue["fields"]["issuetype"].as_object_mut() {
+            let name = t.get("name").and_then(Value::as_str).unwrap_or("");
+            let subtask = name
+                .to_ascii_lowercase()
+                .replace('-', "")
+                .contains("subtask");
+            t.entry("subtask").or_insert(json!(subtask));
+        }
         self.issues
             .lock()
             .expect("fixture lock")

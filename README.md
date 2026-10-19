@@ -256,7 +256,11 @@ the comment stays on the server.
 subtasks, which are issues of their own, as `- [ ] PROJ-143 Add integration test`;
 ticking one transitions that subtask only when `children.done_transition` is set to
 a status name, and otherwise push says so and moves on. Adding a line does **not**
-create a subtask — use `jired create --parent PROJ-142`.
+create a subtask — use `jired create --parent PROJ-142`. The list follows the
+subtasks themselves: pushing one you created, moved or renamed rewrites its
+parent's file there and then, and one created or moved in Jira's UI reaches its
+parent with the next `pull` — though Jira does not mark the parent as changed
+for either.
 
 `## Checklist` is the checklist plugin's list inside this issue: a status the
 checkbox does not already say is written in backticks ahead of the title, `### `

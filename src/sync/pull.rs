@@ -296,7 +296,7 @@ pub fn run_scoped(
                 let working_text = engine.projector.read_raw(file)?;
                 let working_hash = crate::store::state::content_hash(&working_text);
                 let dirty = working_hash != base.md_hash;
-                let behind = remote_snapshot.updated > base.updated;
+                let behind = row.is_behind();
 
                 if !dirty && !behind {
                     report.unchanged += 1;

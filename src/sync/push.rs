@@ -659,6 +659,10 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         retry_stale(ctx, &mut report, args)?;
     }
 
+    if !args.dry_run {
+        refresh_parents(ctx, &engine, &mut report)?;
+    }
+
     report.summary = PushSummary {
         ok: report.results.iter().filter(|r| r.ok).count(),
         failed: report.results.iter().filter(|r| !r.ok).count(),
@@ -1308,6 +1312,69 @@ fn retry_stale(ctx: &mut Context, report: &mut PushReport, args: &PushArgs) -> R
     report.warnings.extend(second.warnings);
     if second.groups.is_some() {
         report.groups = second.groups;
+    }
+    Ok(())
+}
+
+/// Rewrite the files of parents whose sub-tasks this push created, moved,
+/// renamed or resolved.
+///
+/// Jira does not move a parent's `updated` for any of that, so the parent is
+/// not something a later incremental pull would bring back either: without
+/// this, `## Children` waited for somebody to edit the parent itself. The write
+/// goes through `pull`, scoped and offline, so a parent with edits of its own
+/// is merged rather than overwritten — and, under `Abort` as in
+/// [`retry_stale`], left alone when the merge would conflict.
+fn refresh_parents(ctx: &mut Context, engine: &Engine, report: &mut PushReport) -> Result<()> {
+    let parents: Vec<String> = engine
+        .state
+        .reconcile_subtasks()?
+        .into_iter()
+        .filter(|key| {
+            // Only a file that already exists: one never pulled is the next
+            // pull's to write, not a side effect of pushing something else.
+            matches!(engine.state.issue(key), Ok(Some(row)) if row.base.is_some())
+        })
+        .collect();
+    if parents.is_empty() {
+        return Ok(());
+    }
+    let pull_args = crate::cli::cmd::pull::PullArgs {
+        no_fetch: true,
+        strategy: crate::cli::cmd::pull::Strategy::Abort,
+        ..Default::default()
+    };
+    let mut pending = parents;
+    // Twice at most: `Abort` writes nothing when anything conflicts, so the
+    // second round is the parents that would have merged cleanly.
+    for _ in 0..2 {
+        let pulled = match crate::sync::pull::run_scoped(ctx, &pull_args, Some(&pending)) {
+            Ok(pulled) => pulled,
+            Err(e) => {
+                report.warnings.push(format!(
+                    "could not rewrite {} after its sub-tasks changed: {} — \
+                     `jired pull` retries it",
+                    pending.join(", "),
+                    e.message
+                ));
+                break;
+            }
+        };
+        if pulled.conflicts.is_empty() {
+            break;
+        }
+        for c in &pulled.conflicts {
+            report.warnings.push(format!(
+                "{}: its sub-tasks changed, but the file has edits that conflict with what \
+                 the server holds, so it was not rewritten — `jired pull --strategy merge` \
+                 writes conflict markers",
+                c.key
+            ));
+        }
+        pending.retain(|k| !pulled.conflicts.iter().any(|c| &c.key == k));
+        if pending.is_empty() {
+            break;
+        }
     }
     Ok(())
 }

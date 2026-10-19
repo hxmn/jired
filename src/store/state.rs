@@ -180,9 +180,18 @@ pub struct IssueRow {
 
 impl IssueRow {
     /// True when the server has moved on since the working copy was written.
+    ///
+    /// The sub-task list is compared as well as the stamp, because it is the
+    /// one part of an issue that changes without `updated` moving: Jira leaves
+    /// a parent's stamp alone when a sub-task is created under it, moved away,
+    /// renamed or resolved, so the timestamp alone kept `## Children` frozen at
+    /// whatever it listed the day the parent itself was last edited.
     pub fn is_behind(&self) -> bool {
+        use crate::api::normalize::subtasks_of;
         match (&self.base, &self.remote) {
-            (Some(b), Some(r)) => r.updated > b.updated,
+            (Some(b), Some(r)) => {
+                r.updated > b.updated || subtasks_of(&r.raw) != subtasks_of(&b.raw)
+            }
             (None, Some(_)) => true,
             _ => false,
         }
@@ -455,6 +464,147 @@ impl StateStore {
             params![key, path],
         )?;
         Ok(())
+    }
+
+    /// Bring every parent's sub-task list in line with the sub-tasks stored on
+    /// their own, and name the parents whose list changed.
+    ///
+    /// Jira does not touch a parent when one of its sub-tasks is created, moved,
+    /// renamed or resolved, so an incremental fetch never brings the parent
+    /// back, and the list it carries — which is what `## Children` is rendered
+    /// from — stays as it was. Each sub-task's own snapshot says where it hangs
+    /// and what it is called; of the two, whichever was fetched later is
+    /// believed, so a parent re-read after a sub-task moved away is not undone
+    /// by the older copy of that sub-task.
+    ///
+    /// Only the remote snapshot changes. [`IssueRow::is_behind`] compares the
+    /// lists, so `pull` writes the file and advances base exactly as it would
+    /// for an edit made on the server — merging into a dirty file, and leaving
+    /// it clean afterwards. A sub-task the workspace has no copy of is kept as
+    /// the parent listed it: absent from the store is not absent from Jira.
+    pub fn reconcile_subtasks(&self) -> Result<Vec<String>> {
+        struct Stored {
+            key: String,
+            parent: Option<String>,
+            raw: serde_json::Value,
+            fetched_at: Option<DateTime<Utc>>,
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT key, parent_key, remote_raw, remote_fetched_at FROM issue
+             WHERE remote_raw IS NOT NULL AND deleted_remote = 0 ORDER BY key",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        let mut stored = Vec::new();
+        for row in rows {
+            let (key, parent, raw, fetched_at) = row?;
+            stored.push(Stored {
+                key,
+                parent,
+                raw: serde_json::from_str(&raw)?,
+                fetched_at: fetched_at.as_deref().and_then(parse_timestamp),
+            });
+        }
+        let by_key: BTreeMap<&str, &Stored> = stored.iter().map(|s| (s.key.as_str(), s)).collect();
+        let mut children: BTreeMap<&str, Vec<&Stored>> = BTreeMap::new();
+        for s in &stored {
+            // Read off Jira's own flag: in a Cloud team-managed project a story
+            // has its epic as `parent` too, and an epic's list holds no stories.
+            let is_subtask = s
+                .raw
+                .pointer("/fields/issuetype/subtask")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if let (Some(parent), true) = (&s.parent, is_subtask) {
+                children.entry(parent.as_str()).or_default().push(s);
+            }
+        }
+        let id = |s: &Stored| {
+            s.raw
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        let mut changed = Vec::new();
+        for parent in &stored {
+            // Ties go to the sub-task: both copies were read in the same
+            // second, so neither is staler, and the sub-task's own is the one
+            // a push has just confirmed.
+            let believed = |child: &Stored| child.fetched_at >= parent.fetched_at;
+            let listed: Vec<serde_json::Value> = parent
+                .raw
+                .pointer("/fields/subtasks")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+
+            let mut list = Vec::with_capacity(listed.len());
+            for entry in &listed {
+                let child = entry
+                    .get("key")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|k| by_key.get(k));
+                match child {
+                    Some(child) if believed(child) => {
+                        if child.parent.as_deref() != Some(parent.key.as_str()) {
+                            continue;
+                        }
+                        // The entry the server wrote is kept while it says the
+                        // same thing, so a list that only differs in which keys
+                        // each entry carries does not count as a change.
+                        let fresh = subtask_entry(&child.raw);
+                        let same = crate::api::normalize::subtask_ref(entry)
+                            == crate::api::normalize::subtask_ref(&fresh);
+                        list.push(if same { entry.clone() } else { fresh });
+                    }
+                    _ => list.push(entry.clone()),
+                }
+            }
+
+            let mut missing: Vec<&Stored> = children
+                .get(parent.key.as_str())
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|c| believed(c))
+                .filter(|c| {
+                    !listed
+                        .iter()
+                        .any(|e| e.get("key").and_then(serde_json::Value::as_str) == Some(&c.key))
+                })
+                .collect();
+            // Jira lists sub-tasks in the order they were created.
+            missing.sort_by(|a, b| version_order(&id(a), &id(b)));
+            list.extend(missing.into_iter().map(|c| subtask_entry(&c.raw)));
+
+            if list == listed {
+                continue;
+            }
+            let mut raw = parent.raw.clone();
+            match raw
+                .get_mut("fields")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                Some(fields) => {
+                    fields.insert("subtasks".into(), serde_json::Value::Array(list));
+                }
+                None => continue,
+            }
+            self.conn.execute(
+                "UPDATE issue SET remote_raw = ?2 WHERE key = ?1",
+                params![parent.key, raw.to_string()],
+            )?;
+            changed.push(parent.key.clone());
+        }
+        Ok(changed)
     }
 
     pub fn mark_deleted_remote(&self, keys: &[String]) -> Result<()> {
@@ -1154,6 +1304,25 @@ fn versions_key(project: &str) -> String {
     format!("versions_listed:{}", project.to_ascii_uppercase())
 }
 
+/// A sub-task as its parent's `subtasks` list carries it, built from the
+/// sub-task's own payload: the same four fields Jira puts there.
+fn subtask_entry(raw: &serde_json::Value) -> serde_json::Value {
+    let mut fields = serde_json::Map::new();
+    for name in ["summary", "status", "priority", "issuetype"] {
+        if let Some(v) = raw.pointer(&format!("/fields/{name}")) {
+            fields.insert(name.into(), v.clone());
+        }
+    }
+    let mut entry = serde_json::Map::new();
+    for name in ["id", "key", "self"] {
+        if let Some(v) = raw.get(name) {
+            entry.insert(name.into(), v.clone());
+        }
+    }
+    entry.insert("fields".into(), serde_json::Value::Object(fields));
+    serde_json::Value::Object(entry)
+}
+
 /// Ids are numbers on every Jira, compared as such so `10010` follows `9999`.
 fn version_order(a: &str, b: &str) -> std::cmp::Ordering {
     match (a.parse::<u64>(), b.parse::<u64>()) {
@@ -1248,7 +1417,7 @@ pub fn content_hash(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::api::model::*;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     fn issue(key: &str, updated: &str) -> RemoteIssue {
         let raw = json!({
@@ -1494,5 +1663,117 @@ mod tests {
         let now = parse_timestamp("2026-08-17T10:00:00Z").unwrap();
         s.set_last_fetch_at(&now).unwrap();
         assert_eq!(s.last_fetch_at().unwrap().unwrap(), now);
+    }
+
+    /// An issue as a fetch stores it, with a parent and a sub-task list.
+    fn family(
+        key: &str,
+        id: &str,
+        parent: Option<&str>,
+        subtask: bool,
+        subtasks: Value,
+    ) -> RemoteIssue {
+        let mut i = issue(key, "2026-08-01T00:00:00Z");
+        i.id = id.into();
+        i.fields.parent = parent.map(str::to_string);
+        i.raw["id"] = id.into();
+        i.raw["fields"]["summary"] = format!("{key} summary").into();
+        i.raw["fields"]["issuetype"] = json!({"name": "x", "subtask": subtask});
+        i.raw["fields"]["status"] = json!({"name": "Open", "statusCategory": {"key": "new"}});
+        i.raw["fields"]["subtasks"] = subtasks;
+        if let Some(p) = parent {
+            i.raw["fields"]["parent"] = json!({"key": p});
+        }
+        i
+    }
+
+    fn listed(s: &StateStore, key: &str) -> Vec<String> {
+        let row = s.issue(key).unwrap().unwrap();
+        crate::api::normalize::subtasks_of(&row.remote.unwrap().raw)
+            .into_iter()
+            .map(|r| r.key)
+            .collect()
+    }
+
+    fn fetched_at(s: &StateStore, key: &str, at: &str) {
+        s.conn
+            .execute(
+                "UPDATE issue SET remote_fetched_at = ?2 WHERE key = ?1",
+                params![key, at],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_new_sub_task_joins_its_parents_list_and_makes_it_behind() {
+        let s = StateStore::in_memory().unwrap();
+        let elsewhere = json!([{"key": "P-9", "fields": {"summary": "not here"}}]);
+        s.upsert_remote(&family("P-1", "1", None, false, elsewhere))
+            .unwrap();
+        s.advance_base("P-1", "", "h", "P-1.md").unwrap();
+        s.upsert_remote(&family("P-3", "3", Some("P-1"), true, json!([])))
+            .unwrap();
+        s.upsert_remote(&family("P-2", "2", Some("P-1"), true, json!([])))
+            .unwrap();
+
+        assert_eq!(s.reconcile_subtasks().unwrap(), ["P-1"]);
+        // Kept, because the store not knowing P-9 says nothing about Jira; the
+        // new ones follow in the order they were created.
+        assert_eq!(listed(&s, "P-1"), ["P-9", "P-2", "P-3"]);
+        assert!(s.issue("P-1").unwrap().unwrap().is_behind());
+        assert!(s.reconcile_subtasks().unwrap().is_empty(), "settled");
+    }
+
+    #[test]
+    fn a_story_under_an_epic_is_not_one_of_its_sub_tasks() {
+        let s = StateStore::in_memory().unwrap();
+        s.upsert_remote(&family("P-1", "1", None, false, json!([])))
+            .unwrap();
+        s.upsert_remote(&family("P-2", "2", Some("P-1"), false, json!([])))
+            .unwrap();
+        assert!(s.reconcile_subtasks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_later_of_two_snapshots_decides_where_a_sub_task_hangs() {
+        let s = StateStore::in_memory().unwrap();
+        let entry = |key: &str| {
+            json!([{"key": key, "fields": {"summary": format!("{key} summary"),
+            "status": {"name": "Open", "statusCategory": {"key": "new"}}}}])
+        };
+        s.upsert_remote(&family("P-1", "1", None, false, entry("P-3")))
+            .unwrap();
+        s.upsert_remote(&family("P-2", "2", None, false, json!([])))
+            .unwrap();
+        s.upsert_remote(&family("P-3", "3", Some("P-2"), true, json!([])))
+            .unwrap();
+
+        // P-1 was read after P-3 last was: its list is the newer word.
+        fetched_at(&s, "P-3", "2026-08-01T00:00:00Z");
+        fetched_at(&s, "P-1", "2026-08-02T00:00:00Z");
+        fetched_at(&s, "P-2", "2026-08-01T00:00:00Z");
+        assert_eq!(s.reconcile_subtasks().unwrap(), ["P-2"]);
+        assert_eq!(listed(&s, "P-1"), ["P-3"]);
+
+        // P-3 read again later, still under P-2: now it has moved.
+        fetched_at(&s, "P-3", "2026-08-03T00:00:00Z");
+        assert_eq!(s.reconcile_subtasks().unwrap(), ["P-1"]);
+        assert!(listed(&s, "P-1").is_empty());
+        assert_eq!(listed(&s, "P-2"), ["P-3"]);
+    }
+
+    #[test]
+    fn a_renamed_sub_task_is_renamed_in_its_parents_list() {
+        let s = StateStore::in_memory().unwrap();
+        let entry = json!([{"key": "P-2", "fields": {"summary": "old name",
+            "status": {"name": "Open", "statusCategory": {"key": "new"}}}}]);
+        s.upsert_remote(&family("P-1", "1", None, false, entry))
+            .unwrap();
+        s.upsert_remote(&family("P-2", "2", Some("P-1"), true, json!([])))
+            .unwrap();
+        assert_eq!(s.reconcile_subtasks().unwrap(), ["P-1"]);
+        let row = s.issue("P-1").unwrap().unwrap();
+        let refs = crate::api::normalize::subtasks_of(&row.remote.unwrap().raw);
+        assert_eq!(refs[0].summary, "P-2 summary");
     }
 }

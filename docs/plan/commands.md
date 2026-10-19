@@ -140,6 +140,13 @@ Agent example:
 Incremental by default (`updated >= last_fetch − 5min` skew buffer); paginated
 (100/page, 4 parallel); 429/`Retry-After` aware (D26). Updates remote snapshot only —
 never touches files. Resumable after network failure.
+A parent's sub-task list — what `## Children` is rendered from — is then brought
+in line with the sub-tasks stored on their own: Jira does not move a parent's
+`updated` when a sub-task is created under it, moved, renamed or resolved, so an
+incremental fetch never brings the parent back. Of a parent and a sub-task, the
+snapshot fetched later is believed; a sub-task the store has no copy of stays as
+the parent listed it. A parent whose list changed is *behind* in `status` and is
+written by the next `pull`, merged like any server-side edit.
 JSON: `{"schema":"jired/fetch/1","fetched":123,"changed":17,"deleted":2}`.
 
 ### `jired pull`
@@ -207,6 +214,10 @@ issue: `summary.failed: 0` is true of what was attempted now and silent about
 the queue, and a caller reading only the push report used to have no way to know
 `--resume` still had something to retry. An issue in `results` is not warned
 about — its row already tells the story.
+A sub-task this push created, moved, renamed or resolved rewrites its parents'
+files before the push returns — old parent and new — through the same offline
+merge `pull --no-fetch` makes, so a parent with edits of its own keeps them, and
+one whose edits would conflict is left alone and named in `warnings`.
 `sprint:` is a list — an issue that rolls over stays in the sprint it came from
 — written as a plain string when there is only one. Its last entry is where the
 issue is now, and the only part a push can act on: a change to it is a board call
