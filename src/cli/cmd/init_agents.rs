@@ -643,7 +643,12 @@ pub fn render() -> String {
          section and say so, rather than send it with that part dropped. On Data \
          Center the list is written to Smart Checklist's issue property \
          (`update_checklist` in the plan), which no edit screen governs; on Cloud \
-         it is the plugin's text field, in the same `PUT /issue` as the rest.\n\n",
+         it is the plugin's text field, in the same `PUT /issue` as the rest. The \
+         plugin applies the property on its own schedule, so push waits for the \
+         checklist to show — up to `checklist.apply_wait` seconds, 90 by default. \
+         If it shows later than that, the op fails with the edit kept, and the \
+         next `pull` takes the plugin's copy in without a conflict and clears the \
+         op.\n\n",
     );
 
     s.push_str("## New issues\n\n");

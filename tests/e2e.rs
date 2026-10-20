@@ -3672,6 +3672,13 @@ fn resolve_theirs_takes_the_server_value_and_clears_the_conflict() {
     let report = ws.json(&["resolve", "--theirs"]);
     assert_eq!(report["strategy"], "theirs");
     assert_eq!(report["resolved"][0], "PROJ-142");
+    // Settled, so not a conflict: the pull it ran says what it decided rather
+    // than listing the issue as still standing.
+    assert!(
+        report["pull"]["conflicts"].as_array().unwrap().is_empty(),
+        "{report}"
+    );
+    assert_eq!(report["pull"]["decided"][0]["key"], "PROJ-142", "{report}");
 
     assert!(ws.read("PROJ-0142. Theirs.md").contains("summary: Theirs"));
     let status = ws.json(&["status"]);
@@ -7429,10 +7436,10 @@ fn a_checklist_edit_is_pushed_as_the_plugins_own_syntax() {
         ops[0]["request"]["body"],
         Value::from(
             "~ Generate the replacement secret\n\
-             >> Coordinate the window with @jane\n\
+             > Coordinate the window with @jane\n\
              + Update the connector config\n\
              ~ Restart the pool\n\
-             >> after the connector\n\
+             > after the connector\n\
              + Announce the freeze\n"
         ),
         "{dry}"
@@ -7600,6 +7607,8 @@ fn a_checklist_property_nothing_reads_fails_and_keeps_the_edit() {
         serde_json::json!(["PUT /issue/DC-77/properties/com.railsware.SmartChecklist.checklist"]),
     );
     ws.init();
+    // Nothing is coming, so waiting for it would only slow the test down.
+    ws.json(&["config", "set", "checklist.apply_wait", "0"]);
     ws.json(&["pull"]);
     let file = Deployment::DataCenter.issue_file();
     let edited = ws.read(file).replace(
@@ -7620,6 +7629,114 @@ fn a_checklist_property_nothing_reads_fails_and_keeps_the_edit() {
         "{push}"
     );
     assert_eq!(ws.read(file), edited, "the edit is still in the file");
+}
+
+/// Smart Checklist applies its property on its own schedule — a minute later,
+/// on the instance that reported it. Push re-reads until the checklist shows,
+/// rather than calling a write that is only late unapplied.
+#[test]
+fn a_checklist_the_plugin_applies_late_is_waited_for() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "late.json",
+        serde_json::json!({"PUT /issue/DC-77/properties/com.railsware.SmartChecklist.checklist": 2}),
+    );
+    ws.init();
+    ws.json(&["pull"]);
+    let file = Deployment::DataCenter.issue_file();
+    ws.write(
+        file,
+        &ws.read(file).replace(
+            "- [ ] Update the connector config\n",
+            "- [x] Update the connector config\n",
+        ),
+    );
+
+    let push = ws.json(&["push"]);
+    assert_eq!(push["summary"]["ok"], 1, "{push}");
+    assert_eq!(push["results"][0]["ops"][0]["status"], "done", "{push}");
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+    assert!(
+        status["pending_ops"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+}
+
+/// Later than push waits for: the op fails, honestly, and the edit stays. When
+/// the plugin does catch up, the pull that brings its copy in finds the same
+/// checklist on both sides — no conflict — and the op it leaves behind is spent.
+#[test]
+fn a_checklist_applied_after_the_wait_is_taken_in_by_the_next_pull() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.write_fixture(
+        "late.json",
+        serde_json::json!({"PUT /issue/DC-78/properties/com.railsware.SmartChecklist.checklist": 1}),
+    );
+    ws.init();
+    ws.json(&["config", "set", "checklist.apply_wait", "0"]);
+    ws.json(&["pull"]);
+    let file = "DC-0078. Document the LDAP rollback plan.md";
+    let edited = ws.read(file).replace(
+        "## Checklist\n",
+        "## Checklist\n\n- [ ] Draft the plan\n  Keep the window short\n",
+    );
+    ws.write(file, &edited);
+
+    let push = ws.json_code(&["push", "DC-78"], 10);
+    assert_eq!(push["results"][0]["ok"], false, "{push}");
+    assert!(
+        push["results"][0]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("jired pull"),
+        "{push}"
+    );
+    assert_eq!(ws.read(file), edited);
+
+    let pull = ws.json(&["pull"]);
+    assert!(pull["conflicts"].as_array().unwrap().is_empty(), "{pull}");
+    assert_eq!(
+        section(&ws.read(file), "## Checklist"),
+        section(&edited, "## Checklist"),
+        "the server's copy is the file's"
+    );
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+    assert!(
+        status["pending_ops"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+}
+
+/// A note written on an issue that has none comes back as it was written. With
+/// nothing on the server to learn the spelling from, jired fell back to `>>`,
+/// which the plugin reads as a nested quote and stores as `> > note` — every
+/// note on a newly created issue grew a stray `> `.
+#[test]
+fn a_note_on_an_issue_with_none_round_trips() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = "DC-0078. Document the LDAP rollback plan.md";
+    let edited = ws.read(file).replace(
+        "## Checklist\n",
+        "## Checklist\n\n- [ ] Draft the plan\n  Keep the window short\n",
+    );
+    ws.write(file, &edited);
+
+    let dry = ws.json(&["push", "DC-78", "--dry-run"]);
+    assert_eq!(
+        dry["results"][0]["ops"][0]["request"]["body"],
+        Value::from("- Draft the plan\n> Keep the window short\n"),
+        "{dry}"
+    );
+    let push = ws.json(&["push", "DC-78"]);
+    assert_eq!(push["summary"]["ok"], 1, "{push}");
+    assert_eq!(
+        section(&ws.read(file), "## Checklist").trim(),
+        "- [ ] Draft the plan\n  Keep the window short"
+    );
 }
 
 /// The report's second half. A checklist the server would not take, on an

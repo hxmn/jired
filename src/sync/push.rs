@@ -1096,6 +1096,14 @@ fn create_issue(
     }
 
     let confirmed = crate::api::block_on(client.issue(&new_key))?;
+    // Only what the server accepted can still be on its way: a write refused
+    // outright never arrives, and waiting for it is the whole wait for nothing.
+    let sent = follow_ups
+        .iter()
+        .zip(reports.iter().skip(1))
+        .filter(|(_, r)| r.status == "done")
+        .map(|(f, _)| &f.action);
+    let confirmed = settle(ctx, client, &new_key, sent, confirmed)?;
 
     // The same silence a follow-up can meet: a sub-task created into a sprint
     // gets a 204 from the board and stays wherever its parent is, and a
@@ -2683,6 +2691,61 @@ fn is_subtask(raw: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Re-read an issue until every checklist written through the plugin's
+/// property shows in it, or `checklist.apply_wait` runs out.
+///
+/// Smart Checklist takes the property up on its own schedule: on the instance
+/// this was reported against the checklist changed about a minute after the
+/// write. A re-read made at once saw the old checklist, the operation was
+/// failed, base stayed behind, and the pull that came after met the plugin's
+/// copy as a change on both sides. Only the checklist is waited for — the
+/// writes [`unapplied`] otherwise catches, a sub-task's sprint or parent, are
+/// swallowed rather than delayed, and waiting on them would only make the
+/// failure slower.
+fn settle<'a>(
+    ctx: &mut Context,
+    client: &dyn JiraApi,
+    key: &str,
+    actions: impl Iterator<Item = &'a Action>,
+    mut confirmed: RemoteIssue,
+) -> Result<RemoteIssue> {
+    let checklists: Vec<&Action> = actions
+        .filter(|a| matches!(a, Action::SetChecklist { .. }))
+        .collect();
+    let late = |issue: &RemoteIssue| checklists.iter().any(|a| unapplied(a, issue).is_some());
+    if !late(&confirmed) {
+        return Ok(confirmed);
+    }
+    let wait = std::time::Duration::from_secs(
+        ctx.resolver
+            .get_u64("checklist.apply_wait")?
+            .unwrap_or(DEFAULT_APPLY_WAIT),
+    );
+    let deadline = std::time::Instant::now() + wait;
+    let progress = crate::sync::progress::Progress::spinner(
+        ctx.out,
+        &format!("{key}: waiting for Smart Checklist to apply the checklist"),
+    );
+    // Quick at first, for a plugin that is only a moment behind, then backing
+    // off: a minute's wait is a dozen reads rather than hundreds.
+    let mut pause = std::time::Duration::from_millis(250);
+    while late(&confirmed) {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        std::thread::sleep(pause.min(left));
+        pause = (pause * 2).min(std::time::Duration::from_secs(10));
+        confirmed = crate::api::block_on(client.issue(key))?;
+    }
+    progress.finish();
+    Ok(confirmed)
+}
+
+/// Seconds [`settle`] waits when `checklist.apply_wait` is not set. Longer
+/// than the minute the plugin was seen to take, so that case passes with room.
+const DEFAULT_APPLY_WAIT: u64 = 90;
+
 /// Why an operation the server said it had applied is not in what the server now
 /// holds, or `None` when it is.
 ///
@@ -2749,8 +2812,9 @@ fn unapplied(action: &Action, confirmed: &RemoteIssue) -> Option<String> {
             match now {
                 Ok(now) if checklist::normalized(&now) == checklist::normalized(text) => None,
                 _ => Some(format!(
-                    "the checklist did not change: nothing on the server took up the `{}` \
-                     property",
+                    "the `{}` property was written, but the checklist has not changed: \
+                     Smart Checklist had not applied it by the end of the wait \
+                     (`checklist.apply_wait`), or nothing on the server reads it",
                     checklist::PROPERTY
                 )),
             }
@@ -2803,7 +2867,7 @@ fn moved_on(live: chrono::DateTime<chrono::Utc>, base: chrono::DateTime<chrono::
 
 #[allow(clippy::too_many_arguments)]
 fn execute(
-    _ctx: &mut Context,
+    ctx: &mut Context,
     engine: &Engine,
     client: &dyn JiraApi,
     key: &str,
@@ -2924,6 +2988,7 @@ fn execute(
 
     // Re-read what the server now holds and make that the new base.
     let confirmed = crate::api::block_on(client.issue(key))?;
+    let confirmed = settle(ctx, client, key, ops.iter().map(|o| &o.action), confirmed)?;
 
     // Before the file is rewritten from it, not after: the rewrite is what would
     // replace the user's edit with the server's answer, and an operation the
@@ -2952,9 +3017,18 @@ fn execute(
             )),
             error_kind: Some("unsupported_server".into()),
             hint: Some(
-                "the edit is still in the file and nothing was overwritten; \
-                 make the change in Jira and run `jired pull`"
-                    .into(),
+                if ops
+                    .iter()
+                    .any(|o| matches!(o.action, Action::SetChecklist { .. }))
+                {
+                    "the edit is still in the file and nothing was overwritten; once \
+                     Smart Checklist has applied it, `jired pull` takes it in and clears \
+                     the operation"
+                } else {
+                    "the edit is still in the file and nothing was overwritten; \
+                     make the change in Jira and run `jired pull`"
+                }
+                .into(),
             ),
             ops: reports,
         });

@@ -276,8 +276,12 @@ field dropped. The plugin's fields are found by name; `checklist.field` names
 the writable one where they are called something jired does not recognise.
 On Data Center the list goes to Smart Checklist's own issue property rather than
 the field, so it does not matter whether an administrator put the field on the
-issue type's edit screen; a write the plugin does not take up is reported as a
-failure with the edit left in the file. On Cloud it is the field.
+issue type's edit screen. The plugin applies it on its own schedule — it can
+take a minute — so `push` waits for the checklist to show, up to
+`checklist.apply_wait` seconds (90 by default; 0 does not wait). A write the
+plugin has not taken up by then is reported as a failure with the edit left in
+the file; if it lands later, the next `pull` takes it in without a conflict and
+clears the failed operation. On Cloud it is the field.
 
 ### Lossy regions and conflicts
 

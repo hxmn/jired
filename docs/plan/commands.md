@@ -154,7 +154,9 @@ JSON: `{"schema":"jired/fetch/1","fetched":123,"changed":17,"deleted":2}`.
 Fetch (unless `--no-fetch`) + three-way merge ([sync-algorithm.md](sync-algorithm.md)).
 Default: abort-on-conflict — exit 5, list conflicting files/fields, write nothing.
 `merge` writes git-style markers, records conflicts, **and still exits 5**: a
-non-zero status does not mean the working copy is unchanged. `--force` ≡ theirs
+non-zero status does not mean the working copy is unchanged. `ours` and `theirs`
+settle each conflict by taking that side: it is written, reported under
+`decided` rather than `conflicts`, and the pull exits 0. `--force` ≡ theirs
 everywhere, and both it and `--strategy theirs` list the issues whose local edits
 would be lost and ask before discarding them (`-y`/non-interactive proceeds).
 `--dry-run` renders the plan without writing.
@@ -313,9 +315,16 @@ and since 5.0, when the plugin moved its primary storage into the database, one
 of the storages it keeps in sync; Cloud's Forge app no longer reads it, which is
 why Cloud stays on the field. A property takes any document whether or not
 anything reads it — another checklist app behind the same field name, the
-plugin switched off for the project — so the re-read is the proof: a checklist
-that does not read back as what was sent fails the op at exit 10, with the edit
-left in the file. On a `NEW-*` issue either route is a follow-up after the
+plugin switched off for the project — so the re-read is the proof. The plugin
+takes the property up on its own schedule, a minute later on the instance this
+was reported against, so push re-reads until the checklist shows: quickly at
+first, backing off to every ten seconds, for up to `checklist.apply_wait`
+seconds (default 90; 0 reads once). A checklist that still does not read back as
+what was sent fails the op at exit 10, with the edit left in the file. If the
+plugin applies it after that, the next `pull` finds the same checklist in the
+file and on the server — an agreed change, not a conflict — and a pull that
+leaves an issue level with the server clears whatever the push journal still
+held for it. On a `NEW-*` issue either route is a follow-up after the
 create, because a plugin's field is rarely on the create screen. What goes out is
 the plugin's own syntax rebuilt from the section: `# ` for a `### ` group, `-`
 `~` `+` `x` for the four statuses the checkbox and its backticked name spell,
@@ -325,7 +334,10 @@ could write back.
 The dialect is learned from the field rather than assumed. jired writes the
 edit only once rendering the *unedited* checklist reproduces the text the server
 holds, compared line for line with the plugin's own trailing spaces and blank
-lines discarded; the note marker is whichever of `>>` and `>` that text uses.
+lines discarded; the note marker is whichever of `>>` and `>` that text uses,
+and `>` — the plugin's own, in every current vendor guide — where it has no note
+to learn from. `>>` is a nested quote to the plugin: `>> note` is stored as
+`> > note`, a note whose text begins with `> `.
 Where the two do not match there is something in the field this jired does not
 model — a mandatory item, a status the instance configured itself, a syntax this
 plugin version spells differently — and sending the field would drop it, so the

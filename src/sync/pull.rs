@@ -30,6 +30,14 @@ pub struct PullReport {
     pub renamed: Vec<Rename>,
     pub unchanged: usize,
     pub conflicts: Vec<Conflict>,
+    /// Conflicts `--strategy ours` or `theirs` settled by taking that side.
+    ///
+    /// Not under `conflicts`, which means one still standing — nothing
+    /// written, or markers to edit. These were written: `resolve --theirs`
+    /// listed the issue it had just resolved as a conflict, beside a `status`
+    /// that rightly showed none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decided: Vec<Conflict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub groups: Option<crate::sync::group::GroupReport>,
     /// Things that went wrong without failing the pull — a missing attachment,
@@ -163,6 +171,17 @@ impl PullReport {
         }
         for d in &self.deleted {
             out.say(format!("  gone      {}  (no longer in scope)", d.key));
+        }
+        let side = match self.strategy.as_str() {
+            "ours" => "kept the local copy",
+            _ => "took the server's copy",
+        };
+        for d in &self.decided {
+            out.say(format!(
+                "  decided   {}  [{}] — {side}",
+                d.key,
+                d.fields.join(", ")
+            ));
         }
         if self.conflicts.is_empty() {
             out.say(format!(
@@ -356,16 +375,24 @@ pub fn run_scoped(
                     continue;
                 }
                 if !outcome.conflicts.is_empty() {
-                    for field in &outcome.conflicts {
-                        engine
-                            .state
-                            .record_conflict(&row.key, field, None, None, None)?;
-                    }
-                    report.conflicts.push(Conflict {
+                    let conflict = Conflict {
                         key: row.key.clone(),
                         file: Some(file.clone()),
                         fields: outcome.conflicts.clone(),
-                    });
+                    };
+                    // Markers stand until someone edits them, so `merge` records
+                    // the conflict for `resolve --done`; `ours` and `theirs` have
+                    // already decided it.
+                    if strategy == Strategy::Merge {
+                        for field in &outcome.conflicts {
+                            engine
+                                .state
+                                .record_conflict(&row.key, field, None, None, None)?;
+                        }
+                        report.conflicts.push(conflict);
+                    } else {
+                        report.decided.push(conflict);
+                    }
                 }
 
                 let changes = field_changes(&base_doc, &remote_doc.doc, &fields);
@@ -460,6 +487,14 @@ pub fn run_scoped(
             &base_hash,
             &outcome.relative,
         )?;
+        // Level with the server, so whatever an earlier push left on the
+        // journal for this issue is spent: `--resume` would re-plan it from the
+        // file and find nothing. The case it exists for is a checklist the
+        // plugin applied after push stopped waiting — the op stayed `failed`
+        // in `status` after the pull had taken the change in.
+        if base_hash == outcome.content_hash {
+            engine.state.clear_ops(&write.key)?;
+        }
 
         if let Some(from) = &outcome.renamed_from {
             report.renamed.push(Rename {
@@ -536,6 +571,7 @@ pub fn run_scoped(
     report.created.sort_by(|a, b| a.key.cmp(&b.key));
     report.updated.sort_by(|a, b| a.key.cmp(&b.key));
     report.conflicts.sort_by(|a, b| a.key.cmp(&b.key));
+    report.decided.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(report)
 }
 

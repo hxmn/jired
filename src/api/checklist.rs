@@ -31,15 +31,18 @@ use serde_json::Value;
 /// Status names that say nothing beyond what the checkbox already shows.
 const IMPLIED: [(&str, bool); 2] = [("TO DO", false), ("DONE", true)];
 
-/// The documented spelling of an item's note.
+/// The spelling of an item's note when there is none to learn it from.
 ///
-/// Every vendor's formatting guide writes it `>>`, and so does the recorded
-/// fixture — but a live Data Center instance stores a single `>`, and the text
-/// field is the plugin's own serialization, so whatever it wrote there is what
-/// it reads back. [`note_marker`] therefore learns the spelling from the text
-/// the server holds and falls back to this one only when a checklist carries no
-/// note to learn from.
-pub const NOTE: &str = ">>";
+/// `> `, which is what every current vendor guide writes for an item's
+/// details, Cloud and Data Center alike. `>>` was the default once, read off
+/// the recorded fixture, and it is not a note marker: it is a nested quote —
+/// the guides spell one `> >` — so the plugin took `>> text` for a detail line
+/// whose text began with `> ` and stored it as `> > text`. Every note on a
+/// newly created issue came back with a stray `> ` in front of it, and pushing
+/// the repaired file sent `>>` again. [`note_marker`] still learns the spelling
+/// from the text the server holds, so an instance that does write `>>` keeps
+/// getting it back; this is only the fallback.
+pub const NOTE: &str = ">";
 
 /// The issue property Smart Checklist keeps a checklist's text in.
 ///
@@ -424,9 +427,9 @@ mod tests {
         assert!(item(&entries[4]).checked);
     }
 
-    /// The instance this was reported from writes a single `>`; the vendor's
-    /// guide and the recorded fixture write `>>`. A note read as an item of its
-    /// own would be pushed back as one.
+    /// The plugin writes a single `>`; an older reading of its guide wrote
+    /// `>>`, and text in that spelling may still be on a server. A note read as
+    /// an item of its own would be pushed back as one.
     #[test]
     fn both_spellings_of_a_note_are_read_as_a_note() {
         for text in ["+ Analyse\n> Ask first\n", "+ Analyse\n>> Ask first\n"] {
@@ -436,8 +439,9 @@ mod tests {
         }
         assert_eq!(note_marker("+ Analyse\n> Ask first\n"), ">");
         assert_eq!(note_marker("+ Analyse\n>> Ask first\n"), ">>");
-        // Nothing to learn from: the documented spelling.
-        assert_eq!(note_marker("+ Analyse\n"), NOTE);
+        // Nothing to learn from: the plugin's own spelling, since `>>` is a
+        // nested quote to it.
+        assert_eq!(note_marker("+ Analyse\n"), ">");
     }
 
     /// An empty checklist arrives as the plugin's dump of an empty list, and

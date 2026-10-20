@@ -65,9 +65,37 @@
       "type": "integer",
       "minimum": 0
     },
+    "decided": {
+      "type": "array",
+      "description": "Conflicts --strategy ours or theirs settled by taking that side; they were written, and nothing is left to do about them. Absent when there were none",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "fields"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
     "conflicts": {
       "type": "array",
-      "description": "Non-empty means nothing was written unless strategy is merge",
+      "description": "Conflicts still standing. Non-empty means nothing was written unless strategy is merge, which wrote markers. Under ours or theirs a conflict is settled, and reported in decided instead",
       "items": {
         "type": "object",
         "required": [

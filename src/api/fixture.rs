@@ -14,6 +14,21 @@ use crate::api::normalize::{self, FieldMap};
 use crate::api::{Deployment, Markup};
 use crate::error::{JiredError, Result};
 
+/// Where a late write waits on the issue it is for; see `late.json`.
+const LATE: &str = "_fixture_late";
+
+/// What Smart Checklist stores for the text it is given, as far as a live
+/// instance has shown it: a detail line is `> ` and the rest of that line, so
+/// `>> text` — to the plugin a nested quote — comes back as `> > text`.
+fn plugin_text(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.trim_start().strip_prefix('>') {
+            Some(rest) => format!("> {}\n", rest.trim_start()),
+            None => format!("{line}\n"),
+        })
+        .collect()
+}
+
 /// Every fixture failure points back at the directory that produced it.
 ///
 /// `JIRED_FIXTURES` is a supported escape hatch, not test-only plumbing: it is
@@ -53,6 +68,14 @@ pub struct FixtureClient {
     /// applying — a sub-task's `parent` on Data Center, a sub-task in a board
     /// move — and nothing in the response says so.
     ignored: std::collections::BTreeSet<String>,
+    /// Writes the "server" applies only some reads later: `"PUT /issue/DC-77/
+    /// properties/…" -> 2` shows from the third read of the issue on.
+    ///
+    /// Smart Checklist takes its property up on its own schedule — a minute,
+    /// on the instance that reported it — and a push that re-read once called
+    /// the write unapplied. Counted in reads rather than seconds, so a test
+    /// waits only as long as jired's own back-off does.
+    late: BTreeMap<String, u64>,
     next_id: Mutex<u64>,
 }
 
@@ -101,6 +124,9 @@ impl FixtureClient {
         let ignored = read_json(dir, "ignored.json")
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
+        let late = read_json(dir, "late.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
 
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -110,6 +136,7 @@ impl FixtureClient {
             calls: Mutex::new(Vec::new()),
             faults,
             ignored,
+            late,
             next_id: Mutex::new(90000),
         })
     }
@@ -289,6 +316,40 @@ impl FixtureClient {
     /// without this the "server" would forget each write as soon as the command
     /// that made it exited — and a multi-command test would silently assert
     /// against stale state.
+    /// One read of an issue, or of every issue for a search: a late write
+    /// counts it down, and lands once there is nothing left to count.
+    fn read_once(&self, key: Option<&str>) {
+        let mut changed = false;
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            for (k, issue) in issues.iter_mut() {
+                if key.is_some_and(|key| key != k) || issue.get(LATE).is_none() {
+                    continue;
+                }
+                let reads = issue[LATE]["reads"].as_u64().unwrap_or(0);
+                if reads > 0 {
+                    issue[LATE]["reads"] = json!(reads - 1);
+                    changed = true;
+                    continue;
+                }
+                let late = issue
+                    .as_object_mut()
+                    .and_then(|o| o.remove(LATE))
+                    .unwrap_or_default();
+                if let Some(field) = late["field"].as_str() {
+                    issue["fields"][field] = late["value"].clone();
+                }
+                // The plugin's own write moves `updated`, as any write does.
+                let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
+                issue["fields"]["updated"] = json!(now);
+                changed = true;
+            }
+        }
+        if changed {
+            self.persist();
+        }
+    }
+
     fn persist(&self) {
         let issues = self.issues.lock().expect("fixture lock");
         let all: Vec<&Value> = issues.values().collect();
@@ -707,6 +768,7 @@ impl JiraApi for FixtureClient {
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         self.check_fault("POST", "/search")?;
+        self.read_once(None);
         let issues = self.issues.lock().expect("fixture lock").clone();
         let mut matching: Vec<Value> = issues
             .values()
@@ -745,6 +807,7 @@ impl JiraApi for FixtureClient {
     }
 
     async fn issue(&self, key: &str) -> Result<RemoteIssue> {
+        self.read_once(Some(key));
         let v = self.issue_value(key)?;
         let mut issue = normalize::issue_from_json(&v, self.markup(), &self.field_map)?;
         self.complete(&mut issue);
@@ -925,10 +988,20 @@ impl JiraApi for FixtureClient {
                 issue["properties"][property] = value.clone();
                 if property == crate::api::checklist::PROPERTY {
                     if let Some(field) = &self.field_map.checklist_text {
-                        issue["fields"][field] = match value.as_str() {
+                        let stored = match value.as_str() {
                             Some("") | None => Value::Null,
-                            Some(_) => value,
+                            Some(text) => json!(plugin_text(text)),
                         };
+                        match self.late.get(&format!("PUT {path}")) {
+                            // Kept on the issue rather than in memory, so a
+                            // later process — the pull after the push — sees
+                            // the plugin catch up too.
+                            Some(reads) => {
+                                issue[LATE] =
+                                    json!({"reads": reads, "field": field, "value": stored})
+                            }
+                            None => issue["fields"][field] = stored,
+                        }
                     }
                 }
             }

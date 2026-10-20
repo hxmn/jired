@@ -218,6 +218,21 @@ pub const KEYS: &[KeyDef] = &[
               `## Checklist` is read from and written to",
     },
     KeyDef {
+        key: "checklist.apply_wait",
+        env: "JIRED_CHECKLIST_APPLY_WAIT",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Shaped {
+            check: whole_seconds,
+            expected: "expected a whole number of seconds",
+        },
+        doc: "How long push waits, in seconds, for Smart Checklist on Data Center \
+              to apply a checklist written through its issue property before \
+              calling the write unapplied (default 90; 0 does not wait). The \
+              plugin applies it on its own schedule, which can be a minute",
+    },
+    KeyDef {
         key: "ignored_custom_fields",
         env: "JIRED_IGNORED_CUSTOM_FIELDS",
         flag: None,
@@ -401,6 +416,11 @@ pub fn canonicalize(key: &str, value: &str) -> crate::error::Result<String> {
         }
         Kind::Shaped { check, expected } => check(value).ok_or_else(|| fail(expected.to_string())),
     }
+}
+
+/// A duration in whole seconds, canonicalized: `090` is `90`.
+fn whole_seconds(value: &str) -> Option<String> {
+    value.trim().parse::<u64>().ok().map(|n| n.to_string())
 }
 
 /// `<column>:asc|desc` for the issue picker, canonicalized.

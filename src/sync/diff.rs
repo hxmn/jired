@@ -370,23 +370,33 @@ fn compare(
     })
 }
 
+/// The section as the file spells it, notes included.
+///
+/// Without the notes a difference in nothing else was invisible: `diff
+/// --against remote` called a checklist level with the server while `pull`,
+/// which compares the whole of it, raised a conflict over a note.
 fn checklist_text(doc: &IssueDoc) -> String {
-    doc.checklist
-        .iter()
-        .map(|entry| match entry {
-            crate::doc::ChecklistEntry::Header(h) => format!("### {h}"),
-            crate::doc::ChecklistEntry::Item(i) => format!(
-                "- [{}] {}{}",
-                if i.checked { 'x' } else { ' ' },
-                i.status
-                    .as_deref()
-                    .map(|s| format!("`{s}` "))
-                    .unwrap_or_default(),
-                i.title
-            ),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = Vec::new();
+    for entry in &doc.checklist {
+        match entry {
+            crate::doc::ChecklistEntry::Header(h) => lines.push(format!("### {h}")),
+            crate::doc::ChecklistEntry::Item(i) => {
+                lines.push(format!(
+                    "- [{}] {}{}",
+                    if i.checked { 'x' } else { ' ' },
+                    i.status
+                        .as_deref()
+                        .map(|s| format!("`{s}` "))
+                        .unwrap_or_default(),
+                    i.title
+                ));
+                for note in i.description.iter().flat_map(|d| d.lines()) {
+                    lines.push(format!("  {note}"));
+                }
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn children_text(doc: &IssueDoc) -> String {
@@ -674,5 +684,34 @@ mod tests {
             .find(|s| s.section == "Checklist")
             .expect("the checklist section is diffed");
         assert!(section.unified.contains("+- [ ] `IN PROGRESS` Analyse"));
+    }
+
+    /// A note is part of the checklist `pull` merges, so a difference in one
+    /// alone is a difference here too.
+    #[test]
+    fn a_note_alone_is_a_checklist_change() {
+        let item = |note: &str| {
+            crate::doc::ChecklistEntry::Item(crate::doc::ChecklistItem {
+                checked: false,
+                status: None,
+                title: "Analyse".into(),
+                description: Some(note.into()),
+            })
+        };
+        let mut a = doc("s", "b");
+        a.checklist.push(item("Keep the window"));
+        let mut b = a.clone();
+        b.checklist = vec![item("> Keep the window")];
+        let d = compare("PROJ-1", Some(&a), Some(&b), "modified", true).expect("the note differs");
+        let section = d
+            .sections
+            .iter()
+            .find(|s| s.section == "Checklist")
+            .expect("the checklist section is diffed");
+        assert!(
+            section.unified.contains("+  > Keep the window"),
+            "{}",
+            section.unified
+        );
     }
 }

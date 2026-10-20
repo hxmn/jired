@@ -8,6 +8,44 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.20.0] — 2026-10-20
+
+### Breaking
+
+- **`pull --strategy ours`/`theirs` report what they settled under `decided`,
+  and exit 0.** These conflicts were written, but they used to be listed under
+  `conflicts` and the pull exited 5. That broke the schema's own promise: a
+  non-empty `conflicts` means nothing was written unless the strategy is
+  `merge`. `resolve --ours`/`--theirs`, which run that pull, had the same
+  problem: their `pull.conflicts` listed the issue they had just resolved.
+  `conflicts` now holds only conflicts still standing.
+
+### Added
+
+- **`checklist.apply_wait`**: how long `push` waits, in seconds, for Smart
+  Checklist on Data Center to apply a checklist (default 90; 0 reads once).
+
+### Fixed
+
+- **A checklist the plugin applies late is no longer reported as failed.**
+  Smart Checklist applies its issue property on its own schedule — a minute
+  later on the instance this was reported against. `push` re-read once, called
+  the write unapplied (exit 10), and left base behind, and the next `pull` raised
+  a conflict on the checklist. `push` now re-reads until the checklist shows,
+  backing off, for up to `checklist.apply_wait`. If it shows only after that,
+  the op still fails with the edit kept. The next `pull` then finds the same
+  checklist on both sides, takes it in without a conflict, and clears the op
+  from `pending_ops`: a pull that leaves an issue level with the server now
+  clears whatever the push journal still held for it.
+- **A note no longer comes back with a stray `> `.** With no note on the server
+  to learn the spelling from — any newly created issue — jired wrote a note as
+  `>> text`. The plugin reads that as a nested quote and stored `> > text`, so
+  the note read back as `> text`. It now writes `>`, the plugin's own spelling
+  in every vendor guide. A note already stored as `> > text` reads as `> text`;
+  remove the `> ` in the file and push, and it goes back as written.
+- **`diff` shows a checklist's notes.** It compared the checklist without them,
+  so a difference only in a note — the case above — showed as none while `pull`
+  reported a conflict on it.
 ## [0.19.0] — 2026-10-19
 
 ### Breaking
