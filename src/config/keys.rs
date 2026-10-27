@@ -271,6 +271,59 @@ pub const KEYS: &[KeyDef] = &[
         kind: Kind::Bool,
         doc: "Project closed sprints into sprints/ (default false)",
     },
+    // A team's sprint page has a house style for its worklog table; these let
+    // a workspace say it once rather than on every `report time`.
+    KeyDef {
+        key: "report.names",
+        env: "JIRED_REPORT_NAMES",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Enum(&["full", "short"]),
+        doc: "How report tables name a person: full (Ilya Ashbourne) or short \
+              (Ilya A). report time --names overrides it (default full)",
+    },
+    KeyDef {
+        key: "report.hours",
+        env: "JIRED_REPORT_HOURS",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Enum(&["hm", "decimal"]),
+        doc: "How report tables write a duration: hm (40h 30m) or decimal (40.5). \
+              report time --hours overrides it (default hm)",
+    },
+    KeyDef {
+        key: "report.sort",
+        env: "JIRED_REPORT_SORT",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Enum(&["hours", "key"]),
+        doc: "How report tables order rows: hours (most time first) or key (by \
+              issue key, people by name). report time --sort overrides it \
+              (default hours)",
+    },
+    KeyDef {
+        key: "report.links",
+        env: "JIRED_REPORT_LINKS",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Bool,
+        doc: "Make each key in a Markdown report table a link to the issue \
+              (default false); report time --links turns it on for one run",
+    },
+    KeyDef {
+        key: "report.total_label",
+        env: "JIRED_REPORT_TOTAL_LABEL",
+        flag: None,
+        sensitivity: Sensitivity::Plain,
+        ask: false,
+        kind: Kind::Text,
+        doc: "What report tables call the totals row and column (default \
+              Total); report time --total-label overrides it",
+    },
     // Written by the issue picker itself as well as by hand: a sort order
     // re-chosen on every run is not a preference, it is a chore.
     KeyDef {

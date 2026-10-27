@@ -8,6 +8,54 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.23.0] — 2026-10-27
+
+### Breaking
+
+- **A bare sprint number that is one sprint's id and another sprint's name is
+  refused (exit 2), naming both.** The id used to win silently. On an instance
+  whose sprint ids run two ahead of the names, `--sprint 17` meant `TSK Спринт
+  15`, and would still have meant it once `TSK Спринт 17` existed. A number is
+  now taken only when every reading of it finds the same sprint. The full name,
+  or the new `id:17`, says which.
+
+### Added
+
+- **`report time` tables in a page's own style.**
+  - `--names short` writes `Ilya A`; two people who would shorten alike keep
+    their full names.
+  - `--hours decimal` writes `40.5` for `40h 30m`.
+  - `--sort key` orders rows by key (`TSK-9` before `TSK-10`) and people by
+    name.
+  - `--links` makes each key in a Markdown table a link to the issue.
+  - `--total-label` names the totals row and column.
+
+  Each has a setting (`report.names`, `report.hours`, `report.sort`,
+  `report.links`, `report.total_label`), so a workspace states its house style
+  once.
+- **`--sprint id:N`** names a sprint by its id and nothing else.
+- **`differs` on each issue a staging command reports**: false when the edit put
+  the file back to the server's copy.
+
+### Fixed
+
+- **A dry run of a staging command leaves the files as they were.** `link …
+  --push --dry-run` wrote the link into the file and left it staged, so the next
+  plain `push` sent it. The same was true of `label`, `set`, `assign`, `parent`,
+  `sprint add|remove`, `comment`, `logwork`, `transition` and `attach`. Each
+  file is now put back to what it held before, not to base, so an edit already
+  waiting in it survives. A rename the change made is undone along with its
+  attachment folder, and an attachment the dry run copied in is taken back out.
+- **`--dry-run` works without `--push`** on every staging command and on
+  `create`. It is the dry run of the push the command would make; it used to be
+  refused.
+- **Undoing a staged change is not reported as staged.** `unlink` of a link that
+  was only ever staged put the file back to the server's copy and still said
+  `"staged": true`, with a push to run that had nothing to send.
+- **`users` no longer lists a person's account id among their other names.** A
+  payload or a mention with no display name carries the id where the name goes,
+  and that was counted as a name the person had once had.
+
 ## [0.22.0] — 2026-10-27
 
 Every common ask in the field report that prompted this version — counts per

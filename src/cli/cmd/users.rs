@@ -79,13 +79,21 @@ fn people(seen: BTreeMap<String, Sightings>) -> Vec<KnownPerson> {
         .filter(|(_, s)| !s.names.is_empty())
         .map(|(id, s)| {
             let mut names: Vec<(String, Seen)> = s.names.into_iter().collect();
+            // Every sighting counts, whatever name it came under.
+            let seen = names.iter().map(|(_, s)| s.times).sum();
+            // A payload with no display name, or a mention written as
+            // `@[nilsson.m](nilsson.m)`, carries the id where the name goes.
+            // That is not another name the person had, only the absence of
+            // one, so it is dropped wherever a real name was seen.
+            if names.iter().any(|(n, _)| !n.eq_ignore_ascii_case(&id)) {
+                names.retain(|(n, _)| !n.eq_ignore_ascii_case(&id));
+            }
             names.sort_by(|a, b| {
                 b.1.last
                     .cmp(&a.1.last)
                     .then_with(|| b.1.times.cmp(&a.1.times))
                     .then_with(|| a.0.cmp(&b.0))
             });
-            let seen = names.iter().map(|(_, s)| s.times).sum();
             let display_name = names[0].0.clone();
             KnownPerson {
                 mention: format!("@[{display_name}]({id})"),
@@ -236,6 +244,9 @@ mod tests {
         s.add("Maria Nilsson", at("2026-04-01T10:00:00Z"));
         s.add("Maria Bergman", at("2026-10-01T10:00:00Z"));
         s.add("Maria Nilsson", None);
+        // Where the server sent no display name, the id stands in for one:
+        // not a name she was ever known by.
+        s.add("nilsson.m", at("2026-10-02T10:00:00Z"));
         seen.entry("jd".into()).or_default().add("Jane D", None);
 
         let found = people(seen);
@@ -245,7 +256,7 @@ mod tests {
         assert_eq!(maria.account_id, "nilsson.m");
         assert_eq!(maria.mention, "@[Maria Bergman](nilsson.m)");
         assert_eq!(maria.also_known_as, ["Maria Nilsson"]);
-        assert_eq!(maria.seen, 4);
+        assert_eq!(maria.seen, 5);
         assert_eq!(found[1].display_name, "Jane D");
     }
 

@@ -68,8 +68,9 @@ pub struct AddArgs {
     #[arg(long)]
     pub push: bool,
 
-    /// With --push, show the API call without sending it
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 
@@ -83,8 +84,9 @@ pub struct RemoveArgs {
     #[arg(long)]
     pub push: bool,
 
-    /// With --push, show the API call without sending it
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 
@@ -228,8 +230,12 @@ pub fn run(g: &GlobalArgs, cmd: &SprintCmd, out: Out) -> Result<ExitCode> {
 pub(crate) fn resolve_sprint(ctx: &Context, wanted: &str) -> Result<SprintRow> {
     let wanted = wanted.trim();
     let sprints = crate::store::state::StateStore::open(&ctx.workspace)?.sprints()?;
-    if let Some(by_id) = sprints.iter().find(|s| s.id == wanted) {
-        return Ok(by_id.clone());
+    // `id:17` is the id and nothing else: the way out when a bare number is
+    // ambiguous below.
+    if let Some(id) = wanted.strip_prefix("id:").map(str::trim) {
+        if let Some(by_id) = sprints.iter().find(|s| s.id == id) {
+            return Ok(by_id.clone());
+        }
     }
     // An open sprint wins over a closed one of the same name: names repeat
     // across the years and nobody means the finished one.
@@ -246,9 +252,14 @@ pub(crate) fn resolve_sprint(ctx: &Context, wanted: &str) -> Result<SprintRow> {
     if let Some(hit) = named.first() {
         return Ok((*hit).clone());
     }
-    // A bare number that is no sprint's id is how people say a sprint out
-    // loud: `17` for `TSK Sprint 17`. Taken only when one sprint answers to it,
-    // because the number is a guess at a name and two answers mean it is not.
+    // A bare number is two things at once: a sprint's id, and how people say
+    // a sprint out loud — `17` for `TSK Sprint 17`. Where both readings find a
+    // sprint and they are different sprints, picking either is a guess, and
+    // the id winning silently put issues into `TSK Спринт 15` on an instance
+    // whose ids run two ahead of the names. So the number is taken only when
+    // every reading of it agrees.
+    let by_id = sprints.iter().find(|s| s.id == wanted);
+    let mut candidates: Vec<&SprintRow> = by_id.into_iter().collect();
     if is_id(wanted) {
         let number = wanted.trim_start_matches('0');
         let mut numbered: Vec<&SprintRow> = sprints
@@ -259,24 +270,33 @@ pub(crate) fn resolve_sprint(ctx: &Context, wanted: &str) -> Result<SprintRow> {
                     .next_back()
                     .is_some_and(|last| last.trim_start_matches('0') == number)
             })
+            .filter(|s| by_id.is_none_or(|i| i.id != s.id))
             .collect();
         numbered.sort_by_key(by_state);
-        if let [only] = numbered.as_slice() {
-            return Ok((*only).clone());
-        }
-        if numbered.len() > 1 {
-            let names: Vec<String> = numbered
-                .iter()
-                .map(|s| format!("{} ({})", s.name, s.id))
-                .collect();
-            return Err(JiredError::usage(format!(
-                "`{wanted}` could be any of {} sprints",
-                names.len()
-            ))
-            .with_detail("sprint", wanted.to_string())
-            .with_detail("known", serde_json::json!(names))
-            .with_hint(format!("name one of: {}", names.join(", "))));
-        }
+        candidates.extend(numbered);
+    }
+    if let [only] = candidates.as_slice() {
+        return Ok((*only).clone());
+    }
+    if candidates.len() > 1 {
+        let names: Vec<String> = candidates
+            .iter()
+            .map(|s| match by_id.is_some_and(|i| i.id == s.id) {
+                true => format!("{} (id {})", s.name, s.id),
+                false => format!("{} (named {wanted}, id {})", s.name, s.id),
+            })
+            .collect();
+        return Err(JiredError::usage(format!(
+            "`{wanted}` could be any of {} sprints",
+            names.len()
+        ))
+        .with_detail("sprint", wanted.to_string())
+        .with_detail("ambiguous", true)
+        .with_detail("known", serde_json::json!(names))
+        .with_hint(format!(
+            "name the sprint in full, or write `id:{wanted}` for the id: {}",
+            names.join(", ")
+        )));
     }
 
     let open: Vec<String> = sprints
@@ -757,7 +777,9 @@ fn live_sprint(ctx: &Context, client: &dyn JiraApi, wanted: &str) -> Result<Spri
         // the server for the sprint regardless, so it is the server that says
         // whether the id is real, and refusing it here would make a workspace
         // that has not fetched a dead end.
-        Err(_) if is_id(wanted) => wanted.trim().to_string(),
+        Err(e) if is_id(wanted) && e.details.get("ambiguous").is_none() => {
+            wanted.trim().to_string()
+        }
         Err(e) => return Err(e),
     };
     crate::api::block_on(client.sprint(&id))

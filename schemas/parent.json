@@ -38,6 +38,10 @@
           "changed": {
             "type": "boolean",
             "description": "False when the issue was already under that parent"
+          },
+          "differs": {
+            "type": "boolean",
+            "description": "False when the edit left the file the same as the server's copy — undoing a change that was only staged — so there is nothing for push to send"
           }
         }
       }

@@ -78,8 +78,9 @@ pub struct CreateArgs {
     /// Create it on the server now instead of leaving it staged
     #[arg(long)]
     pub push: bool,
-    /// With --push, show the API call without sending it
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
     /// With --push, read the issue back and report any field the server does
     /// not hold as the file asked (exit 10)
@@ -135,7 +136,8 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
         .state
         .record_new_issue(&key, &draft.project, &outcome.relative)?;
 
-    let pushed = if args.push {
+    // `--dry-run` alone is a dry run of the push: the plan is what it is for.
+    let pushed = if args.push || args.dry_run {
         let push = crate::cli::cmd::push::PushArgs {
             issues: vec![key.clone()],
             dry_run: args.dry_run,

@@ -19,8 +19,9 @@ pub struct AttachArgs {
     /// Upload immediately instead of leaving the files staged
     #[arg(long)]
     pub push: bool,
-    /// With --push, show the API call without sending it
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 
@@ -70,6 +71,8 @@ pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
     std::fs::create_dir_all(&dir)?;
 
     let mut staged = Vec::new();
+    // What each name held before, for a dry run to put back.
+    let mut replaced: Vec<(String, Option<Vec<u8>>)> = Vec::new();
     for source in &args.files {
         // Read through the size check first: copying a file the server will
         // reject just leaves rubbish in the folder.
@@ -78,6 +81,7 @@ pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| JiredError::usage(format!("{} has no filename", source.display())))?;
+        replaced.push((name.to_string(), std::fs::read(dir.join(name)).ok()));
         std::fs::write(dir.join(name), &bytes)?;
         staged.push(name.to_string());
         out.say(format!(
@@ -86,8 +90,20 @@ pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
         ));
     }
 
-    let pushed = if args.push {
-        let report = crate::cli::cmd::edit::push_one(&mut ctx, &key, args.dry_run)?;
+    let pushed = if args.push || args.dry_run {
+        let report = crate::cli::cmd::edit::push_one(&mut ctx, &key, args.dry_run);
+        // The copies existed only for the dry run to plan the uploads from;
+        // left in the folder, the next plain `push` uploaded them.
+        if args.dry_run {
+            for (name, previous) in replaced.iter().rev() {
+                let path = dir.join(name);
+                match previous {
+                    Some(bytes) => std::fs::write(&path, bytes)?,
+                    None => std::fs::remove_file(&path)?,
+                }
+            }
+        }
+        let report = report?;
         crate::cli::cmd::edit::report_push(&report, out);
         Some(report)
     } else {

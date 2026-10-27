@@ -788,6 +788,117 @@ pub enum Columns {
     People,
 }
 
+/// How a report table spells what it shows, for a page that has its own way.
+///
+/// The default is what reads best on a terminal. A team's sprint page has a
+/// house style — `Ilya A` for a person, `40.5` for a duration, rows in key
+/// order, keys as links — and a table that has to be retyped into it saves
+/// nobody anything. Each part is a flag on `report time` and a `report.*`
+/// setting, so a workspace says it once.
+#[derive(Debug, Clone)]
+pub struct TableStyle {
+    /// `Ilya A` rather than `Ilya Ashbourne`.
+    pub short_names: bool,
+    /// `40.5` hours rather than `40h 30m`.
+    pub decimal_hours: bool,
+    /// Rows in key order, people by name, rather than most time first.
+    pub by_key: bool,
+    /// The browse URL to make each key a Markdown link to, when wanted.
+    pub links: Option<String>,
+    /// What the totals row and column are called.
+    pub total: String,
+}
+
+impl Default for TableStyle {
+    fn default() -> Self {
+        Self {
+            short_names: false,
+            decimal_hours: false,
+            by_key: false,
+            links: None,
+            total: "Total".into(),
+        }
+    }
+}
+
+impl TableStyle {
+    /// A table cell: the duration, or nothing for a day nobody booked — a dot
+    /// or a `0m` in every empty cell is noise in a pasted table.
+    fn figure(&self, seconds: u64) -> String {
+        match (seconds, self.decimal_hours) {
+            (0, _) => String::new(),
+            (s, true) => decimal_hours(s),
+            (s, false) => format_hm(s),
+        }
+    }
+
+    fn key(&self, key: &str) -> String {
+        match &self.links {
+            Some(base) => format!("[{key}]({}/browse/{key})", base.trim_end_matches('/')),
+            None => key.to_string(),
+        }
+    }
+
+    /// Every person's label, in the order given. Short where asked for, and
+    /// full for any two whose short forms would be the same — two `Ilya A`
+    /// columns would make the table say nothing about either.
+    fn names(&self, people: &[&Person]) -> Vec<String> {
+        let short: Vec<String> = people
+            .iter()
+            .map(|p| match self.short_names {
+                true => short_name(&p.name),
+                false => p.name.clone(),
+            })
+            .collect();
+        short
+            .iter()
+            .zip(people)
+            .map(|(s, p)| match short.iter().filter(|o| *o == s).count() {
+                1 => s.clone(),
+                _ => p.name.clone(),
+            })
+            .collect()
+    }
+
+    /// The people in the order the columns or rows take.
+    fn order<'a>(&self, people: &'a [Person]) -> Vec<&'a Person> {
+        let mut ordered: Vec<&Person> = people.iter().collect();
+        if self.by_key {
+            ordered.sort_by_key(|p| p.name.to_lowercase());
+        }
+        ordered
+    }
+}
+
+/// `Ilya Ashbourne` → `Ilya A`: the first name and the initial of the last.
+/// A one-word name has nothing to shorten.
+pub fn short_name(name: &str) -> String {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    match words.as_slice() {
+        [] => String::new(),
+        [only] => only.to_string(),
+        [first, .., last] => {
+            let initial: String = last.chars().take(1).collect();
+            format!("{first} {initial}")
+        }
+    }
+}
+
+/// Hours as a decimal with no more places than it needs: `40.5`, `8`, `0.25`.
+pub fn decimal_hours(seconds: u64) -> String {
+    let text = format!("{:.2}", seconds as f64 / 3600.0);
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// `TSK-9` before `TSK-10`: the project, then the number as a number.
+fn key_order(a: &str, b: &str) -> std::cmp::Ordering {
+    let split = |k: &str| match k.rsplit_once('-') {
+        Some((p, n)) => (p.to_string(), n.parse::<u64>().unwrap_or(u64::MAX)),
+        None => (k.to_string(), u64::MAX),
+    };
+    split(a).cmp(&split(b)).then_with(|| a.cmp(b))
+}
+
 /// A plain table: the cells already formatted, the last row the totals.
 pub struct Table {
     pub head: Vec<String>,
@@ -844,72 +955,79 @@ impl Table {
 
 impl TimeReport {
     /// People down the side, a column per day, a total column and row.
-    pub fn days_table(&self) -> Table {
+    pub fn days_table(&self, style: &TableStyle) -> Table {
+        let people = style.order(&self.people);
+        let names = style.names(&people);
         let mut head = vec!["Person".to_string()];
         head.extend(self.dates.iter().map(|d| d.to_string()));
-        head.push("Total".into());
-        let mut rows: Vec<Vec<String>> = self
-            .people
+        head.push(style.total.clone());
+        let mut rows: Vec<Vec<String>> = people
             .iter()
-            .map(|p| {
-                let mut row = vec![p.name.clone()];
-                row.extend(p.by_day.iter().map(|s| figure(*s)));
-                row.push(figure(p.seconds));
+            .zip(names)
+            .map(|(p, name)| {
+                let mut row = vec![name];
+                row.extend(p.by_day.iter().map(|s| style.figure(*s)));
+                row.push(style.figure(p.seconds));
                 row
             })
             .collect();
-        let mut total = vec!["Total".to_string()];
-        total.extend(self.by_day.iter().map(|s| figure(*s)));
-        total.push(figure(self.seconds));
+        let mut total = vec![style.total.clone()];
+        total.extend(self.by_day.iter().map(|s| style.figure(*s)));
+        total.push(style.figure(self.seconds));
         rows.push(total);
         Table { head, rows }
     }
 
     /// Issues down the side, a column per person, a total column and row: the
     /// worklog table a sprint review pastes into its page.
-    pub fn people_table(&self) -> Table {
+    pub fn people_table(&self, style: &TableStyle) -> Table {
+        let people = style.order(&self.people);
         let mut head = vec!["Issue".to_string()];
-        head.extend(self.people.iter().map(|p| p.name.clone()));
-        head.push("Total".into());
-        let mut rows: Vec<Vec<String>> = self
-            .issues
+        head.extend(style.names(&people));
+        head.push(style.total.clone());
+        let mut issues: Vec<&IssueTotal> = self.issues.iter().collect();
+        if style.by_key {
+            issues.sort_by(|a, b| key_order(&a.key, &b.key));
+        }
+        let mut rows: Vec<Vec<String>> = issues
             .iter()
             .map(|i| {
+                let key = style.key(&i.key);
                 let label = match i.summary.is_empty() {
-                    true => i.key.clone(),
-                    false => format!("{} {}", i.key, i.summary),
+                    true => key,
+                    false => format!("{key} {}", i.summary),
                 };
                 let mut row = vec![label];
-                for p in &self.people {
+                for p in &people {
                     let booked = i
                         .people
                         .iter()
                         .find(|s| s.name == p.name && s.account_id == p.account_id)
                         .map_or(0, |s| s.seconds);
-                    row.push(figure(booked));
+                    row.push(style.figure(booked));
                 }
-                row.push(figure(i.seconds));
+                row.push(style.figure(i.seconds));
                 row
             })
             .collect();
-        let mut total = vec!["Total".to_string()];
-        total.extend(self.people.iter().map(|p| figure(p.seconds)));
-        total.push(figure(self.seconds));
+        let mut total = vec![style.total.clone()];
+        total.extend(people.iter().map(|p| style.figure(p.seconds)));
+        total.push(style.figure(self.seconds));
         rows.push(total);
         Table { head, rows }
     }
 
     /// The table `columns` asks for.
-    pub fn table(&self, columns: Columns) -> Table {
+    pub fn table(&self, columns: Columns, style: &TableStyle) -> Table {
         match columns {
-            Columns::Days => self.days_table(),
-            Columns::People => self.people_table(),
+            Columns::Days => self.days_table(style),
+            Columns::People => self.people_table(style),
         }
     }
 
     /// The heading and freshness lines, then the table lined up for a
     /// terminal.
-    pub fn render_table(&self, out: Out, columns: Columns) {
+    pub fn render_table(&self, out: Out, columns: Columns, style: &TableStyle) {
         use crate::style::{self, BOLD, DIM};
         out.say(style::out(BOLD, self.title()));
         match self.freshness() {
@@ -922,7 +1040,7 @@ impl TimeReport {
             return;
         }
         out.say("");
-        for line in self.table(columns).text(48) {
+        for line in self.table(columns, style).text(48) {
             out.say(line);
         }
     }
@@ -943,15 +1061,6 @@ impl TimeReport {
                 None => "",
             }
         )
-    }
-}
-
-/// A table cell: the duration, or nothing for a day nobody booked — a dot or a
-/// `0m` in every empty cell is noise in a pasted table.
-fn figure(seconds: u64) -> String {
-    match seconds {
-        0 => String::new(),
-        s => format_hm(s),
     }
 }
 
@@ -1107,6 +1216,61 @@ mod tests {
             started: started.into(),
             body: String::new(),
         }
+    }
+
+    /// A sprint page's house style: `Ilya A`, `40.5`, `TSK-9` before `TSK-10`.
+    #[test]
+    fn a_table_can_be_spelled_the_way_a_page_spells_it() {
+        assert_eq!(short_name("Ilya Ashbourne"), "Ilya A");
+        assert_eq!(short_name("Maria Anna Bergman"), "Maria B");
+        assert_eq!(short_name("Jane"), "Jane");
+        assert_eq!(decimal_hours(40 * 3600 + 1800), "40.5");
+        assert_eq!(decimal_hours(8 * 3600), "8");
+        assert_eq!(decimal_hours(15 * 60), "0.25");
+        assert_eq!(
+            key_order("TSK-9", "TSK-10"),
+            std::cmp::Ordering::Less,
+            "by number, not by text"
+        );
+    }
+
+    /// Two people who shorten alike keep their full names, or the table would
+    /// have two columns headed `Ilya A`.
+    #[test]
+    fn short_names_that_collide_stay_full() {
+        let issues = vec![issue(
+            "PROJ-142",
+            "Fix login flow",
+            vec![
+                booked("Ilya Ashbourne", "1h", "2026-08-20T09:00:00Z"),
+                booked("Ilya Abelson", "2h", "2026-08-20T09:00:00Z"),
+                booked("Jane Doe", "3h", "2026-08-20T09:00:00Z"),
+            ],
+        )];
+        let report = TimeReport::build(&week(), "", &issues);
+        let style = TableStyle {
+            short_names: true,
+            decimal_hours: true,
+            by_key: true,
+            links: Some("https://jira.example".into()),
+            total: "Итого".into(),
+        };
+        let table = report.people_table(&style);
+        assert_eq!(
+            table.head,
+            ["Issue", "Ilya Abelson", "Ilya Ashbourne", "Jane D", "Итого"]
+        );
+        assert_eq!(
+            table.rows[0],
+            [
+                "[PROJ-142](https://jira.example/browse/PROJ-142) Fix login flow",
+                "2",
+                "1",
+                "3",
+                "6"
+            ]
+        );
+        assert_eq!(table.rows[1][0], "Итого");
     }
 
     fn week() -> Window {
@@ -1440,14 +1604,14 @@ mod tests {
         ];
         let report = TimeReport::build(&week(), "", &issues);
         assert_eq!(
-            report.people_table().markdown(),
+            report.people_table(&TableStyle::default()).markdown(),
             "| Issue | Jane D | Ilya A | Total |\n\
              |---|---:|---:|---:|\n\
              | PROJ-142 Fix \\| login | 2h 30m | 1h | 3h 30m |\n\
              | PROJ-150 Rotate | 1h |  | 1h |\n\
              | Total | 3h 30m | 1h | 4h 30m |"
         );
-        let days = report.days_table().markdown();
+        let days = report.days_table(&TableStyle::default()).markdown();
         assert!(days.starts_with("| Person | 2026-08-16 |"), "{days}");
         assert!(days.ends_with("| 4h 30m |"), "{days}");
     }

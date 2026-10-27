@@ -35,8 +35,9 @@ pub struct AssignArgs {
     /// Apply immediately instead of leaving the change staged
     #[arg(long)]
     pub push: bool,
-    /// With --push, show the API call without sending it
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 

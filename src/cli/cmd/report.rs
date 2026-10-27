@@ -10,7 +10,7 @@ use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
 use crate::report::issues::{Dim, Facts, IssuesReport};
-use crate::report::{Columns, Lookup, Source, Window, MAX_DAYS};
+use crate::report::{Columns, Lookup, Source, TableStyle, Window, MAX_DAYS};
 use crate::sync::Engine;
 use crate::tui::report::ReportScreen;
 use clap::{Args, Subcommand};
@@ -93,6 +93,50 @@ pub struct TimeArgs {
     /// Break each person down into the issues they booked against
     #[arg(long)]
     pub show_issues: bool,
+
+    /// A person as `Ilya A` (short) or `Ilya Ashbourne` (full)
+    /// [config: report.names]
+    #[arg(long, value_name = "FORM")]
+    pub names: Option<Names>,
+
+    /// Durations as `40h 30m` (hm) or `40.5` (decimal)
+    /// [config: report.hours]
+    #[arg(long, value_name = "FORM")]
+    pub hours: Option<Hours>,
+
+    /// Rows most time first (hours), or by key and people by name (key)
+    /// [config: report.sort]
+    #[arg(long, value_name = "ORDER")]
+    pub sort: Option<Sort>,
+
+    /// With --format md, make each key a link to the issue [config: report.links]
+    #[arg(long)]
+    pub links: bool,
+
+    /// What the totals row and column are called [config: report.total_label]
+    #[arg(long, value_name = "TEXT")]
+    pub total_label: Option<String>,
+}
+
+/// How a person is named in a table.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Names {
+    Full,
+    Short,
+}
+
+/// How a duration is written in a table.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hours {
+    Hm,
+    Decimal,
+}
+
+/// What order a table's rows are in.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sort {
+    Hours,
+    Key,
 }
 
 /// What `--rollup` folds into what.
@@ -225,6 +269,7 @@ fn time(g: &GlobalArgs, args: &TimeArgs, out: Out) -> Result<ExitCode> {
         last_fetch_age_seconds: last_fetch.map(|at| (now - at).num_seconds().max(0)),
     };
     let report = source.report_in(&window);
+    let style = table_style(&mut ctx, &engine, args)?;
 
     // The screen is a way of reading the report, not of producing it: the
     // document is emitted either way, and a pipe or `--no-input` gets the table.
@@ -248,11 +293,11 @@ fn time(g: &GlobalArgs, args: &TimeArgs, out: Out) -> Result<ExitCode> {
         _ => match args.format {
             Format::Md => {
                 if !report.people.is_empty() {
-                    out.say(report.table(args.columns).markdown());
+                    out.say(report.table(args.columns, &style).markdown());
                 }
             }
             Format::Text if args.columns == Columns::People => {
-                report.render_table(out, args.columns)
+                report.render_table(out, args.columns, &style)
             }
             Format::Text => report.render(out, args.show_issues),
         },
@@ -260,6 +305,45 @@ fn time(g: &GlobalArgs, args: &TimeArgs, out: Out) -> Result<ExitCode> {
 
     out.emit("report-time", &report);
     Ok(ExitCode::Success)
+}
+
+/// The table's house style: each flag, else its `report.*` setting, else the
+/// terminal's defaults. A flag beats the setting so a one-off table can differ
+/// from the page the setting was made for.
+fn table_style(ctx: &mut Context, engine: &Engine, args: &TimeArgs) -> Result<TableStyle> {
+    let setting = |ctx: &mut Context, key: &str| -> Result<Option<String>> {
+        Ok(ctx.resolver.get_value(key)?.map(|v| v.to_lowercase()))
+    };
+    let short_names = match args.names {
+        Some(n) => n == Names::Short,
+        None => setting(ctx, "report.names")?.as_deref() == Some("short"),
+    };
+    let decimal_hours = match args.hours {
+        Some(h) => h == Hours::Decimal,
+        None => setting(ctx, "report.hours")?.as_deref() == Some("decimal"),
+    };
+    let by_key = match args.sort {
+        Some(s) => s == Sort::Key,
+        None => setting(ctx, "report.sort")?.as_deref() == Some("key"),
+    };
+    // Links are Markdown; on a terminal a key is already what to type.
+    let links = (args.format == Format::Md
+        && (args.links || ctx.resolver.get_bool("report.links")?.unwrap_or(false)))
+    .then(|| engine.base_url().to_string());
+    let total = match &args.total_label {
+        Some(t) => t.clone(),
+        None => ctx
+            .resolver
+            .get_value("report.total_label")?
+            .unwrap_or_else(|| "Total".into()),
+    };
+    Ok(TableStyle {
+        short_names,
+        decimal_hours,
+        by_key,
+        links,
+        total,
+    })
 }
 
 /// The window the flags name: `--since`/`--until` as dates, both counted;

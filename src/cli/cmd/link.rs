@@ -44,8 +44,9 @@ pub struct LinkArgs {
     #[arg(long)]
     pub push: bool,
 
-    /// With --push, show the API calls without sending them
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 
@@ -65,8 +66,9 @@ pub struct UnlinkArgs {
     #[arg(long)]
     pub push: bool,
 
-    /// With --push, show the API calls without sending them
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 

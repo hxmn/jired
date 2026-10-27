@@ -45,8 +45,9 @@ pub struct LogworkArgs {
     #[arg(long)]
     pub push: bool,
 
-    /// With --push, show the API call without sending it
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 
@@ -74,6 +75,15 @@ pub fn run(g: &GlobalArgs, args: &LogworkArgs, out: Out) -> Result<ExitCode> {
     let started = booking.started.clone();
     let key = crate::project::naming::key_from_input(&booking.issue)?;
 
+    // A dry run stages to have something to plan from, and puts the file
+    // back afterwards: left in place, the next plain `push` sent it.
+    let before = match args.dry_run {
+        true => Some(crate::cli::cmd::edit::Snapshot::take(
+            &mut ctx,
+            std::slice::from_ref(&key),
+        )?),
+        false => None,
+    };
     let file = edit_issue(&mut ctx, &key, |doc| {
         doc.worklogs.push(WorklogEntry {
             id: WorklogId::New,
@@ -87,8 +97,12 @@ pub fn run(g: &GlobalArgs, args: &LogworkArgs, out: Out) -> Result<ExitCode> {
         Ok(())
     })?;
 
-    let pushed = if args.push {
-        let report = push_one(&mut ctx, &key, args.dry_run)?;
+    let pushed = if args.push || args.dry_run {
+        let report = push_one(&mut ctx, &key, args.dry_run);
+        if let Some(before) = before {
+            before.restore(&mut ctx)?;
+        }
+        let report = report?;
         report_push(&report, out);
         Some(report)
     } else {

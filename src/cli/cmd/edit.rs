@@ -251,6 +251,56 @@ pub fn push_these(ctx: &mut Context, keys: &[String], dry_run: bool) -> Result<P
     crate::sync::push::run(ctx, &args)
 }
 
+/// The files a staging command is about to write, as they were, so a dry run
+/// can put them back.
+///
+/// A dry run stages first, because the push plans from the file — and then
+/// used to leave what it staged behind, where the next plain `push` sent it.
+/// What it held before is restored rather than base, so edits that were
+/// already waiting in the file survive the dry run too.
+#[derive(Debug, Clone, Default)]
+pub struct Snapshot {
+    /// Each issue's file name and text, as they were.
+    files: Vec<(String, String, String)>,
+}
+
+impl Snapshot {
+    /// Remember the files of `keys`, the ones the workspace has.
+    pub fn take(ctx: &mut Context, keys: &[String]) -> Result<Self> {
+        let engine = Engine::open(ctx)?;
+        let mut files = Vec::new();
+        for key in keys {
+            let key = crate::project::naming::key_from_input(key)?;
+            if let Some(found) = engine.projector.locate(&key)? {
+                let text = engine.projector.read_raw(&found.relative)?;
+                files.push((key, found.relative, text));
+            }
+        }
+        Ok(Self { files })
+    }
+
+    /// Add what another snapshot remembered to this one.
+    pub fn extend(&mut self, other: Snapshot) {
+        self.files.extend(other.files);
+    }
+
+    /// Put every file back as it was: under its old name, if staging renamed
+    /// it — the attachment folder moves with it — and with its old text.
+    pub fn restore(self, ctx: &mut Context) -> Result<()> {
+        let engine = Engine::open(ctx)?;
+        for (key, relative, text) in self.files {
+            if let Some(now) = engine.projector.locate(&key)? {
+                if now.relative != relative {
+                    engine.projector.rename(&now.relative, &relative)?;
+                }
+            }
+            let path = engine.projector.path_of(&relative);
+            std::fs::write(&path, text).map_err(crate::error::io_ctx("write", &path))?;
+        }
+        Ok(())
+    }
+}
+
 /// Report the outcome of an inline `--push`.
 ///
 /// Without this the user is told only that "the push failed": the report holds

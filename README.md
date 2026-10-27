@@ -418,7 +418,7 @@ the filename you were just editing instead of retyping the key.
 | `attach ISSUE FILE…` | stage an upload into the issue's attachment folder |
 | `attachments pull [ISSUES…]` / `list` | download attachment content over the stubs, or show what is present |
 | `logwork [ISSUE] [TIME]` | book time — `jired logwork PROJ-142 "2h 30m"`; with either missing it opens a form, `--push` sends it straight away |
-| `report time` | who booked how much time, a row per person and a column per day, off the files already on disk; `--days N` (default 7) or `--since DATE --until DATE`, and `--show-issues`, which the screen can change while it is open. People are grouped by account, so a renamed one is one row. `--rollup parent` folds sub-tasks into their parent, `--columns people` turns it into issues against people, and `--format md` prints a Markdown table with a total row: `jired report time --since 2026-10-19 --until 2026-10-23 --rollup parent --columns people --format md` |
+| `report time` | who booked how much time, a row per person and a column per day, off the files already on disk; `--days N` (default 7) or `--since DATE --until DATE`, and `--show-issues`, which the screen can change while it is open. People are grouped by account, so a renamed one is one row. `--rollup parent` folds sub-tasks into their parent, `--columns people` turns it into issues against people, and `--format md` prints a Markdown table with a total row: `jired report time --since 2026-10-19 --until 2026-10-23 --rollup parent --columns people --format md`. `--names short` (`Ilya A`), `--hours decimal` (`40.5`), `--sort key`, `--links` and `--total-label` match a page's own style, and the `report.*` settings make that the workspace's default |
 | `log [ISSUE]` | what happened, newest first — every issue in the workspace, or just one; field changes, comments and worklogs on one timeline, a short change as `from → to` and an edited description as a diff; `--limit` takes a count (`20`, the default) or a span back from now (`1d`, `2w`, `36h`, `90m`), `--links` makes the keys clickable, `--refresh` asks the server; `--field Sprint` is one field's history instead, a flat row per change with its date and author |
 | `report issues --by F[,F]` | how many issues by one field, or a matrix of two — `--by sprint,type` is issues per sprint and type, with totals; off the files by default, from the server with `--jql Q`; `--format md` prints a table to paste into a page |
 | `search "project = PROJ AND …"` | run JQL and print the matches (`--jql` is the same thing spelled as a flag); every row carries type, parent, sprint, versions and labels, `--columns key,type,parent,sprint` prints them like `list --columns`, `--keys` prints keys alone, `--count` only how many match, `--limit` pages up to 1000 |
@@ -665,12 +665,16 @@ it means the same thing on a workflow that says `Done` and one that says `Гот
 issue's sprint, alongside `transition`, `assign` and `comment`: they write the
 frontmatter and stage it, so the change shows up in `status` and `diff` and goes
 out with the next `push` — or immediately with `--push`. `--sprint` takes a name
-or an id — or the number that ends a name, `17` for `TSK Sprint 17` — matched
-against the sprints this workspace has fetched, and a name no board knows is an
+or an id — or the number that ends a name, `17` for `TSK Sprint 17`, when that
+cannot also be another sprint's id (then it is an error naming both, and
+`id:17` or the full name says which) — matched against the sprints this
+workspace has fetched, and a name no board knows is an
 error rather than a push that quietly skips it. `create --sprint` resolves it the
 same way. An issue already in the sprint is left alone and said so, rather than
 staged as a change that does nothing. Without `--push` the `--json` document
-says `"staged": true` and gives the push to run under `next`.
+says `"staged": true` and gives the push to run under `next`. `--dry-run`, on
+this and every other staging command, shows the push and leaves the files as
+they were.
 
 A sub-task is the one issue none of this reaches: it is not a board item, and
 takes its sprint from whatever its parent is in. `push` refuses a `sprint:` on

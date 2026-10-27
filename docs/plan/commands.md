@@ -700,7 +700,7 @@ count sprints nobody in this workspace pulled. `--format md` prints a Markdown
 pipe table, names left and counts right, ready to paste into a page.
 JSON: `{"schema":"jired/report-issues/1","by":["sprint","type"],"source":"workspace"|"server","jql","total","columns":["Bug","Story"],"rows":[{"value":"Sprint 41","counts":{"Bug":2,"Story":5},"total":7}],"totals":{"Bug":2,"Story":5}}`.
 
-### `jired report time [--days N | --since DATE [--until DATE]] [--rollup parent] [--columns days|people] [--format text|md] [--show-issues]`
+### `jired report time [--days N | --since DATE [--until DATE]] [--rollup parent] [--columns days|people] [--format text|md] [--names full|short] [--hours hm|decimal] [--sort hours|key] [--links] [--total-label T] [--show-issues]`
 Who booked how much time, totalled off the `## Worklogs` sections of the files
 already on disk. A read, so it works offline and costs one pass over the working
 copy; what it cannot see is time booked since the last `pull`, which is why
@@ -787,6 +787,17 @@ table, ready to paste into a page — empty cells where nothing was booked, `2h
 is people against days). Neither opens the screen. The parent-level worklog
 table for a week is one command:
 `jired report time --since 2026-10-19 --until 2026-10-23 --rollup parent --columns people --format md`.
+
+A page has its own spelling for that table, and one that has to be retyped into
+it saves nobody anything. `--names short` labels a person `Ilya A` — first name,
+last initial — except where two people would shorten alike, who keep their full
+names. `--hours decimal` writes `40.5` for `40h 30m`. `--sort key` puts the rows
+in key order (`TSK-9` before `TSK-10`) and the people in name order, where the
+default is most time first. `--links` makes each key in a Markdown table a link
+to the issue. `--total-label` names the totals row and column. Each has a
+setting — `report.names`, `report.hours`, `report.sort`, `report.links`,
+`report.total_label` — so a workspace states its house style once, and the flag
+beats the setting for a one-off table.
 
 ### `jired create [--type Story] [--template T] [--summary S] [-i]`
 Writes `NEW-<6hex>. Summary.md` (D14) from template; real key assigned on push
@@ -1169,8 +1180,9 @@ a sprint by name, so a rename ends with a hint to `jired pull` and bring `sprint
 in line. `edit` with no flags at all is exit 7 before anything is fetched.
 
 `SPRINT` is a name or an id, matched the way `sprint add` matches it — against the
-cached sprints, preferring an open one where a name repeats. A bare number that
-the cache has never seen is still taken as an id, because the sprint is fetched
+cached sprints, preferring an open one where a name repeats. A bare number the
+cache finds two different sprints for is exit 2, as there; one that the cache has
+never seen is still taken as an id, because the sprint is fetched
 from the server either way and it is the server that says whether the id is real.
 
 Two things Jira refuses with a 400 that names nothing, refused here at plan time
@@ -1464,9 +1476,12 @@ the key order and that its last entry is the one a move can act on.
 
 `--sprint` takes a name or an id, matched against the sprints the workspace has
 fetched, preferring an open one where a name repeats; the board's own spelling is
-what gets written, whatever case was typed. A bare number that is no sprint's id
-is taken as the number that ends a name — `17` for `TSK Sprint 17` — when exactly
-one sprint answers to it, and is exit 2 naming them when several do. A name no board knows is exit 2 here,
+what gets written, whatever case was typed. A bare number is read both ways — as
+a sprint's id and as the number that ends a name, `17` for `TSK Sprint 17` — and
+is taken only when every reading finds the same sprint. Where the id is one
+sprint and the name another, which is every sprint on an instance whose ids run
+ahead of its names, it is exit 2 naming both: the full name or `id:17` says
+which. A name no board knows is exit 2 here,
 listing the open ones — the same condition `push` could only report afterwards as
 a warning, having already skipped the issue.
 
@@ -1479,8 +1494,19 @@ comma-separated; one that the workspace does not have is a warning and the other
 still move, and exit 2 only when none of them are here.
 Without `--push` nothing reaches the server, and the JSON says so where an agent
 reads it rather than only in a stderr hint: `staged: true` and `next`, the push
-that sends it. `label`, `parent`, `assign` and `set` carry the same two fields.
-JSON: `{"schema":"jired/sprint-move/1","sprint":{…}|null,"issues":[{"key","file","changed"}],"staged":true,"next":"jired push PROJ-142","pushed":false}`.
+that sends it. `label`, `parent`, `assign`, `set` and `link` carry the same two
+fields. An issue whose file the edit put back to the server's copy — `unlink`
+of a link that was only staged — has `differs: false` and is not counted as
+staged: there is nothing for push to send.
+
+`--dry-run` on any staging command — these, `link`, `comment`, `logwork`,
+`transition`, `attach` and `create` — is the dry run of the push it would
+make, with or without `--push`. The change is staged so the plan has something
+to plan from, and afterwards every file is put back as it was: what it held
+before, not base, so an edit already waiting there survives, and a rename the
+change made is undone with its attachment folder. A dry run that left the change
+behind gave the next plain `push` something nobody had asked to send.
+JSON: `{"schema":"jired/sprint-move/1","sprint":{…}|null,"issues":[{"key","file","changed","differs"}],"staged":true,"next":"jired push PROJ-142","pushed":false}`.
 
 ### `jired version [--changelog]`
 The same lines `--version` prints, as a command — and, with `--changelog`, the

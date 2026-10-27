@@ -36,8 +36,9 @@ pub struct TransitionArgs {
     /// Apply immediately instead of leaving the change staged
     #[arg(long)]
     pub push: bool,
-    /// With --push, show the API call without sending it
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 
@@ -97,6 +98,12 @@ pub fn run(g: &GlobalArgs, args: &TransitionArgs, out: Out) -> Result<ExitCode> 
     };
 
     ctx.lock()?;
+    // A dry run stages to have something to plan from, and puts the files
+    // back afterwards: left in place, the next plain `push` sent them.
+    let before = match args.dry_run {
+        true => Some(crate::cli::cmd::edit::Snapshot::take(&mut ctx, &keys)?),
+        false => None,
+    };
     let mut staged: Vec<StagedIssue> = Vec::new();
     let mut first_error: Option<JiredError> = None;
     for key in &keys {
@@ -117,14 +124,18 @@ pub fn run(g: &GlobalArgs, args: &TransitionArgs, out: Out) -> Result<ExitCode> 
     }
 
     let changed: Vec<&StagedIssue> = staged.iter().filter(|s| s.changed).collect();
-    let pushed = if args.push && !changed.is_empty() {
+    let pushed = if (args.push || args.dry_run) && !changed.is_empty() {
         let keys: Vec<String> = changed.iter().map(|s| s.key.clone()).collect();
-        let report = push_these(&mut ctx, &keys, args.dry_run)?;
+        let report = push_these(&mut ctx, &keys, args.dry_run);
+        let report = report?;
         report_push(&report, out);
         Some(report)
     } else {
         None
     };
+    if let Some(before) = before {
+        before.restore(&mut ctx)?;
+    }
 
     for s in &staged {
         if !s.changed {

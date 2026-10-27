@@ -3689,6 +3689,114 @@ fn create_resolves_its_sprint_and_a_dry_run_leaves_nothing() {
     );
 }
 
+/// The field report: `link … --push --dry-run` wrote the link into the file
+/// and left it staged, so the next plain `push` would have sent it; and
+/// `--dry-run` without `--push` was refused. Every staging command now puts the
+/// file back after a dry run — what it held before, not base, so edits already
+/// waiting there survive — and `--dry-run` alone is the dry run of the push.
+#[test]
+fn a_dry_run_of_a_staging_command_leaves_the_files_as_they_were() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    // An edit already waiting in the file, which the dry run must not lose.
+    let waiting = ws
+        .read(ISSUE_FILE)
+        .replace("summary: Fix login flow", "summary: Fix the login flow");
+    ws.write(ISSUE_FILE, &waiting);
+    let renamed = "PROJ-0142. Fix the login flow.md";
+    std::fs::rename(ws.path().join(ISSUE_FILE), ws.path().join(renamed)).unwrap();
+    let before = ws.read(renamed);
+
+    for args in [
+        &[
+            "link",
+            "PROJ-142",
+            "is blocked by",
+            "PROJ-143",
+            "--push",
+            "--dry-run",
+        ][..],
+        &["link", "PROJ-142", "is blocked by", "PROJ-143", "--dry-run"],
+        &["label", "add", "release", "PROJ-142", "--dry-run"],
+        &["sprint", "add", "PROJ-142", "--sprint", "43", "--dry-run"],
+        &[
+            "set",
+            "--field",
+            "summary",
+            "--value",
+            "Renamed",
+            "PROJ-142",
+            "--dry-run",
+        ],
+        &["comment", "PROJ-142", "-m", "a note", "--dry-run"],
+        &["logwork", "PROJ-142", "1h", "--dry-run"],
+    ] {
+        let out = ws.json(args);
+        assert_eq!(out["push"]["dry_run"], true, "{args:?}: {out}");
+        assert_ne!(out["staged"], true, "{args:?}: {out}");
+        assert_eq!(ws.read(renamed), before, "{args:?} left the file changed");
+    }
+    let status = ws.json(&["status"]);
+    let dirty = status["dirty"].as_array().unwrap();
+    assert_eq!(
+        dirty.len(),
+        1,
+        "only the edit that was already there: {status}"
+    );
+}
+
+/// Unlinking a link that was only ever staged puts the file back to what the
+/// server has. That is not a change waiting for push, and saying "staged"
+/// about it sent a reader looking for one.
+#[test]
+fn undoing_a_staged_link_is_not_reported_as_staged() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let linked = ws.json(&["link", "PROJ-142", "is blocked by", "PROJ-143"]);
+    assert_eq!(linked["staged"], true, "{linked}");
+    let undone = ws.json(&["unlink", "PROJ-142", "is blocked by", "PROJ-143"]);
+    assert_eq!(undone["staged"], false, "{undone}");
+    assert_eq!(undone["next"], Value::Null, "{undone}");
+    assert_eq!(undone["issues"][0]["differs"], false, "{undone}");
+}
+
+/// The field report: sprint ids ran two ahead of the names, so `--sprint 17`
+/// was id 17, `TSK Спринт 15` — and would still have been once `TSK Спринт
+/// 17` existed. A number that names one sprint by id and another by name is
+/// refused, naming both; `id:17` and the full name say which.
+#[test]
+fn a_sprint_number_that_is_one_sprint_s_id_and_another_s_name_is_refused() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.write_fixture(
+        "sprints.json",
+        serde_json::json!([
+            {"id": "17", "name": "TSK Спринт 15", "state": "active", "board_id": "12"},
+            {"id": "19", "name": "TSK Спринт 17", "state": "future", "board_id": "12"},
+        ]),
+    );
+    ws.json(&["fetch"]);
+
+    let err = ws.json_err(&["sprint", "add", "PROJ-142", "--sprint", "17"], 2);
+    let known = err["details"]["known"].to_string();
+    assert!(
+        known.contains("TSK Спринт 15") && known.contains("TSK Спринт 17"),
+        "{err}"
+    );
+    assert!(err["hint"].as_str().unwrap().contains("id:17"), "{err}");
+
+    let by_id = ws.json(&["sprint", "add", "PROJ-142", "--sprint", "id:17"]);
+    assert_eq!(by_id["sprint"]["name"], "TSK Спринт 15", "{by_id}");
+    let by_name = ws.json(&["sprint", "add", "PROJ-150", "--sprint", "TSK Спринт 17"]);
+    assert_eq!(by_name["sprint"]["id"], "19", "{by_name}");
+    // A number only one reading of finds is still taken.
+    let one = ws.json(&["sprint", "add", "PROJ-143", "--sprint", "15"]);
+    assert_eq!(one["sprint"]["id"], "17", "{one}");
+}
+
 #[test]
 fn create_requires_a_summary() {
     let ws = Ws::new();

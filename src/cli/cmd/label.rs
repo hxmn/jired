@@ -40,8 +40,9 @@ pub struct LabelArgs {
     #[arg(long)]
     pub push: bool,
 
-    /// With --push, show the API call without sending it
-    #[arg(long, requires = "push")]
+    /// Show the API calls a push would make, send nothing, and leave the
+    /// files as they were
+    #[arg(long)]
     pub dry_run: bool,
 }
 

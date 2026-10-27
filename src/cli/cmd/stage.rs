@@ -7,7 +7,7 @@
 //! same thing in all of them, which is *reported and not staged*, because
 //! staging a change that does nothing only gives `push` something to explain.
 
-use crate::cli::cmd::edit::{edit_issue, push_these, report_push};
+use crate::cli::cmd::edit::{edit_issue, push_these, report_push, Snapshot};
 use crate::cli::context::Context;
 use crate::doc::IssueDoc;
 use crate::error::{ExitCode, JiredError, Result};
@@ -22,6 +22,13 @@ pub struct Staged {
     pub file: String,
     /// False when the issue already had the value being written.
     pub changed: bool,
+    /// False when the edit put the file back to what the server holds — an
+    /// `unlink` of a link that was only ever staged — so there is nothing left
+    /// for `push` to send.
+    pub differs: bool,
+    /// The file as it was before this edit, for a dry run to put back.
+    #[serde(skip)]
+    pub before: Snapshot,
 }
 
 /// Apply `edit` to each issue's file, reporting rather than failing on the ones
@@ -41,12 +48,22 @@ pub fn stage(
     for issue in issues {
         let key = crate::project::naming::key_from_input(issue)?;
         let mut changed = false;
+        let before = Snapshot::take(ctx, std::slice::from_ref(&key))?;
         let edited = edit_issue(ctx, &key, |doc| {
             changed = edit(doc)?;
             Ok(())
         });
         match edited {
-            Ok(file) => staged.push(Staged { key, file, changed }),
+            Ok(file) => {
+                let differs = differs_from_base(ctx, &key, &file)?;
+                staged.push(Staged {
+                    key,
+                    file,
+                    changed,
+                    differs,
+                    before,
+                })
+            }
             Err(e) => {
                 failed += 1;
                 out.warn(format!("{key}: {}", e.message));
@@ -60,6 +77,18 @@ pub fn stage(
         .with_hint("run `jired pull` first, or check the keys"));
     }
     Ok(staged)
+}
+
+/// Whether `file` says something other than what the issue last synced as —
+/// the comparison `status` makes, so the two agree on what is staged.
+fn differs_from_base(ctx: &mut Context, key: &str, file: &str) -> Result<bool> {
+    let engine = crate::sync::Engine::open(ctx)?;
+    let base = engine.state.issue(key)?.and_then(|row| row.base);
+    Ok(match base {
+        Some(base) => engine.projector.hash_of(file).as_deref() != Some(base.md_hash.as_str()),
+        // Never synced: a `NEW-*` issue is all edit.
+        None => true,
+    })
 }
 
 /// How a staged change reads on screen.
@@ -94,11 +123,21 @@ pub fn finish(
     out: Out,
     extra: serde_json::Value,
 ) -> Result<Outcome> {
+    // `--dry-run` alone is a dry run of the push: the plan is what it is for.
+    let push = push || dry_run;
     let changed: Vec<&Staged> = staged.iter().filter(|s| s.changed).collect();
 
     let pushed: Option<PushReport> = if push && !changed.is_empty() {
         let keys: Vec<String> = changed.iter().map(|s| s.key.clone()).collect();
-        let report = push_these(ctx, &keys, dry_run)?;
+        let report = push_these(ctx, &keys, dry_run);
+        if dry_run {
+            let mut before = Snapshot::default();
+            for s in &staged {
+                before.extend(s.before.clone());
+            }
+            before.restore(ctx)?;
+        }
+        let report = report?;
         report_push(&report, out);
         Some(report)
     } else {
@@ -113,7 +152,9 @@ pub fn finish(
     let (what, verb) = (wording.what, wording.verb);
     match &pushed {
         _ if changed.is_empty() => {}
-        Some(r) if r.dry_run => {}
+        Some(r) if r.dry_run => {
+            out.say("dry run — the files are as they were, and nothing was sent")
+        }
         Some(r) if r.results.iter().all(|x| x.ok) => {
             out.say(format!("{verb} {} issue(s): {what}", changed.len()))
         }
@@ -124,22 +165,37 @@ pub fn finish(
         )),
         None => {
             for s in &changed {
-                out.say(format!(
-                    "staged {} → {what} in {}",
-                    style::out(CYAN, &s.key),
-                    s.file
-                ));
+                match s.differs {
+                    true => out.say(format!(
+                        "staged {} → {what} in {}",
+                        style::out(CYAN, &s.key),
+                        s.file
+                    )),
+                    false => out.say(format!(
+                        "{} is back to what the server has; nothing to push",
+                        style::out(CYAN, &s.key)
+                    )),
+                }
             }
-            out.hint("run `jired push` to send them");
+            if changed.iter().any(|s| s.differs) {
+                out.hint("run `jired push` to send them");
+            }
         }
     }
 
     // Said in the document as well as on stderr: an agent reading `--json`
     // never sees the hint, took `"pushed": false` for a detail, and believed
     // the issues had moved.
+    // Only what is still in the files and still different from the server:
+    // a dry run put the files back, and an edit that undid a staged one left
+    // nothing to send.
     let waiting: Vec<String> = match &pushed {
-        Some(r) if !r.dry_run && r.results.iter().all(|x| x.ok) => Vec::new(),
-        _ => changed.iter().map(|s| s.key.clone()).collect(),
+        Some(r) if r.dry_run || r.results.iter().all(|x| x.ok) => Vec::new(),
+        _ => changed
+            .iter()
+            .filter(|s| s.differs)
+            .map(|s| s.key.clone())
+            .collect(),
     };
     let mut doc = serde_json::json!({
         "issues": staged,
