@@ -391,6 +391,22 @@ fn the_binary_carries_the_changelog_it_was_built_from() {
     );
 }
 
+/// What an agent whose docs an older jired wrote has to catch up on, and
+/// nothing it already knows.
+#[test]
+fn the_changelog_can_be_read_from_a_version_on() {
+    let out = Command::cargo_bin("jired")
+        .unwrap()
+        .args(["version", "--changelog", "--since", "0.20.0"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("## [0.21.0]"), "{text}");
+    assert!(!text.contains("## [0.20.0]"), "{text}");
+    assert!(!text.contains("# Changelog"), "{text}");
+}
+
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }

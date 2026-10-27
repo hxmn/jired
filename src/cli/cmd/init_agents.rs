@@ -479,6 +479,88 @@ fn field_list(fields: &[&str]) -> String {
         .join(", ")
 }
 
+/// The common asks, one command each.
+///
+/// Every one of these used to be a jired call wrapped in `jq`, Python or a
+/// shell loop — seventy-five searches to count issues per sprint, a sixty-line
+/// script for a week's worklog table — because nothing here said the one
+/// command existed. A recipe that stops working is a test failure below.
+fn recipes(s: &mut String) {
+    s.push_str("## Recipes\n\n");
+    s.push_str(
+        "Each of these is one command. Reach for one before writing a loop or a \
+         `jq` filter: if a common ask needs either, that is worth reporting.\n\n",
+    );
+    s.push_str("```sh\n");
+    s.push_str("# Issues in a sprint, by type, with their parent — from the working copy\n");
+    s.push_str("jired list --sprint \"Sprint 17\" --issue-type Story --columns key,parent,status,summary\n");
+    s.push_str("# How many issues / Stories / Bugs each sprint had — every sprint, one call\n");
+    s.push_str("jired report issues --by sprint,type --jql \"project = TSK\" --format md\n");
+    s.push_str("# Just a count, from the server\n");
+    s.push_str("jired search \"project = TSK AND sprint = 17 AND type = Bug\" --count\n");
+    s.push_str("# Server search with the fields a check needs, no second lookup\n");
+    s.push_str("jired search \"fixVersion = 1.0.0\" --columns key,type,parent,sprint,fix_versions,labels\n");
+    s.push_str("# Which sprints an issue has been through, and when it moved\n");
+    s.push_str("jired log TSK-710 --field Sprint\n");
+    s.push_str("# Worklog table for a Mon–Fri window, sub-tasks folded into their parent\n");
+    s.push_str("jired report time --since 2026-10-19 --until 2026-10-23 --rollup parent --columns people --format md\n");
+    s.push_str("# A person's account id and the mention to paste\n");
+    s.push_str("jired users maria\n");
+    s.push_str("# The file for a key — the number in a file name is zero-padded\n");
+    s.push_str("jired show TSK-710 --path\n");
+    s.push_str("# Create a task straight into a sprint and a version\n");
+    s.push_str("jired create --type Task --summary \"Release notes\" --labels release --sprint 17 --set fix_versions=1.0.0 --push\n");
+    s.push_str("# Link issues (a chain goes out in one push) and link a Confluence page\n");
+    s.push_str("jired link TSK-741 is blocked by TSK-740\n");
+    s.push_str("jired link TSK-742 is blocked by TSK-741\n");
+    s.push_str("jired link TSK-740 --web https://wiki.example.com/x/AbCd --title \"Release 1.0.0\"\n");
+    s.push_str("jired push TSK-740 TSK-741 TSK-742 --verify\n");
+    s.push_str("# Put issues in a sprint and send it now\n");
+    s.push_str("jired sprint add TSK-740 TSK-741 --sprint 17 --push\n");
+    s.push_str("```\n\n");
+    s.push_str(
+        "`push --verify` re-reads every issue it pushed and names any field the \
+         server does not hold the way the file asked (exit 10). Use it whenever a \
+         push carries links, sprints or versions: those are separate calls, and a \
+         2xx from Jira is not proof the change was made.\n\n",
+    );
+}
+
+/// What has caught agents out, said before it does again.
+fn traps(s: &mut String) {
+    s.push_str("## Traps\n\n");
+    s.push_str(
+        "- **`sprint add`, `label`, `set`, `assign`, `parent`, `link` and `create` \
+         only stage** unless given `--push`. Their JSON says `\"staged\": true` and \
+         names the push to run under `next`. `release` and `sprint create|start|edit|close` \
+         are the opposite: they have no file to stage into and go straight to the \
+         server.\n",
+    );
+    s.push_str(
+        "- **File names are zero-padded**: `TSK-0710. Summary.md` is `TSK-710`. Do \
+         not glob for `TSK-710*.md`; every command takes the key, and `jired show \
+         TSK-710 --path` prints the file.\n",
+    );
+    s.push_str(
+        "- **`--fields` projects, it does not count.** It keeps paths of the JSON \
+         document; a count is `jired search … --count`, `.total`, `.count`, or \
+         `jired report issues`.\n",
+    );
+    s.push_str(
+        "- **A link changes both issues.** Push re-reads the other end of every \
+         link it makes, so a chain goes out in one push; if a push still reports \
+         an issue `stale`, run `jired pull` and push again rather than `--force`.\n",
+    );
+    s.push_str(
+        "- **`list` and `search` answer different questions.** `list` reads the \
+         working copy: offline, instant, exactly what is on disk, and blind to \
+         issues the workspace never pulled. `search` asks the server with JQL: \
+         everything in Jira, as of now, including closed sprints and other \
+         projects. Counting \"all sprints ever\" or anything outside the \
+         workspace's scope is a server question.\n\n",
+    );
+}
+
 pub fn render() -> String {
     let mut s = String::new();
     s.push_str("# Working with this jired workspace\n\n");
@@ -486,6 +568,19 @@ pub fn render() -> String {
         "This directory is a **jired workspace**: Jira issues are Markdown files kept in \
          sync with the server by a git-like `fetch`/`pull`/`push` cycle. All reads and \
          edits work offline; only `fetch`, `pull`, and `push` need the network.\n\n",
+    );
+
+    s.push_str("## First command of a session\n\n```sh\n");
+    s.push_str("jired status --json --fields stale_agent_docs,dirty,new_issues,conflicts\n");
+    s.push_str("```\n\n");
+    s.push_str(
+        "If `stale_agent_docs` is not empty, **these instructions were written by \
+         an older jired** than the one installed (`generated_by` against \
+         `expected`), and commands, flags or JSON fields may have changed under \
+         them. Read what changed — `jired version --changelog --since \
+         <generated_by>` — then run `jired init-agents`, which rewrites only the \
+         managed block of this file and the permission files, and read this file \
+         again before planning anything.\n\n",
     );
 
     s.push_str("## Safe workflow\n\n```sh\n");
@@ -1065,6 +1160,16 @@ pub fn render() -> String {
     s.push_str("jired list --sprint \"Sprint 7\" --json --json-compact\n");
     s.push_str("```\n\n");
     s.push_str(
+        "**There is no result envelope.** A document's fields are at the top \
+         level: `jired search --json` is `{\"schema\", \"jql\", \"total\", \
+         \"issues\": […]}`, so the rows are `.issues[]` and the count is `.total` \
+         — not `.result.issues`. `jired sprints --json` is `.sprints[]`, `jired list \
+         --json` is `.issues[]` and `.count`, `jired push --json` is `.summary` and \
+         `.results[]`. An error is the one exception: it goes to stderr as \
+         `{\"schema\": \"jired/error/1\", \"code\", \"kind\", \"message\", \"hint\"}`. \
+         `jired schema NAME` prints the exact shape of any document.\n\n",
+    );
+    s.push_str(
         "Every JSON document carries a `schema` field such as `jired/pull/1`, and \
          `schema` survives a projection. Run `jired schema` to list the JSON \
          Schemas and `jired schema pull` to print one. `jired push --json` leads \
@@ -1072,6 +1177,9 @@ pub fn render() -> String {
          the outcome is one read rather than a walk over every operation of every \
          issue.\n\n",
     );
+
+    recipes(&mut s);
+    traps(&mut s);
 
     // The same list the permission files are built from, so an agent reading
     // these docs knows what it can run before it tries and gets stopped.
@@ -1123,6 +1231,44 @@ pub fn render() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Split a recipe line the way a shell would, for the double quotes the
+    /// recipes use and nothing more.
+    fn words(line: &str) -> Vec<String> {
+        let (mut out, mut word, mut quoted) = (Vec::new(), String::new(), false);
+        for c in line.chars() {
+            match c {
+                '"' => quoted = !quoted,
+                ' ' if !quoted => {
+                    if !word.is_empty() {
+                        out.push(std::mem::take(&mut word));
+                    }
+                }
+                c => word.push(c),
+            }
+        }
+        if !word.is_empty() {
+            out.push(word);
+        }
+        out
+    }
+
+    /// Every recipe is a command this binary accepts, flags and all: a recipe
+    /// is a promise that the one command exists, and one that no longer parses
+    /// would send an agent back to writing the loop it replaced.
+    #[test]
+    fn every_recipe_parses() {
+        let mut doc = String::new();
+        recipes(&mut doc);
+        let lines: Vec<&str> = doc.lines().filter(|l| l.starts_with("jired ")).collect();
+        assert!(lines.len() >= 10, "{doc}");
+        for line in lines {
+            let argv = words(line);
+            if let Err(e) = <crate::cli::Cli as clap::Parser>::try_parse_from(&argv) {
+                panic!("recipe `{line}` does not parse:\n{e}");
+            }
+        }
+    }
 
     /// The docs are generated from the CLI's own definitions, so this catches
     /// the case they exist to prevent: a new command, flag or setting that the
