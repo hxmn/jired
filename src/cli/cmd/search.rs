@@ -70,6 +70,9 @@ pub enum Column {
     Parent,
     Epic,
     Sprint,
+    /// Spelled as the JSON field is; the kebab-case clap would derive is kept
+    /// as an alias, since that is what `--help` offered first.
+    #[value(name = "fix_versions", alias = "fix-versions")]
     FixVersions,
     Labels,
     Priority,

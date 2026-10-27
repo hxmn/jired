@@ -85,6 +85,11 @@ pub enum Column {
     Summary,
     Sprint,
     Labels,
+    Parent,
+    Epic,
+    Priority,
+    #[value(name = "fix_versions", alias = "fix-versions")]
+    FixVersions,
     File,
 }
 
@@ -108,6 +113,10 @@ struct Match {
     /// where the issue is now, the way the `assignee` column shows a name out
     /// of the `@[Name](id)` this carries.
     sprint: Vec<String>,
+    parent: Option<String>,
+    epic: Option<String>,
+    priority: Option<String>,
+    fix_versions: Vec<String>,
 }
 
 pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
@@ -147,6 +156,10 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
             labels: fm.labels,
             assignee: fm.assignee,
             sprint: fm.sprint,
+            parent: fm.parent,
+            epic: fm.epic,
+            priority: fm.priority,
+            fix_versions: fm.fix_versions,
         });
     }
 
@@ -221,6 +234,10 @@ fn cell(m: &Match, column: Column) -> String {
         // wide enough for a whole history is a cell nobody can read across.
         Column::Sprint => m.sprint.last().cloned().unwrap_or_default(),
         Column::Labels => m.labels.join(","),
+        Column::Parent => m.parent.clone().unwrap_or_default(),
+        Column::Epic => m.epic.clone().unwrap_or_default(),
+        Column::Priority => m.priority.clone().unwrap_or_default(),
+        Column::FixVersions => m.fix_versions.join(","),
         Column::File => m.file.clone(),
     }
 }
@@ -520,6 +537,10 @@ mod tests {
                 labels: fm.labels.clone(),
                 assignee: fm.assignee.clone(),
                 sprint: fm.sprint.clone(),
+                parent: Some("TSK-100".into()),
+                epic: None,
+                priority: None,
+                fix_versions: vec!["1.0.0".into()],
             },
             Match {
                 key: "TSK-102".into(),
@@ -530,12 +551,26 @@ mod tests {
                 labels: Vec::new(),
                 assignee: None,
                 sprint: Vec::new(),
+                parent: None,
+                epic: None,
+                priority: None,
+                fix_versions: Vec::new(),
             },
         ]
     }
 
     /// Into a pipe the columns are a record `cut -f2` can read, so nothing is
     /// padded and nothing but a tab separates two values.
+    /// The recipe's ask: the stories of a sprint with the issue each hangs
+    /// from, without a second lookup per key.
+    #[test]
+    fn parent_and_versions_are_columns() {
+        let columns = [Column::Key, Column::Parent, Column::FixVersions];
+        let lines = rows(&found(), &columns, true);
+        assert_eq!(lines[0], "TSK-1\tTSK-100\t1.0.0");
+        assert_eq!(lines[1], "TSK-102\t\t");
+    }
+
     #[test]
     fn columns_are_tab_separated_off_a_terminal() {
         let columns = [Column::Key, Column::Type, Column::Assignee];

@@ -1326,7 +1326,8 @@ an argument list:
 `jired list --keys --label regular | xargs jired sprint add --sprint "Sprint 44"`.
 
 `--columns` names the fields instead, in the order it names them, out of `key`,
-`type`, `status`, `assignee`, `summary`, `sprint`, `labels` and `file` — the
+`type`, `status`, `assignee`, `summary`, `sprint`, `labels`, `parent`, `epic`,
+`priority`, `fix_versions` and `file` — the
 fields of the JSON document and nothing besides, so the two cannot disagree
 about what an issue is. It answers the question the default line cannot: which of
 these are `Task`s and who has them, on an instance where the type names differ by

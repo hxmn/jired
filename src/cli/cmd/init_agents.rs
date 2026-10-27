@@ -859,7 +859,7 @@ pub fn render() -> String {
     s.push_str("| `--label L` | issues carrying this label |\n");
     s.push_str("| `--issue-type T` | issues of exactly this type, ignoring case — *not* a substring, so `sub-task` does not match `Analytics sub-task` |\n");
     s.push_str("| `--summary-contains TEXT` | case-insensitive substring of the summary |\n");
-    s.push_str("| `--columns key,type,status,assignee,summary` | print these fields, in this order, instead of the default line |\n");
+    s.push_str("| `--columns key,type,parent,status,summary` | print these fields, in this order, instead of the default line |\n");
     s.push_str("| `--keys` | print only the keys, one per line |\n\n");
     s.push_str(
         "\"Not finished yet\" is `--category new` plus `--category indeterminate` \
@@ -877,7 +877,8 @@ pub fn render() -> String {
     );
     s.push_str(
         "`--columns` takes any of `key`, `type`, `status`, `assignee`, \
-         `summary`, `sprint`, `labels` and `file`, in any order, and is \
+         `summary`, `sprint`, `labels`, `parent`, `epic`, `priority`, \
+         `fix_versions` and `file`, in any order, and is \
          tab-separated whenever stdout is not a terminal — `jired list \
          --columns key,type | grep -P '\\tBug$'` needs no JSON parser. The \
          values are the ones `--json` carries, except for the two the table \
