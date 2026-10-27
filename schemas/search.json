@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jired/search/1",
   "title": "jired search result",
-  "description": "JQL search results",
+  "description": "JQL search results: every row carries the fields `--columns` can show",
   "type": "object",
   "required": [
     "schema",
@@ -54,6 +54,73 @@
               "string",
               "null"
             ]
+          },
+          "type": {
+            "type": "string",
+            "description": "Issue type name"
+          },
+          "assignee_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The assignee's account id (Cloud) or user name (Data Center), to address them by"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The parent's key: a sub-task's parent, or a team-managed Cloud issue's epic"
+          },
+          "epic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The epic's key, where the instance links epics through Epic Link"
+          },
+          "sprint": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every sprint the issue has been in, oldest first — the list JQL's `sprint = X` matches against; the last entry is where it is now"
+          },
+          "fix_versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339, UTC"
+          },
+          "updated": {
+            "type": "string",
+            "description": "RFC 3339, UTC"
           }
         },
         "required": [

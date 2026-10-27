@@ -11,6 +11,8 @@
 //! re-runs it on every keystroke that moves the window, which is what lets the
 //! window be moved at all.
 
+pub mod issues;
+
 use crate::doc::{parse_duration, IssueDoc, WorklogId};
 use crate::json::Out;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc, Weekday};

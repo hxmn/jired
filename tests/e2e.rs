@@ -3472,6 +3472,71 @@ fn a_template_supplies_every_field_a_flag_did_not() {
 // Reports
 // ---------------------------------------------------------------------------
 
+/// The field report's chart — issues per sprint and type — took 75 searches
+/// and a `jq` loop. One command answers it, from the working copy offline or
+/// from the server with `--jql`, and the two agree.
+#[test]
+fn report_issues_counts_a_matrix_from_the_files_or_the_server() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let local = ws.json(&["report", "issues", "--by", "sprint,type"]);
+    assert_eq!(local["schema"], "jired/report-issues/1");
+    assert_eq!(local["source"], "workspace");
+    assert_eq!(local["by"], serde_json::json!(["sprint", "type"]));
+    assert_eq!(local["total"], 3);
+    assert_eq!(
+        local["columns"],
+        serde_json::json!(["Story", "Sub-task", "Task"])
+    );
+    let rows = local["rows"].as_array().unwrap();
+    assert_eq!(rows[0]["value"], "Sprint 42", "{local}");
+    assert_eq!(rows[0]["counts"]["Story"], 1);
+    assert_eq!(rows[0]["total"], 1);
+    // An issue in no sprint is counted, under a name a chart can show.
+    assert_eq!(rows[1]["value"], "(none)", "{local}");
+    assert_eq!(rows[1]["total"], 2);
+    assert_eq!(local["totals"]["Task"], 1);
+
+    let remote = ws.json(&[
+        "report",
+        "issues",
+        "--by",
+        "sprint,type",
+        "--jql",
+        "project = PROJ",
+    ]);
+    assert_eq!(remote["source"], "server");
+    assert_eq!(remote["jql"], "project = PROJ");
+    assert_eq!(remote["rows"], local["rows"], "{remote}");
+
+    // Markdown to paste into a page: header, alignment, a total row last.
+    let md = ws
+        .cmd(&["report", "issues", "--by", "sprint,type", "--format", "md"])
+        .output()
+        .unwrap();
+    let md = String::from_utf8(md.stdout).unwrap();
+    assert!(
+        md.starts_with("| sprint | Story | Sub-task | Task | total |\n| --- | ---: |"),
+        "{md}"
+    );
+    assert!(md.contains("| Sprint 42 | 1 | 0 | 0 | 1 |"), "{md}");
+    assert!(md.trim_end().ends_with("| total | 1 | 1 | 1 | 3 |"), "{md}");
+
+    let one = ws.json(&["report", "issues", "--by", "label"]);
+    let values: Vec<&str> = one["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["value"].as_str().unwrap())
+        .collect();
+    assert_eq!(values, ["auth", "backend", "ops", "(none)"], "{one}");
+
+    let err = ws.json_err(&["report", "issues", "--by", "sprint,type,label"], 2);
+    assert!(err["message"].as_str().unwrap().contains("--by"), "{err}");
+}
+
 /// The report is read off the working copy, so it counts everybody's time —
 /// not only the account's — and breaks each person down by issue.
 ///
@@ -4088,6 +4153,73 @@ fn the_two_colour_flags_refuse_to_be_used_together() {
     assert_eq!(out.status.code(), Some(2), "usage error");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("--no-color"), "{stderr}");
+}
+
+/// How many, in one request: no issues come back, only the server's total.
+#[test]
+fn search_count_prints_the_total_alone() {
+    let ws = Ws::new();
+    ws.init();
+
+    let doc = ws.json(&["search", "project = PROJ", "--count"]);
+    assert_eq!(doc["schema"], "jired/search-count/1");
+    assert_eq!(doc["total"], 3);
+    assert!(doc.get("issues").is_none(), "{doc}");
+
+    let out = ws
+        .cmd(&["search", "project = PROJ", "--count"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "3\n");
+}
+
+/// Every row carries what the next question needs, so checking a type or a
+/// parent is not a second lookup per issue; `--columns` prints any of it the
+/// way `list --columns` does, tab-separated into a pipe.
+#[test]
+fn search_rows_carry_type_parent_sprint_and_versions() {
+    let ws = Ws::new();
+    ws.init();
+
+    let doc = ws.json(&["search", "project = PROJ"]);
+    let issues = doc["issues"].as_array().unwrap();
+    let story = issues.iter().find(|i| i["key"] == "PROJ-142").unwrap();
+    assert_eq!(story["type"], "Story");
+    assert_eq!(story["sprint"], serde_json::json!(["Sprint 42"]));
+    assert_eq!(story["fix_versions"], serde_json::json!(["2.4.0"]));
+    assert_eq!(story["labels"], serde_json::json!(["auth", "backend"]));
+    let sub = issues.iter().find(|i| i["key"] == "PROJ-143").unwrap();
+    assert_eq!(sub["parent"], "PROJ-142", "{sub}");
+
+    let out = ws
+        .cmd(&[
+            "search",
+            "project = PROJ",
+            "--columns",
+            "key,type,parent,sprint",
+        ])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("PROJ-142\tStory\t\tSprint 42\n"), "{text:?}");
+    assert!(
+        text.contains("PROJ-143\tSub-task\tPROJ-142\t\n"),
+        "{text:?}"
+    );
+
+    let keys = ws
+        .cmd(&["search", "project = PROJ", "--keys"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(keys.stdout).unwrap(),
+        "PROJ-142\nPROJ-143\nPROJ-150\n"
+    );
+
+    // Fewer than were asked for is said, with the total the server reported.
+    let two = ws.json(&["search", "project = PROJ", "--limit", "2"]);
+    assert_eq!(two["issues"].as_array().unwrap().len(), 2);
+    assert_eq!(two["total"], 3);
 }
 
 /// A status is coloured by the category the server files it under, so an

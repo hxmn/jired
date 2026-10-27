@@ -156,10 +156,38 @@ impl Rest {
             .await
     }
 
-    fn field_param(&self, set: FieldSet) -> &'static str {
+    fn field_param(set: FieldSet, map: &FieldMap) -> String {
         match set {
-            FieldSet::Summary => "key,summary,status,assignee,updated,issuetype",
-            FieldSet::Full => "*all",
+            FieldSet::Summary => "key,summary,status,assignee,updated,issuetype".to_string(),
+            FieldSet::Full => "*all".to_string(),
+            // The sprint, the epic link and the story points are custom fields
+            // whose ids differ per instance, so they come from the field map;
+            // one this instance does not have is simply not asked for.
+            FieldSet::Listing => {
+                let mut fields: Vec<&str> = vec![
+                    "key",
+                    "summary",
+                    "status",
+                    "assignee",
+                    "updated",
+                    "created",
+                    "issuetype",
+                    "parent",
+                    "labels",
+                    "fixVersions",
+                    "versions",
+                    "priority",
+                    "components",
+                    "duedate",
+                ];
+                fields.extend(
+                    [&map.sprint, &map.epic_link, &map.story_points]
+                        .into_iter()
+                        .flatten()
+                        .map(String::as_str),
+                );
+                fields.join(",")
+            }
         }
     }
 
@@ -590,7 +618,7 @@ impl JiraApi for Rest {
         let mut body = json!({
             "jql": query.jql,
             "maxResults": query.max_results,
-            "fields": self.field_param(query.fields)
+            "fields": Self::field_param(query.fields, &map)
                 .split(',')
                 .collect::<Vec<_>>(),
         });
@@ -1336,6 +1364,33 @@ fn one_worklog(v: &Value, markup: Markup) -> Result<RemoteWorklog> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A listing asks for the fields its rows show and nothing else; the
+    /// instance-specific ones only where this instance has them.
+    #[test]
+    fn a_listing_asks_for_its_fields_and_the_instances_sprint() {
+        let bare = Rest::field_param(FieldSet::Listing, &FieldMap::default());
+        assert!(bare.starts_with("key,summary,status,"), "{bare}");
+        assert!(
+            bare.contains(",parent,") && bare.contains(",fixVersions,"),
+            "{bare}"
+        );
+        assert!(
+            !bare.contains("*all") && !bare.contains("customfield"),
+            "{bare}"
+        );
+
+        let map = FieldMap {
+            sprint: Some("customfield_10020".into()),
+            epic_link: Some("customfield_10014".into()),
+            ..FieldMap::default()
+        };
+        let mapped = Rest::field_param(FieldSet::Listing, &map);
+        assert!(
+            mapped.ends_with(",customfield_10020,customfield_10014"),
+            "{mapped}"
+        );
+    }
 
     #[test]
     fn ids_normalize_regardless_of_json_type() {

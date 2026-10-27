@@ -624,6 +624,31 @@ an update on push; removing a section is reported and ignored unless
 `--allow-worklog-delete` is passed, since deleting somebody's booked time cannot
 be undone from the working copy.
 
+### `jired report issues --by FIELD[,FIELD] [--jql Q] [--format text|md]`
+How many issues, broken down by one field, or by two as a matrix: rows are the
+first field's values, columns the second's, with a total column down the right
+and a total row along the bottom. The chart that asked for this — issues,
+stories and bugs per sprint — was answered with a JQL count per cell, 75
+searches and `jq` to read each total; every figure in it is already on the
+issues, so one pass answers the lot:
+`jired report issues --by sprint,type --jql "project = TSK" --format md`.
+
+Fields: `sprint`, `type`, `status`, `category` (Jira's `new` / `indeterminate`
+/ `done`), `assignee`, `label`, `fix_version`, `priority`, `parent`, `epic`,
+`component`. An issue with several values for a field counts once under each —
+the sprints it has been in, its labels, its fix versions — which is how JQL's
+`sprint = X` matches: an issue carried from sprint 41 into 42 is one of each
+sprint's issues. Every total counts each issue once, so a row's total can be less
+than the sum of its cells. An issue with no value counts under `(none)`, last.
+Values are in natural order, `Sprint 9` before `Sprint 10`.
+
+The working copy by default, offline, from the files' frontmatter as `list`
+reads it (`category` from the snapshots, like `list --category`); with `--jql`,
+the issues the server finds, fetched as a listing a page at a time — the way to
+count sprints nobody in this workspace pulled. `--format md` prints a Markdown
+pipe table, names left and counts right, ready to paste into a page.
+JSON: `{"schema":"jired/report-issues/1","by":["sprint","type"],"source":"workspace"|"server","jql","total","columns":["Bug","Story"],"rows":[{"value":"Sprint 41","counts":{"Bug":2,"Story":5},"total":7}],"totals":{"Bug":2,"Story":5}}`.
+
 ### `jired report time [--days N] [--show-issues]`
 Who booked how much time, totalled off the `## Worklogs` sections of the files
 already on disk. A read, so it works offline and costs one pass over the working
@@ -827,11 +852,29 @@ is where the deployments part — Data Center declares `username`, Cloud takes
 the server refuses does not stop the rest: it is recorded against its own key,
 the run finishes, and the exit code is 1 with the failures named.
 
-### `jired search "project = PROJ AND status = Open" [--limit N]`
+### `jired search "project = PROJ AND status = Open" [--limit N] [--count] [--columns C,…] [--keys]`
 JQL is positional; `--jql` is the same value spelled as a flag, and the two
-conflict. Table / JSON rows, `showing N of TOTAL`, an explicit line when nothing
-matches, and a warning when `--limit` is clamped to the server's page ceiling of
-100. `--pull` is hidden and unimplemented: it parses and then exits 2 saying so.
+conflict. Table / JSON rows, `showing N of TOTAL`, and an explicit line when
+nothing matches. `--limit` (default 50) pages through the server's 100-issue
+pages up to 1000, and says so when it stops there. `--pull` is hidden and
+unimplemented: it parses and then exits 2 saying so.
+
+Every row carries what the next question needs — `type`, `parent`, `epic`,
+`sprint` (the whole history, oldest first, as `list --json` has it and as JQL's
+`sprint = X` matches), `fix_versions`, `labels`, `priority`, `components`,
+`created`, `updated`, and the assignee's id beside the name — asked for as a
+listing (`FieldSet::Listing`: those fields and the instance's own sprint,
+epic-link and story-point ids) rather than `*all`, so a page costs no
+descriptions, comments or worklogs. A listing that named only key, summary and
+status sent every check after it back to the server one issue at a time.
+
+`--columns` prints any of those fields, in the order named, with the layout
+rules `list --columns` has: padded on a terminal, tab-separated into a pipe, an
+empty cell for an empty value, `sprint` the one it is in now. `--keys` prints
+the keys alone. `--count` prints only how many issues match: one request with
+no issues in it, whatever the size of the answer.
+JSON: `{"schema":"jired/search/1","jql","total","issues":[{"key","summary","status","status_category","type","assignee","assignee_id","parent","epic","sprint":[…],"fix_versions":[…],"labels":[…],"priority","components":[…],"created","updated"}]}`;
+with `--count`, `{"schema":"jired/search-count/1","jql","total"}`.
 
 ### `jired resolve [ISSUES…] [--list] [--ours|--theirs|--done]`
 Lists the recorded conflicts (issue key and field). A bare `resolve` prints that
