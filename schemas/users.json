@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/users/1",
+  "title": "jired users result",
+  "description": "The people this workspace knows, read offline from the snapshots and the files: one entry per account id, most mentioned first",
+  "type": "object",
+  "required": [
+    "schema",
+    "users",
+    "count"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/users/1"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "users": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "display_name",
+          "account_id",
+          "mention",
+          "also_known_as",
+          "seen"
+        ],
+        "properties": {
+          "display_name": {
+            "description": "The name the person was last seen under",
+            "type": "string"
+          },
+          "account_id": {
+            "description": "The account id on Cloud, the username on Data Center: what a file and the API name them by",
+            "type": "string"
+          },
+          "mention": {
+            "description": "`@[Name](id)`, ready to paste into a file",
+            "type": "string"
+          },
+          "also_known_as": {
+            "description": "Earlier names under the same id, most recent first",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "seen": {
+            "description": "How many times the workspace mentions them",
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

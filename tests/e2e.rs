@@ -4268,6 +4268,64 @@ fn log_over_the_workspace_is_offline_after_the_first_run() {
     assert_eq!(cached["entries"].as_array().unwrap().len(), 5);
 }
 
+/// The field report: a sprint history meant `jq '[.. | objects |
+/// select(.field? == "Sprint")]'` over the timeline, which kept each change
+/// and dropped the date it was made on. `--field` is the history of one field,
+/// flat, each row carrying its issue, time and author.
+#[test]
+fn log_field_is_a_flat_history_of_the_fields_named() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let sprint = ws.json(&["log", "PROJ-142", "--field", "sprint"]);
+    assert_eq!(sprint["schema"], "jired/log-field/1");
+    assert_eq!(sprint["scope"], "issue");
+    assert_eq!(sprint["total"], 1);
+    let change = &sprint["changes"][0];
+    assert_eq!(change["key"], "PROJ-142");
+    assert_eq!(change["field"], "Sprint", "the changelog's own spelling");
+    assert_eq!(change["from"], "Sprint 11");
+    assert_eq!(change["to"], Value::Null);
+    assert_eq!(change["author"], "Jane D");
+    assert_eq!(change["created"], "2026-08-14T09:00:00Z");
+
+    // Several fields, newest first; reversed on request.
+    let two = ws.json(&["log", "--field", "STATUS,priority"]);
+    assert_eq!(two["scope"], "workspace");
+    let fields: Vec<&str> = two["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["field"].as_str().unwrap())
+        .collect();
+    assert_eq!(fields, ["priority", "status"]);
+    let reversed = ws.json(&[
+        "log",
+        "--field",
+        "status",
+        "--field",
+        "priority",
+        "--reverse",
+    ]);
+    assert_eq!(reversed["changes"][0]["field"], "status");
+
+    // One line per change on a terminal or off one.
+    let out = ws
+        .cmd(&["log", "PROJ-142", "--field", "status", "--color", "never"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().find(|l| l.contains("status:")).expect("a row");
+    assert!(line.starts_with("PROJ-142"), "{text}");
+    assert!(line.contains("Jane D"), "{text}");
+    assert!(line.contains("status: To Do → In Progress"), "{text}");
+
+    // A field nobody changed is an answer, not an error.
+    let none = ws.json(&["log", "PROJ-142", "--field", "Fix Version"]);
+    assert_eq!(none["total"], 0);
+}
+
 #[test]
 fn log_honours_the_limit() {
     let ws = Ws::new();
@@ -7050,6 +7108,77 @@ fn show_answers_from_the_snapshot_including_the_raw_payload() {
         raw["raw"]["fields"].as_object().unwrap().len() > 5,
         "the whole payload: {raw}"
     );
+}
+
+/// The field report: `ls TSK-710*.md` found nothing, because files are named
+/// `TSK-0710. …`. `--path` prints the file, from the key however it is padded.
+#[test]
+fn show_path_names_the_file_whatever_the_key_looks_like() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    for spelling in ["PROJ-142", "proj-142", "PROJ-0142"] {
+        let out = ws.cmd(&["show", spelling, "--path"]).output().unwrap();
+        assert!(out.status.success(), "{spelling}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim_end(),
+            ISSUE_FILE,
+            "{spelling}"
+        );
+    }
+    let doc = ws.json(&["show", "PROJ-142", "--path"]);
+    assert_eq!(doc["file"], ISSUE_FILE);
+    // And `file` is in the ordinary document too.
+    assert_eq!(ws.json(&["show", "PROJ-142"])["file"], ISSUE_FILE);
+
+    // An issue with no file says so, rather than printing nothing.
+    std::fs::remove_file(ws.path().join(ISSUE_FILE)).unwrap();
+    let err = ws.json_err(&["show", "PROJ-142", "--path"], 2);
+    assert!(
+        err["message"].as_str().unwrap().contains("no file"),
+        "{err}"
+    );
+    assert_eq!(ws.json(&["show", "PROJ-142"])["file"], Value::Null);
+    ws.json_err(&["show", "PROJ-999", "--path"], 2);
+}
+
+/// The field report: a person's id came out of `grep -rhoE` over the files,
+/// and a renamed person came out twice. `users` is one row per id, under the
+/// newest name, with the mention to paste.
+#[test]
+fn users_lists_one_entry_per_person_under_their_newest_name() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let all = ws.json(&["users"]);
+    assert_eq!(all["schema"], "jired/users/1");
+    let ilya = all["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["account_id"] == "5b10a2ilya")
+        .expect("the assignee is known");
+    assert_eq!(ilya["display_name"], "Ilya A");
+    assert_eq!(ilya["mention"], "@[Ilya A](5b10a2ilya)");
+
+    // Jane is renamed on the server; the newer name wins, the old one stays
+    // findable.
+    ws.mutate_remote("PROJ-150", |issue| {
+        issue["fields"]["assignee"] = serde_json::json!({
+            "accountId": "5b1af9jane", "displayName": "Jane Doe-Smith"
+        });
+    });
+    ws.json(&["pull"]);
+    let jane = ws.json(&["users", "jane d"]);
+    assert_eq!(jane["count"], 1, "{jane}");
+    let jane = &jane["users"][0];
+    assert_eq!(jane["display_name"], "Jane Doe-Smith");
+    assert_eq!(jane["mention"], "@[Jane Doe-Smith](5b1af9jane)");
+    assert_eq!(jane["also_known_as"][0], "Jane D");
+
+    assert_eq!(ws.json(&["users", "nobody-here"])["count"], 0);
 }
 
 /// Working out what `customfield_10015` is meant reading `field_meta` out of

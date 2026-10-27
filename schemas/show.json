@@ -15,6 +15,13 @@
     "key": {
       "type": "string"
     },
+    "file": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The issue's file, relative to the workspace; null when the workspace has none for it. The one field --path emits beside the key"
+    },
     "source": {
       "enum": [
         "file",

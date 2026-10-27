@@ -291,6 +291,8 @@ pub enum Command {
     Status(cmd::status::StatusArgs),
     /// Change an issue's workflow status
     Transition(cmd::transition::TransitionArgs),
+    /// The people this workspace knows, and the mention that names each
+    Users(cmd::users::UsersArgs),
     /// Which binary this is, and what changed in it
     Version(cmd::version::VersionArgs),
     /// Watch issues, or stop watching them, on a screen of tick boxes
@@ -386,6 +388,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Sprints(a) => cmd::list::run_sprints(g, a, out),
         Command::Status(a) => cmd::status::run(g, a, out),
         Command::Transition(a) => cmd::transition::run(g, a, out),
+        Command::Users(a) => cmd::users::run(g, a, out),
         Command::Version(a) => cmd::version::run(g, a, out),
         Command::Watch(a) => cmd::watch::run(g, a, out),
         Command::Whoami(a) => cmd::whoami::run(g, a, out),
