@@ -15,7 +15,8 @@
     "by_day",
     "entries",
     "skipped",
-    "people"
+    "people",
+    "issues"
   ],
   "properties": {
     "schema": {
@@ -43,15 +44,24 @@
       }
     },
     "project": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "The project the workspace is scoped to, if it has one"
     },
     "last_fetch_at": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "When the snapshot behind the report was last refreshed"
     },
     "last_fetch_age_seconds": {
-      "type": ["integer", "null"]
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "seconds": {
       "type": "integer",
@@ -83,6 +93,8 @@
         "type": "object",
         "required": [
           "name",
+          "account_id",
+          "also_known_as",
           "seconds",
           "staged_seconds",
           "by_day",
@@ -91,7 +103,22 @@
         ],
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "The display name on the person's most recent entry"
+          },
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the server identifies them by (accountId on Cloud, the user name on Data Center), and what people are grouped by. Null for time the snapshots cannot attribute."
+          },
+          "also_known_as": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Earlier display names of the same account, seen on older entries"
           },
           "seconds": {
             "type": "integer",
@@ -116,6 +143,9 @@
               "required": [
                 "key",
                 "summary",
+                "type",
+                "parent",
+                "rolled_up",
                 "seconds",
                 "staged_seconds",
                 "by_day",
@@ -127,6 +157,24 @@
                 },
                 "summary": {
                   "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "description": "Issue type, empty when nothing knows it"
+                },
+                "parent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The issue's parent key"
+                },
+                "rolled_up": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Under --rollup parent, the sub-tasks whose time this row carries"
                 },
                 "seconds": {
                   "type": "integer",
@@ -148,6 +196,104 @@
           }
         }
       }
+    },
+    "issues": {
+      "type": "array",
+      "description": "The same time the other way up: a row per issue (per top-level parent under --rollup parent), most time first",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "summary",
+          "type",
+          "parent",
+          "rolled_up",
+          "seconds",
+          "staged_seconds",
+          "by_day",
+          "entries",
+          "people"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "Issue type, empty when nothing knows it"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The issue's parent key"
+          },
+          "rolled_up": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Under --rollup parent, the sub-tasks whose time this row carries"
+          },
+          "seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "staged_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "by_day": {
+            "$ref": "#/$defs/by_day"
+          },
+          "entries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "people": {
+            "type": "array",
+            "description": "Who booked it, in the order of the top-level people",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "account_id",
+                "seconds"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "account_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "seconds": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "rollup": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "parent",
+        null
+      ],
+      "description": "`parent` when sub-tasks were folded into the issue at the top of their chain"
     }
   },
   "$defs": {

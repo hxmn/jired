@@ -624,7 +624,7 @@ an update on push; removing a section is reported and ignored unless
 `--allow-worklog-delete` is passed, since deleting somebody's booked time cannot
 be undone from the working copy.
 
-### `jired report time [--days N] [--show-issues]`
+### `jired report time [--days N | --since DATE [--until DATE]] [--rollup parent] [--columns days|people] [--format text|md] [--show-issues]`
 Who booked how much time, totalled off the `## Worklogs` sections of the files
 already on disk. A read, so it works offline and costs one pass over the working
 copy; what it cannot see is time booked since the last `pull`, which is why
@@ -677,6 +677,40 @@ dumb terminal — the same grid prints as a table, with the day columns dropped
 (not wrapped) once the line would pass 100 characters; `--show-issues` is then
 the only way to the second level. The JSON document (`jired schema report-time`)
 carries the whole grid either way.
+
+`--since DATE --until DATE` names the window by its dates, both counted —
+`--since 2026-10-19 --until 2026-10-23` is that Monday to Friday whatever day it
+is asked on. `--until` defaults to today; `--since` with `--days N` counts N days
+forward from it, and `--until` with `--days` is refused as saying the same thing
+twice. Dates that run backwards, or a window over 3650 days, are exit 2. The
+screen opens on that window when it ends today or earlier.
+
+A person is their account, not their display name. A file names a worklog's
+author as the server spelled it when the file was written, so somebody renamed
+in Jira appeared under the old name in files pulled before the rename and the
+new one after, and was counted twice. The snapshots in `state.db` carry the
+account id behind each worklog id (`accountId` on Cloud, the user name on Data
+Center), so time is grouped by that: a person is named by the display name on
+their most recent entry, the others listed in `also_known_as`, and `account_id`
+is in the JSON. Staged entries belong to the account running the report and
+join its booked time. Only an entry no snapshot attributes falls back to the
+name.
+
+`--rollup parent` files each sub-task's time under the issue at the top of its
+`parent:` chain, the row saying which issues it folded in (`rolled_up`). A
+parent with no file in the workspace is still the row, named from the snapshot
+when one has it. Every issue row carries its `type` and `parent` either way, and
+the document's top-level `issues` is the same time the other way up — a row per
+issue, each listing who booked it — so a table of issues against people is read
+off it rather than pivoted by hand.
+
+`--columns people` draws that table: issues down the side, a column per person,
+a total column and a total row. `--format md` prints the table as a Markdown pipe
+table, ready to paste into a page — empty cells where nothing was booked, `2h
+30m` where something was, the total row last — for either shape (`--columns days`
+is people against days). Neither opens the screen. The parent-level worklog
+table for a week is one command:
+`jired report time --since 2026-10-19 --until 2026-10-23 --rollup parent --columns people --format md`.
 
 ### `jired create [--type Story] [--template T] [--summary S] [-i]`
 Writes `NEW-<6hex>. Summary.md` (D14) from template; real key assigned on push
