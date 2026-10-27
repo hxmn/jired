@@ -118,7 +118,7 @@
     },
     "links": {
       "type": "array",
-      "description": "Typed issue links as single-entry maps of link type to issue key",
+      "description": "Links as single-entry maps: an issue link as its direction to the other issue's key (`blocks: PROJ-150`), a web link under `web` as its URL followed by its title in quotes (`web: https://wiki.example/x \"Release notes\"`)",
       "items": {
         "type": "object",
         "minProperties": 1,

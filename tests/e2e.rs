@@ -3360,6 +3360,243 @@ fn a_new_issue_pushes_its_links_after_the_create() {
     assert!(created.contains("relates to: PROJ-150"), "{created}");
 }
 
+/// The calls a command made, out of the fixture journal it wrote.
+fn journaled(ws: &Ws, args: &[&str]) -> (Value, Vec<Value>) {
+    let journal = ws.path().join("calls.jsonl");
+    let _ = std::fs::remove_file(&journal);
+    let out = ws
+        .cmd(args)
+        .arg("--json")
+        .env("JIRED_FIXTURE_JOURNAL", &journal)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "`jired {}` failed\nstdout: {}\nstderr: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let calls = std::fs::read_to_string(&journal)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .collect();
+    (serde_json::from_slice(&out.stdout).unwrap(), calls)
+}
+
+/// `jired link` writes the `links:` line an agent used to write with a
+/// script, spelled the instance's way and checked against the link types the
+/// last fetch listed; `jired unlink` takes it back out. Both stage like
+/// `label` does, and say so.
+#[test]
+fn link_and_unlink_stage_the_lines_push_sends() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let file = "PROJ-0143. Add integration test.md";
+
+    let staged = ws.json(&["link", "PROJ-143", "Blocks", "PROJ-150"]);
+    assert_eq!(staged["schema"], "jired/link/1");
+    assert_eq!(staged["staged"], true, "{staged}");
+    assert_eq!(staged["next"], "jired push PROJ-143");
+    assert!(
+        ws.read(file).contains("- blocks: PROJ-150"),
+        "{}",
+        ws.read(file)
+    );
+    // Again is not a change.
+    let again = ws.json(&["link", "PROJ-143", "blocks", "PROJ-150"]);
+    assert_eq!(again["issues"][0]["changed"], false);
+
+    let err = ws.json_err(&["link", "PROJ-143", "depends", "on", "PROJ-150"], 2);
+    assert!(
+        err["hint"].as_str().unwrap().contains("is blocked by"),
+        "{err}"
+    );
+    ws.json_err(&["link", "PROJ-143", "blocks", "PROJ-143"], 2);
+
+    let (pushed, calls) = journaled(&ws, &["push", "PROJ-143", "--verify"]);
+    assert_eq!(pushed["summary"]["failed"], 0, "{pushed}");
+    assert_eq!(pushed["verify"], serde_json::json!([]), "{pushed}");
+    assert!(calls.iter().any(|c| c["path"] == "/issueLink"), "{calls:?}");
+
+    let unlinked = ws.json(&["unlink", "PROJ-143", "PROJ-150", "--push"]);
+    assert_eq!(unlinked["staged"], false, "{unlinked}");
+    let ops = &unlinked["push"]["results"][0]["ops"];
+    assert_eq!(ops[0]["kind"], "delete_link", "{unlinked}");
+    assert!(!ws.read(file).contains("PROJ-150"), "{}", ws.read(file));
+}
+
+/// A web link is a `links:` line like any other — `- web: URL "title"` —
+/// read from the server's remote-link resource and written back through it.
+#[test]
+fn web_links_round_trip_through_links() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let file = "PROJ-0143. Add integration test.md";
+    let url = "https://wiki.example/display/TSK/Release+1.0.0";
+
+    ws.json(&["link", "PROJ-143", "--web", url, "--title", "Release 1.0.0"]);
+    let line = format!("- web: {url} \"Release 1.0.0\"");
+    assert!(ws.read(file).contains(&line), "{}", ws.read(file));
+
+    let (pushed, calls) = journaled(&ws, &["push", "--verify"]);
+    assert_eq!(pushed["verify"], serde_json::json!([]), "{pushed}");
+    let create = calls
+        .iter()
+        .find(|c| c["path"] == "/issue/PROJ-143/remotelink")
+        .expect("the web link was created");
+    assert_eq!(create["body"]["object"]["url"], url);
+    assert_eq!(create["body"]["object"]["title"], "Release 1.0.0");
+    // Read back into the file from the server, and nothing left to push.
+    assert!(ws.read(file).contains(&line), "{}", ws.read(file));
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+
+    // One the server gained arrives with the next pull.
+    ws.mutate_remote("PROJ-150", |issue| {
+        issue["_fixture_remotelinks"] = serde_json::json!([
+            {"id": 501, "object": {"url": "https://ci.example/run/7", "title": "CI run"}}
+        ]);
+    });
+    ws.json(&["pull"]);
+    let other = ws.read("PROJ-0150. Rotate IdP certificate.md");
+    assert!(
+        other.contains("- web: https://ci.example/run/7 \"CI run\""),
+        "{other}"
+    );
+
+    // And removing the line deletes it by the id the server gave it.
+    let removed = ws.json(&[
+        "unlink",
+        "PROJ-150",
+        "--web",
+        "https://ci.example/run/7",
+        "--push",
+    ]);
+    let op = &removed["push"]["results"][0]["ops"][0];
+    assert_eq!(op["kind"], "delete_remote_link", "{removed}");
+    assert_eq!(op["status"], "done", "{removed}");
+    let other = ws.read("PROJ-0150. Rotate IdP certificate.md");
+    assert!(!other.contains("ci.example"), "{other}");
+}
+
+/// The field report's last task, small: release tasks created with a label, a
+/// Fix Version and a sprint, chained by `blocks` links, the first carrying the
+/// release page — all with jired, and checked against the server afterwards.
+#[test]
+fn linked_release_tasks_are_created_and_verified_with_jired_alone() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let mut keys = Vec::new();
+    for summary in ["Freeze 2.5.0", "Tag 2.5.0", "Announce 2.5.0"] {
+        let created = ws.json(&[
+            "create",
+            "--summary",
+            summary,
+            "--labels",
+            "release",
+            "--set",
+            "fix_versions=2.5.0",
+            "--sprint",
+            "Sprint 43",
+            "--push",
+            "--verify",
+        ]);
+        assert_eq!(
+            created["push"]["verify"],
+            serde_json::json!([]),
+            "{created}"
+        );
+        keys.push(created["new_key"].as_str().unwrap().to_string());
+    }
+    ws.json(&["link", &keys[0], "blocks", &keys[1]]);
+    ws.json(&["link", &keys[1], "blocks", &keys[2]]);
+    ws.json(&[
+        "link",
+        &keys[0],
+        "--web",
+        "https://wiki.example/release-2.5.0",
+        "--title",
+        "Release 2.5.0",
+    ]);
+
+    // The chain goes out in one push, and the server holds what the files say.
+    let pushed = ws.json(&["push", "--verify"]);
+    assert_eq!(pushed["summary"]["failed"], 0, "{pushed}");
+    assert!(pushed["stale"].as_array().unwrap().is_empty(), "{pushed}");
+    assert_eq!(pushed["verify"], serde_json::json!([]), "{pushed}");
+
+    let middle = ws.json(&["show", &keys[1]]);
+    let links = middle["frontmatter"]["links"].to_string();
+    assert!(
+        links.contains(&format!("\"is blocked by\":\"{}\"", keys[0])),
+        "{links}"
+    );
+    assert!(
+        links.contains(&format!("\"blocks\":\"{}\"", keys[2])),
+        "{links}"
+    );
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
+/// The same on Data Center, whose remote-link routes are the ones its own
+/// description declares (`tests/dc_spec_contract.rs` holds them to it).
+#[test]
+fn web_links_go_out_on_data_center_too() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["link", "DC-77", "--web", "https://wiki.corp.example/x"]);
+    let (pushed, calls) = journaled(&ws, &["push", "--verify"]);
+    assert_eq!(pushed["verify"], serde_json::json!([]), "{pushed}");
+    let create = calls
+        .iter()
+        .find(|c| c["path"] == "/issue/DC-77/remotelink")
+        .expect("the web link was created");
+    // No title given: the server needs one, and the URL is what Jira uses.
+    assert_eq!(
+        create["body"]["object"]["title"],
+        "https://wiki.corp.example/x"
+    );
+    let text = ws.read(ws.issue_file());
+    assert!(
+        text.contains("- web: https://wiki.corp.example/x\n"),
+        "{text}"
+    );
+}
+
+/// A write the server accepts and does not apply passes a plain push; under
+/// `--verify` the field is named with what was asked and what is there, and
+/// the push exits 10.
+#[test]
+fn verify_names_a_field_the_server_did_not_take() {
+    let ws = Ws::new();
+    ws.write_fixture("ignored.json", serde_json::json!(["PUT /issue/PROJ-142"]));
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["label", "add", "verified-label", "PROJ-142"]);
+
+    let report = ws.json_code(&["push", "--verify"], 10);
+    let found = report["verify"].as_array().unwrap();
+    let labels = found
+        .iter()
+        .find(|m| m["field"] == "labels")
+        .unwrap_or_else(|| panic!("labels not reported: {report}"));
+    assert_eq!(labels["key"], "PROJ-142");
+    assert!(
+        labels["expected"].to_string().contains("verified-label"),
+        "{report}"
+    );
+    assert!(
+        !labels["actual"].to_string().contains("verified-label"),
+        "{report}"
+    );
+}
+
 /// The field report: `create --sprint 17 … --push` sent no sprint, the plan
 /// showed no move, and the issue landed in the backlog — `17` was written into
 /// the file as typed and named no sprint. It now resolves to the sprint whose

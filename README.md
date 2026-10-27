@@ -206,6 +206,7 @@ Links are single-entry maps, one per line, using the link type's own wording:
 links:
 - blocks: PROJ-150
 - relates to: PROJ-99
+- web: https://wiki.example/display/PROJ/Release "Release notes"
 ```
 
 The direction is the line: `- is blocked by: TSK-266` and `- blocks: TSK-266`
@@ -213,7 +214,22 @@ are the two ends of the same link type. Push turns an added line into
 `POST /issueLink`, a removed one into `DELETE /issueLink/{id}`, and resolves
 the wording against the instance's own link types — a direction this Jira does
 not define is refused at plan time (exit 2, visible in `--dry-run`), naming the
-ones it does.
+ones it does. A `web:` line is a web link — a Confluence page, a CI run — with
+its title in quotes when it has one; push creates and deletes it through the
+issue's remote links.
+
+`jired link` and `jired unlink` write and remove these lines for you:
+
+```sh
+jired link TSK-740 is blocked by TSK-739        # the words between the keys are the direction
+jired link TSK-740 --web https://wiki.example/x --title "Release 1.0.0"
+jired unlink TSK-740 TSK-739                    # every link between the two
+jired link TSK-741 blocks TSK-742 --push        # and send it now
+```
+
+`jired push --verify` reads every pushed issue back and names each field the
+server does not hold as the file asked — exit 10 if there is one — so a write
+Jira accepted and quietly dropped is caught by the push that made it.
 
 `due_date:` is Jira's own `duedate` — a date with no time, `2026-09-14`. It is a
 system field, so it is named in the header rather than living under `custom:`.
@@ -384,7 +400,7 @@ the filename you were just editing instead of retyping the key.
 |---|---|
 | `fetch [ISSUES…]` | update the local snapshot from the server without touching files; `--jql/--sprint/--board/--updated-since` widen the scope, `--full` ignores the incremental watermark, `--slim` skips changelogs to keep `state.db` small |
 | `pull [ISSUES…]` | fetch and merge into the files; `-n/--dry-run` shows what would be written |
-| `push [ISSUES…]` | send staged changes; shows the plan and asks first when interactive (`-y` skips), `-n/--dry-run` (alias `preview`) prints the exact API calls, `--refresh-stale` re-fetches and retries the issues the server moved on from |
+| `push [ISSUES…]` | send staged changes; shows the plan and asks first when interactive (`-y` skips), `-n/--dry-run` (alias `preview`) prints the exact API calls, `--refresh-stale` re-fetches and retries the issues the server moved on from, `--verify` reads every pushed issue back and names any field the server does not hold as the file asked (exit 10) |
 | `diff [ISSUES…]` | `--against base` (default: what `push` would send) or `--against remote` (what `pull` would bring in); `--stat`, `--exit-code` |
 | `status` | dirty, behind, staged, conflicted; `--all` also lists unchanged issues |
 | `edit [ISSUE]` | change an issue on a form; without an issue, pick one from the list — see [The issue picker](#the-issue-picker) |
@@ -394,6 +410,7 @@ the filename you were just editing instead of retyping the key.
 | `transition ISSUES… --to STATUS` | stage a workflow change across several issues, each validated against its own workflow; `--list` shows what one issue can do, `--field k=v` fills a transition screen |
 | `assign ISSUES… --me\|--user Q\|--none` | stage an assignee change across several issues; `--user` searches only the people who can be assigned the first one, not the whole directory |
 | `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues; `add`/`remove` keep the other labels, `set` replaces them |
+| `link ISSUES DIRECTION OTHERS` / `link ISSUES --web URL [--title T]` | stage a `links:` line — `jired link TSK-740 is blocked by TSK-739`; `unlink ISSUES [DIRECTION] OTHERS` and `unlink ISSUES --web URL` take one out |
 | `parent ISSUES… --to ISSUE` | move sub-tasks under a different parent — see [Sub-tasks](#sub-tasks) |
 | `set --field F --value V ISSUES…` | stage any editable field across issues, including `customfield_*` ids |
 | `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues |

@@ -139,6 +139,35 @@
         "type": "string"
       }
     },
+    "verify": {
+      "type": "array",
+      "description": "Present under --verify: every field a pushed issue's file asked for that the server, read again after the push, does not hold. Empty when everything matched; any entry makes the exit code 10.",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "field",
+          "expected",
+          "actual"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The issue's key on the server (the real one, for an issue this push created)"
+          },
+          "field": {
+            "type": "string",
+            "description": "A frontmatter field name, `custom.<id>`, `description` or `checklist`"
+          },
+          "expected": {
+            "description": "What the file asked for"
+          },
+          "actual": {
+            "description": "What the server holds"
+          }
+        }
+      }
+    },
     "summary": {
       "type": "object",
       "description": "The outcome in one line, so a caller need not walk the results to find it",

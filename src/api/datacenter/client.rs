@@ -299,6 +299,18 @@ impl JiraApi for DataCenter {
         self.rest.delete_link(link_id).await
     }
 
+    async fn remote_links(&self, key: &str) -> Result<Vec<Value>> {
+        self.rest.remote_links(key).await
+    }
+
+    async fn create_remote_link(&self, key: &str, url: &str, title: &str) -> Result<()> {
+        self.rest.create_remote_link(key, url, title).await
+    }
+
+    async fn delete_remote_link(&self, key: &str, link_id: &str) -> Result<()> {
+        self.rest.delete_remote_link(key, link_id).await
+    }
+
     async fn set_issue_property(&self, key: &str, property: &str, value: Value) -> Result<()> {
         self.rest.set_issue_property(key, property, value).await
     }

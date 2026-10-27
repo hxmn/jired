@@ -8,6 +8,38 @@ use crate::error::{JiredError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// The `links:` key a web (remote) link is written under, in place of a
+/// direction: `- web: https://wiki.example/x "Release notes"`.
+///
+/// One list for both kinds rather than a second key, because both are "what
+/// this issue points at" and an agent adding one should not have to know Jira
+/// keeps them in two places.
+pub const WEB: &str = "web";
+
+/// A web link as `links:` spells it: the URL, then the title in quotes when
+/// there is one that says more than the URL does.
+pub fn web_value(url: &str, title: &str) -> String {
+    let (url, title) = (url.trim(), title.trim());
+    match title.is_empty() || title == url {
+        true => url.to_string(),
+        false => format!("{url} \"{title}\""),
+    }
+}
+
+/// The `(url, title)` a `web:` value spells. The URL runs to the first space;
+/// the rest is the title, its outer quotes dropped, so a title with quotes of
+/// its own survives.
+pub fn parse_web(value: &str) -> (String, String) {
+    let value = value.trim();
+    let (url, rest) = value.split_once(char::is_whitespace).unwrap_or((value, ""));
+    let rest = rest.trim();
+    let title = rest
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(rest);
+    (url.to_string(), title.to_string())
+}
+
 /// Fields a user may change; a push turns a difference into an API call.
 pub const EDITABLE: &[&str] = &[
     "type",
@@ -164,6 +196,22 @@ impl Frontmatter {
             .collect();
         pairs.sort();
         pairs
+    }
+
+    /// The issue links alone: every `links:` line but the web ones.
+    pub fn issue_link_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs = self.link_pairs();
+        pairs.retain(|(t, _)| t != WEB);
+        pairs
+    }
+
+    /// The web links alone, as `(url, title)`.
+    pub fn web_links(&self) -> Vec<(String, String)> {
+        self.link_pairs()
+            .iter()
+            .filter(|(t, _)| t == WEB)
+            .map(|(_, v)| parse_web(v))
+            .collect()
     }
 
     pub fn set_links(&mut self, pairs: &[(String, String)]) {
@@ -362,6 +410,30 @@ pub fn parse_user(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_web_link_round_trips_through_its_spelling() {
+        let v = web_value("https://wiki.example/x", "Release \"1.0\" notes");
+        assert_eq!(v, "https://wiki.example/x \"Release \"1.0\" notes\"");
+        assert_eq!(
+            parse_web(&v),
+            (
+                "https://wiki.example/x".into(),
+                "Release \"1.0\" notes".into()
+            )
+        );
+        // A title that only repeats the URL is not written.
+        assert_eq!(
+            web_value("https://a.example", "https://a.example"),
+            "https://a.example"
+        );
+        assert_eq!(
+            parse_web("https://a.example"),
+            ("https://a.example".into(), String::new())
+        );
+        // Unquoted, the rest of the line is still the title.
+        assert_eq!(parse_web("https://a.example Notes").1, "Notes");
+    }
 
     const SAMPLE: &str = r#"
 key: PROJ-142

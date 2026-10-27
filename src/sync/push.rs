@@ -44,6 +44,20 @@ pub struct PushReport {
     pub groups: Option<crate::sync::group::GroupReport>,
     /// Things push deliberately did not do, and why.
     pub warnings: Vec<String>,
+    /// Under `--verify`: every field a pushed issue's file asked for that the
+    /// server, read again afterwards, does not hold. Absent without the flag,
+    /// empty when everything matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify: Option<Vec<Mismatch>>,
+}
+
+/// One field the server does not hold the way the file asked for it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Mismatch {
+    pub key: String,
+    pub field: String,
+    pub expected: Value,
+    pub actual: Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,12 +117,17 @@ impl PushReport {
         if !self.stale.is_empty() {
             return ExitCode::Conflict;
         }
-        let kinds: std::collections::BTreeSet<&str> = self
+        let mut kinds: std::collections::BTreeSet<&str> = self
             .results
             .iter()
             .filter(|r| !r.ok)
             .filter_map(|r| r.error_kind.as_deref())
             .collect();
+        // A field the server does not hold after it accepted the write is the
+        // same failure as a write the re-read shows was swallowed.
+        if self.verify.as_ref().is_some_and(|v| !v.is_empty()) {
+            kinds.insert("unsupported_server");
+        }
         match kinds.len() {
             0 => ExitCode::Success,
             // One kind of failure gets its own exit code: an auth problem and a
@@ -220,6 +239,33 @@ impl PushReport {
         if failed > 0 {
             out.hint("fix the causes above, then \"jired push --resume\"");
         }
+        match &self.verify {
+            None => {}
+            Some(found) if found.is_empty() => {
+                out.say("verified: the server holds what the files asked for")
+            }
+            Some(found) => {
+                use crate::style::{self, CYAN, RED};
+                out.say(format!(
+                    "\n{} {} field(s) the server does not hold as the file asked:",
+                    style::out(RED, "verify:"),
+                    found.len()
+                ));
+                for m in found {
+                    out.say(format!(
+                        "  {} {:<16} expected {}, the server has {}",
+                        style::out(CYAN, &m.key),
+                        m.field,
+                        compact(&m.expected),
+                        compact(&m.actual)
+                    ));
+                }
+                out.hint(
+                    "each file now shows what the server holds; write the expected value \
+                     again and push, or make the change in Jira",
+                );
+            }
+        }
     }
 }
 
@@ -327,6 +373,15 @@ enum Action {
         /// The other end, which the deletion changes too.
         other_key: String,
     },
+    /// Add a web link: a `- web: URL "title"` line.
+    CreateRemoteLink {
+        url: String,
+        title: String,
+    },
+    /// Remove a web link, by its id out of the base snapshot.
+    DeleteRemoteLink {
+        id: String,
+    },
 }
 
 pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
@@ -376,6 +431,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 stale: Vec::new(),
                 groups: None,
                 warnings: Vec::new(),
+                verify: None,
             });
         }
         for key in &unfinished {
@@ -395,6 +451,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         stale: Vec::new(),
         groups: None,
         warnings: Vec::new(),
+        verify: None,
     };
 
     // A key that was named and is not here is a failure of its own, not an
@@ -423,6 +480,10 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         return Ok(report);
     }
 
+    // What each file asked for, as it was sent, for `--verify` to hold the
+    // server to; `true` for an issue this push created.
+    let mut planned: BTreeMap<String, (IssueDoc, bool)> = BTreeMap::new();
+
     // Locally created issues go first: an existing issue may name one as its
     // parent or epic, and that reference has to resolve to a real key.
     let mut rekeyed: Vec<(String, String)> = Vec::new();
@@ -436,6 +497,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         let Some(file) = files.get(&row.key) else {
             continue;
         };
+        let asked = engine.projector.read(&file.relative).ok();
         match create_issue(
             ctx,
             &engine,
@@ -448,6 +510,9 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             Ok((result, touched)) => {
                 if let Some(new_key) = &result.new_key {
                     rekeyed.push((row.key.clone(), new_key.clone()));
+                    if let Some(doc) = asked {
+                        planned.insert(new_key.clone(), (doc, true));
+                    }
                 }
                 report.results.push(result);
                 refresh_linked(
@@ -537,6 +602,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         // failure becomes a result and the loop goes on: `commands.md` promises
         // that one bad issue does not stop the others, and a `?` here would
         // throw away the report of everything already pushed.
+        let mut asked: Option<IssueDoc> = None;
         let prepared = (|| -> Result<Vec<Op>> {
             let mut working = engine.projector.read(&file.relative)?;
             let base_issue = crate::api::normalize::issue_from_json(&base.raw, markup, &fields)?;
@@ -581,6 +647,17 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 // edit the flag was reached for would be dropped.
                 unwrap_edited_regions(&mut working, &edited);
             }
+
+            // A card dragged to another column asks for that status even
+            // though the file's `status:` still says the old one, unless the
+            // file was edited to say something else — which wins in `plan`.
+            let mut sent = working.clone();
+            if let Some(to) = moved {
+                if working.frontmatter.status == base_doc.frontmatter.status {
+                    sent.frontmatter.status = to.clone();
+                }
+            }
+            asked = Some(sent);
 
             let raw = engine.state.raw_blocks(&row.key, "description")?;
             plan(
@@ -674,6 +751,9 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                     report.stale.push(row.key.clone());
                 }
                 let touched = done_links(&others, &result.ops);
+                if let Some(doc) = asked {
+                    planned.insert(row.key.clone(), (doc, false));
+                }
                 report.results.push(result);
                 if refresh_linked(
                     ctx,
@@ -690,6 +770,12 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     }
 
     report.results.sort_by(|a, b| a.key.cmp(&b.key));
+
+    // Before the retry, which verifies what it sends against the files as the
+    // re-fetch merged them; the docs held here predate that merge.
+    if args.verify && !args.dry_run {
+        report.verify = Some(verify(ctx, &engine, client.as_ref(), &report, &planned));
+    }
 
     // Before the regroup below, so an issue that only went out on the retry
     // still moves the folders it belongs in. `engine` owns its handles rather
@@ -1137,6 +1223,7 @@ fn create_issue(
         .filter(|(_, r)| r.status == "done")
         .map(|(f, _)| &f.action);
     let confirmed = settle(ctx, client, &new_key, sent, confirmed)?;
+    let confirmed = with_web_links(ctx, engine, client, confirmed);
 
     // The same silence a follow-up can meet: a sub-task created into a sprint
     // gets a 204 from the board and stays wherever its parent is, and a
@@ -1266,7 +1353,7 @@ fn keep_unapplied(rebuilt: &mut IssueDoc, original: &IssueDoc, action: &Action) 
         Action::Transition { .. } => {
             rebuilt.frontmatter.status = original.frontmatter.status.clone();
         }
-        Action::CreateLink { .. } => {
+        Action::CreateLink { .. } | Action::CreateRemoteLink { .. } => {
             rebuilt.frontmatter.links = original.frontmatter.links.clone();
         }
         _ => {}
@@ -1493,6 +1580,9 @@ fn retry_stale(ctx: &mut Context, report: &mut PushReport, args: &PushArgs) -> R
     report.results.sort_by(|a, b| a.key.cmp(&b.key));
     report.stale = second.stale;
     report.warnings.extend(second.warnings);
+    if let (Some(found), Some(more)) = (&mut report.verify, second.verify) {
+        found.extend(more);
+    }
     if second.groups.is_some() {
         report.groups = second.groups;
     }
@@ -1586,6 +1676,217 @@ fn done_links(others: &[Option<String>], reports: &[OpReport]) -> Vec<String> {
     keys
 }
 
+/// `--verify`: read every issue this push changed back from the server and
+/// name each field that is not what its file asked for.
+///
+/// Read again rather than taken from the re-read each push already makes: that
+/// one is minutes old by the end of a long push, and a plugin or an automation
+/// rule that undoes a write does it after the write. An issue refused as stale
+/// sent nothing, and one whose every op failed is already reported as failed;
+/// neither has anything to verify.
+fn verify(
+    ctx: &Context,
+    engine: &Engine,
+    client: &dyn JiraApi,
+    report: &PushReport,
+    planned: &BTreeMap<String, (IssueDoc, bool)>,
+) -> Vec<Mismatch> {
+    let mut found = Vec::new();
+    let ignored = engine.field_map().map(|f| f.ignored).unwrap_or_default();
+    let base_url = engine.base_url().to_string();
+    for result in &report.results {
+        if report.stale.contains(&result.key) || !result.ops.iter().any(|o| o.status == "done") {
+            continue;
+        }
+        let key = result.new_key.as_ref().unwrap_or(&result.key);
+        let Some((asked, created)) = planned.get(key) else {
+            continue;
+        };
+        let issue = match crate::api::block_on(client.issue(key)) {
+            Ok(issue) => with_web_links(ctx, engine, client, issue),
+            Err(e) => {
+                ctx.out.warn(format!(
+                    "{key}: cannot read it back to verify: {}",
+                    e.message
+                ));
+                continue;
+            }
+        };
+        let rendered = render_issue(
+            &issue,
+            &RenderContext {
+                markup: engine.markup(),
+                base_url: &base_url,
+                ignored_custom: &ignored,
+            },
+        );
+        let server = match rendered {
+            Ok(r) => r.doc,
+            Err(e) => {
+                ctx.out.warn(format!(
+                    "{key}: cannot read it back to verify: {}",
+                    e.message
+                ));
+                continue;
+            }
+        };
+        for (field, expected, actual) in differences(asked, &server, *created, &ignored) {
+            found.push(Mismatch {
+                key: key.clone(),
+                field,
+                expected,
+                actual,
+            });
+        }
+    }
+    found
+}
+
+/// Every editable part of `asked` that `server` does not hold, as
+/// `(field, expected, actual)`.
+///
+/// Compared the way each field means, not byte for byte: links and the list
+/// fields as sets, the sprint as the one the issue is in now (the rest of the
+/// list is history no write can change), a user by account id, names without
+/// regard to case. A created issue is held only to what its file set: a blank
+/// status or priority means "whatever the server starts it on".
+fn differences(
+    asked: &IssueDoc,
+    server: &IssueDoc,
+    created: bool,
+    ignored: &std::collections::BTreeSet<String>,
+) -> Vec<(String, Value, Value)> {
+    let (a, s) = (&asked.frontmatter, &server.frontmatter);
+    let mut out = Vec::new();
+    let blank = |v: &Value| match v {
+        Value::Null => true,
+        Value::String(t) => t.trim().is_empty(),
+        Value::Array(items) => items.is_empty(),
+        Value::Object(map) => map.is_empty(),
+        _ => false,
+    };
+    for name in crate::doc::frontmatter::EDITABLE {
+        if *name == "custom" {
+            continue;
+        }
+        let (Some(want), Some(have)) = (a.field(name), s.field(name)) else {
+            continue;
+        };
+        if created && blank(&want) {
+            continue;
+        }
+        if !same_value(name, &want, &have) {
+            out.push((name.to_string(), want, have));
+        }
+    }
+    for (id, want) in &a.custom {
+        if ignored.contains(id) {
+            continue;
+        }
+        let have = s.custom.get(id).cloned().unwrap_or(Value::Null);
+        let want = crate::api::custom::simplify(want);
+        if created && blank(&want) {
+            continue;
+        }
+        if want != crate::api::custom::simplify(&have) {
+            out.push((format!("custom.{id}"), want, have));
+        }
+    }
+    let squash = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !(created && asked.description.trim().is_empty())
+        && squash(&asked.description) != squash(&server.description)
+    {
+        out.push((
+            "description".into(),
+            json!(asked.description.trim()),
+            json!(server.description.trim()),
+        ));
+    }
+    let checklist = |d: &IssueDoc| {
+        crate::api::checklist::to_text(&d.checklist, crate::api::checklist::NOTE)
+            .map(|t| crate::api::checklist::normalized(&t))
+            .unwrap_or_else(|_| format!("{:?}", d.checklist))
+    };
+    if !(created && asked.checklist.is_empty()) && checklist(asked) != checklist(server) {
+        out.push((
+            "checklist".into(),
+            json!(checklist(asked)),
+            json!(checklist(server)),
+        ));
+    }
+    out
+}
+
+/// Whether two values of the frontmatter field `name` say the same thing.
+fn same_value(name: &str, want: &Value, have: &Value) -> bool {
+    let text = |v: &Value| -> String {
+        match v {
+            Value::Null => String::new(),
+            Value::String(s) => s.trim().to_lowercase(),
+            other => other.to_string().to_lowercase(),
+        }
+    };
+    let set = |v: &Value| -> Vec<String> {
+        let mut items: Vec<String> = v
+            .as_array()
+            .map(|a| a.iter().map(text).collect())
+            .unwrap_or_default();
+        items.sort();
+        items.dedup();
+        items
+    };
+    // `@[Name](id)` names a person by the id; the display name can change.
+    let user = |v: &Value| -> String {
+        let t = text(v);
+        match (t.rfind("]("), t.ends_with(')')) {
+            (Some(at), true) => t[at + 2..t.len() - 1].to_string(),
+            _ => t,
+        }
+    };
+    match name {
+        "labels" | "components" | "fix_versions" | "affects_versions" | "links" => {
+            set(want) == set(have)
+        }
+        "sprint" => {
+            let last = |v: &Value| v.as_array().and_then(|a| a.last()).map(text);
+            last(want) == last(have)
+        }
+        "assignee" => user(want) == user(have),
+        "story_points" => want.as_f64() == have.as_f64(),
+        _ => text(want) == text(have),
+    }
+}
+
+/// `issue`, re-read after a push, with its web links: they are not in the
+/// issue payload, and a file rebuilt from it alone would lose every one and
+/// call that the server's doing.
+///
+/// A read that fails carries the last snapshot's instead, and says so. The
+/// writes have already happened; failing the push over a read of the links
+/// would report as failed something that went through.
+fn with_web_links(
+    ctx: &Context,
+    engine: &Engine,
+    client: &dyn JiraApi,
+    mut issue: RemoteIssue,
+) -> RemoteIssue {
+    match crate::api::block_on(client.remote_links(&issue.key)) {
+        Ok(links) => crate::api::normalize::set_remote_links(&mut issue, links),
+        Err(e) => {
+            ctx.out.warn(format!(
+                "{}: cannot read its web links back: {} — the last ones seen are kept",
+                issue.key, e.message
+            ));
+            if let Ok(Some(row)) = engine.state.issue(&issue.key) {
+                if let Some(previous) = row.remote.map(|r| r.raw).or(row.base.map(|b| b.raw)) {
+                    crate::api::normalize::carry_remote_links(&mut issue, &previous);
+                }
+            }
+        }
+    }
+    issue
+}
+
 /// Bring the other end of a link this push just made or removed level with the
 /// server, merging it into its file. Reports whether anything was rewritten.
 ///
@@ -1612,7 +1913,12 @@ fn refresh_linked(
             continue;
         }
         match crate::api::block_on(client.issue(key)) {
-            Ok(issue) => {
+            Ok(mut issue) => {
+                // An issue link does not touch the other end's web links, so
+                // the ones it last had are still the ones it has.
+                if let Some(previous) = engine.state.issue(key)?.and_then(|row| row.remote) {
+                    crate::api::normalize::carry_remote_links(&mut issue, &previous.raw);
+                }
                 engine.state.upsert_remote(&issue)?;
                 pending.push(key.clone());
             }
@@ -1786,7 +2092,16 @@ fn follow_ups_after_create(
     // of its own, aimed at the key the create hands back. Resolved here,
     // before anything is sent, so an unknown direction refuses the issue with
     // the edit still on screen rather than after the create has happened.
-    for (direction, other) in doc.frontmatter.link_pairs() {
+    for (url, title) in doc.frontmatter.web_links() {
+        out.push(FollowUp {
+            kind: "create_remote_link",
+            summary: crate::doc::frontmatter::web_value(&url, &title),
+            request: json!({"method": "POST", "path": "/issue/{key}/remotelink",
+                            "body": crate::api::rest::remote_link_body(&url, &title)}),
+            action: Action::CreateRemoteLink { url, title },
+        });
+    }
+    for (direction, other) in doc.frontmatter.issue_link_pairs() {
         let (type_name, self_is_inward) =
             resolved_link(&doc.frontmatter.key, &direction, link_types.get()?)?;
         let (inward, outward) = link_ends("{key}", &other, self_is_inward);
@@ -2051,11 +2366,12 @@ fn plan_links(
     ops: &mut Vec<Op>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
-    let before = bf.link_pairs();
-    let after = wf.link_pairs();
-    if before == after {
+    if bf.link_pairs() == wf.link_pairs() {
         return Ok(());
     }
+    plan_web_links(bf, wf, base_raw, ops, warnings);
+    let before = bf.issue_link_pairs();
+    let after = wf.issue_link_pairs();
 
     for (direction, other) in after.iter().filter(|p| !before.contains(p)) {
         let (type_name, self_is_inward) = resolved_link(&bf.key, direction, link_types.get()?)?;
@@ -2096,6 +2412,72 @@ fn plan_links(
         }
     }
     Ok(())
+}
+
+/// The web-link half of [`plan_links`]: a create per added `web:` line, a
+/// delete per removed one. A changed title is both, since a line is the link.
+fn plan_web_links(
+    bf: &crate::doc::Frontmatter,
+    wf: &crate::doc::Frontmatter,
+    base_raw: &Value,
+    ops: &mut Vec<Op>,
+    warnings: &mut Vec<String>,
+) {
+    let before = bf.web_links();
+    let after = wf.web_links();
+    for (url, title) in after.iter().filter(|l| !before.contains(l)) {
+        ops.push(Op {
+            kind: "create_remote_link",
+            summary: crate::doc::frontmatter::web_value(url, title),
+            request: json!({"method": "POST", "path": "/issue/{key}/remotelink",
+                            "body": crate::api::rest::remote_link_body(url, title)}),
+            action: Action::CreateRemoteLink {
+                url: url.clone(),
+                title: title.clone(),
+            },
+        });
+    }
+    for (url, title) in before.iter().filter(|l| !after.contains(l)) {
+        match remote_link_id_in(base_raw, url, title) {
+            Some(id) => ops.push(Op {
+                kind: "delete_remote_link",
+                summary: crate::doc::frontmatter::web_value(url, title),
+                request: json!({"method": "DELETE",
+                                "path": format!("/issue/{{key}}/remotelink/{id}")}),
+                action: Action::DeleteRemoteLink { id },
+            }),
+            None => warnings.push(format!(
+                "{}: the last-synced snapshot carries no id for the web link {url}, so it \
+                 was not deleted — run `jired pull`, then remove it again",
+                bf.key
+            )),
+        }
+    }
+}
+
+/// The id of the web link the base snapshot holds for `(url, title)`, read the
+/// way the file was rendered from it.
+fn remote_link_id_in(base_raw: &Value, url: &str, title: &str) -> Option<String> {
+    let wanted = crate::doc::frontmatter::web_value(url, title);
+    base_raw
+        .get(crate::api::normalize::REMOTE_LINKS)?
+        .as_array()?
+        .iter()
+        .find_map(|l| {
+            let object = l.get("object")?;
+            let spelled = crate::doc::frontmatter::web_value(
+                object.get("url")?.as_str()?,
+                object.get("title").and_then(Value::as_str).unwrap_or(""),
+            );
+            if spelled != wanted {
+                return None;
+            }
+            match l.get("id")? {
+                Value::String(s) => Some(s.clone()),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            }
+        })
 }
 
 /// What an editable frontmatter field becomes on the wire.
@@ -3150,6 +3532,7 @@ fn execute(
     // Re-read what the server now holds and make that the new base.
     let confirmed = crate::api::block_on(client.issue(key))?;
     let confirmed = settle(ctx, client, key, ops.iter().map(|o| &o.action), confirmed)?;
+    let confirmed = with_web_links(ctx, engine, client, confirmed);
 
     // Before the file is rewritten from it, not after: the rewrite is what would
     // replace the user's edit with the server's answer, and an operation the
@@ -3295,6 +3678,10 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                 client.create_link(type_name, &inward, &outward).await
             }
             Action::DeleteLink { id, .. } => client.delete_link(id).await,
+            Action::CreateRemoteLink { url, title } => {
+                client.create_remote_link(key, url, title).await
+            }
+            Action::DeleteRemoteLink { id } => client.delete_remote_link(key, id).await,
             Action::CreateComment(body) => client.add_comment(key, body).await.map(|_| ()),
             Action::UpdateComment { id, body } => {
                 client.update_comment(key, id, body).await.map(|_| ())
@@ -3800,6 +4187,7 @@ mod tests {
             stale: vec![],
             groups: None,
             warnings: vec![],
+            verify: None,
         };
         assert_eq!(ok.exit_code(), ExitCode::Success);
 
@@ -3810,6 +4198,7 @@ mod tests {
             stale: vec!["PROJ-1".into()],
             groups: None,
             warnings: vec![],
+            verify: None,
         };
         assert_eq!(stale.exit_code(), ExitCode::Conflict);
 
@@ -3820,6 +4209,7 @@ mod tests {
             stale: vec![],
             groups: None,
             warnings: vec![],
+            verify: None,
         };
         assert_eq!(failed.exit_code(), ExitCode::Generic);
 
@@ -3832,6 +4222,7 @@ mod tests {
             stale: vec![],
             groups: None,
             warnings: vec![],
+            verify: None,
         };
         assert_eq!(auth.exit_code(), ExitCode::Auth);
 
@@ -3846,6 +4237,7 @@ mod tests {
             stale: vec![],
             groups: None,
             warnings: vec![],
+            verify: None,
         };
         assert_eq!(mixed.exit_code(), ExitCode::Generic);
     }

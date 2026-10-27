@@ -1065,6 +1065,33 @@ impl JiraApi for Rest {
             .await
     }
 
+    async fn remote_links(&self, key: &str) -> Result<Vec<Value>> {
+        let v = self
+            .get(&routes::REMOTE_LINKS, &[("issueIdOrKey", key)], &[])
+            .await?;
+        Ok(v.as_array().cloned().unwrap_or_default())
+    }
+
+    async fn create_remote_link(&self, key: &str, url: &str, title: &str) -> Result<()> {
+        self.http
+            .post_json(
+                &self.url(&routes::CREATE_REMOTE_LINK, &[("issueIdOrKey", key)], &[]),
+                remote_link_body(url, title),
+            )
+            .await
+            .map(|_| ())
+    }
+
+    async fn delete_remote_link(&self, key: &str, link_id: &str) -> Result<()> {
+        self.http
+            .delete(&self.url(
+                &routes::DELETE_REMOTE_LINK,
+                &[("issueIdOrKey", key), ("linkId", link_id)],
+                &[],
+            ))
+            .await
+    }
+
     async fn set_issue_property(&self, key: &str, property: &str, value: Value) -> Result<()> {
         self.http
             .put_json(
@@ -1359,6 +1386,17 @@ fn one_comment(v: &Value, markup: Markup) -> Result<RemoteComment> {
 fn one_worklog(v: &Value, markup: Markup) -> Result<RemoteWorklog> {
     normalize::one_worklog(v, markup)
         .ok_or_else(|| JiredError::generic("the server returned an unreadable worklog"))
+}
+
+/// The body of a web link's create call. The server requires a title, so a
+/// link written without one is titled with its URL, which is what Jira's own
+/// dialog does with an empty one.
+pub fn remote_link_body(url: &str, title: &str) -> Value {
+    let title = match title.trim() {
+        "" => url,
+        t => t,
+    };
+    json!({"object": {"url": url, "title": title}})
 }
 
 #[cfg(test)]

@@ -1330,6 +1330,8 @@ mod tests {
             ("transition", "stages a status change"),
             ("assign", "stages an assignee"),
             ("label", "stages labels"),
+            ("link", "stages a `links:` line"),
+            ("unlink", "stages a `links:` line's removal"),
             ("parent", "stages a sub-task's parent"),
             ("set", "stages any editable field"),
             ("attach", "stages a file for upload"),

@@ -17,6 +17,19 @@ use crate::error::{JiredError, Result};
 /// Where a late write waits on the issue it is for; see `late.json`.
 const LATE: &str = "_fixture_late";
 
+/// Where the "server" keeps an issue's web links. Not where a real issue
+/// payload has them — it has none — so every read of the issue strips it.
+const REMOTE: &str = "_fixture_remotelinks";
+
+/// An issue as the server would send it: without the fixture's own storage.
+fn served(v: &Value) -> Value {
+    let mut v = v.clone();
+    if let Value::Object(map) = &mut v {
+        map.remove(REMOTE);
+    }
+    v
+}
+
 /// What Smart Checklist stores for the text it is given, as far as a live
 /// instance has shown it: a detail line is `> ` and the rest of that line, so
 /// `>> text` — to the plugin a nested quote — comes back as `> > text`.
@@ -128,6 +141,24 @@ impl FixtureClient {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
 
+        // Past every id the "server" already holds, as a real counter would
+        // be: each `jired` is a new process, and starting from the same number
+        // every time gave the second issue created in a test the first one's
+        // key.
+        let first_id = issues
+            .values()
+            .filter_map(|v| v.get("id").and_then(Value::as_str))
+            .filter_map(|id| id.parse::<u64>().ok())
+            .chain(
+                issues
+                    .values()
+                    .filter_map(|v| v.get(REMOTE).and_then(Value::as_array))
+                    .flatten()
+                    .filter_map(|l| l.get("id").and_then(Value::as_u64)),
+            )
+            .max()
+            .unwrap_or(0)
+            .max(90000);
         Ok(Self {
             dir: dir.to_path_buf(),
             deployment,
@@ -137,7 +168,7 @@ impl FixtureClient {
             faults,
             ignored,
             late,
-            next_id: Mutex::new(90000),
+            next_id: Mutex::new(first_id),
         })
     }
 
@@ -792,7 +823,7 @@ impl JiraApi for FixtureClient {
 
         let mut parsed = page
             .iter()
-            .map(|v| normalize::issue_from_json(v, self.markup(), &self.field_map))
+            .map(|v| normalize::issue_from_json(&served(v), self.markup(), &self.field_map))
             .collect::<Result<Vec<_>>>()?;
         for issue in &mut parsed {
             self.complete(issue);
@@ -808,7 +839,7 @@ impl JiraApi for FixtureClient {
 
     async fn issue(&self, key: &str) -> Result<RemoteIssue> {
         self.read_once(Some(key));
-        let v = self.issue_value(key)?;
+        let v = served(&self.issue_value(key)?);
         let mut issue = normalize::issue_from_json(&v, self.markup(), &self.field_map)?;
         self.complete(&mut issue);
         Ok(issue)
@@ -962,6 +993,59 @@ impl JiraApi for FixtureClient {
         for key in touched {
             self.bump_updated(&key);
         }
+        Ok(())
+    }
+
+    /// Kept on the issue under a key the issue reads strip, so they survive
+    /// from one `jired` process to the next and still arrive only through
+    /// this call, as they do from a real server.
+    async fn remote_links(&self, key: &str) -> Result<Vec<Value>> {
+        let v = self.issue_value(key)?;
+        Ok(v.get(REMOTE)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn create_remote_link(&self, key: &str, url: &str, title: &str) -> Result<()> {
+        let path = format!("/issue/{key}/remotelink");
+        let body = crate::api::rest::remote_link_body(url, title);
+        self.record("POST", &path, body.clone())?;
+        if !self.applies("POST", &path) {
+            return Ok(());
+        }
+        let id = self.next_id();
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            let issue = issues.get_mut(key).ok_or_else(|| {
+                JiredError::generic(format!("{key} is not on this server"))
+                    .with_detail("status", 404)
+            })?;
+            let entry = json!({"id": id.parse::<u64>().unwrap_or(0), "object": body["object"]});
+            match issue[REMOTE].as_array_mut() {
+                Some(list) => list.push(entry),
+                None => issue[REMOTE] = json!([entry]),
+            }
+        }
+        self.bump_updated(key);
+        Ok(())
+    }
+
+    async fn delete_remote_link(&self, key: &str, link_id: &str) -> Result<()> {
+        let path = format!("/issue/{key}/remotelink/{link_id}");
+        self.record("DELETE", &path, Value::Null)?;
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            if let Some(list) = issues.get_mut(key).and_then(|i| i[REMOTE].as_array_mut()) {
+                // Jira gives the id as a number; the path carries it as text.
+                list.retain(|l| {
+                    l.get("id")
+                        .map(|v| v.to_string().trim_matches('"').to_string())
+                        != Some(link_id.to_string())
+                });
+            }
+        }
+        self.bump_updated(key);
         Ok(())
     }
 

@@ -78,6 +78,13 @@ pub fn run_with(
             Err(e) => tracing::warn!("cannot refresh the versions of {project}: {}", e.message),
         }
     }
+    // What `jired link` checks a direction against. Best-effort like the rest:
+    // without a list it checks nothing, and push still refuses at plan time.
+    match crate::api::block_on(client.link_types()) {
+        Ok(types) if !types.is_empty() => engine.state.save_link_types(&types)?,
+        Ok(_) => {}
+        Err(e) => tracing::debug!("cannot list the link types: {}", e.message),
+    }
 
     let watermark = engine.state.last_fetch_at()?;
     let incremental = !args.full && args.updated_since.is_none() && watermark.is_some();
@@ -110,8 +117,32 @@ pub fn run_with(
 
     let storing = crate::sync::progress::Progress::bar(ctx.out, issues.len(), "storing");
     let mut changed_keys = Vec::new();
-    for issue in &issues {
-        if engine.state.upsert_remote(issue)? {
+    for mut issue in issues.iter().cloned() {
+        // Web links are a resource of their own, one more call per issue, so
+        // they are read only for an issue that changed and only when changelogs
+        // are wanted too; otherwise the last snapshot's are carried forward. A
+        // read that fails is the same: carried, and said, but no reason to fail
+        // a fetch whose issues all arrived.
+        let previous = engine.state.issue(&issue.key)?.and_then(|row| row.remote);
+        // Compared as stored, to the second, the way `upsert_remote` decides
+        // what changed: the server's milliseconds would make every issue new.
+        let stamp = crate::api::model::format_timestamp;
+        let moved = previous
+            .as_ref()
+            .is_none_or(|p| stamp(&p.updated) != stamp(&issue.updated));
+        if moved && !args.slim {
+            match crate::api::block_on(client.remote_links(&issue.key)) {
+                Ok(links) => crate::api::normalize::set_remote_links(&mut issue, links),
+                Err(e) => ctx.out.warn(format!(
+                    "{}: cannot read its web links: {} — the last ones seen are kept",
+                    issue.key, e.message
+                )),
+            }
+        }
+        if let Some(previous) = &previous {
+            crate::api::normalize::carry_remote_links(&mut issue, &previous.raw);
+        }
+        if engine.state.upsert_remote(&issue)? {
             changed_keys.push(issue.key.clone());
         }
         storing.inc();
