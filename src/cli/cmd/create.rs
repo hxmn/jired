@@ -81,6 +81,10 @@ pub struct CreateArgs {
     /// With --push, show the API call without sending it
     #[arg(long, requires = "push")]
     pub dry_run: bool,
+    /// With --push, read the issue back and report any field the server does
+    /// not hold as the file asked (exit 10)
+    #[arg(long, requires = "push")]
+    pub verify: bool,
 }
 
 pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
@@ -132,7 +136,13 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
         .record_new_issue(&key, &draft.project, &outcome.relative)?;
 
     let pushed = if args.push {
-        let report = crate::cli::cmd::edit::push_one(&mut ctx, &key, args.dry_run)?;
+        let push = crate::cli::cmd::push::PushArgs {
+            issues: vec![key.clone()],
+            dry_run: args.dry_run,
+            verify: args.verify,
+            ..Default::default()
+        };
+        let report = crate::sync::push::run(&mut ctx, &push)?;
         crate::cli::cmd::edit::report_push(&report, out);
         Some(report)
     } else {

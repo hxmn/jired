@@ -213,7 +213,10 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
         epic: epic_key(f, map),
         fix_versions: named_array(f.get("fixVersions")),
         affects_versions: named_array(f.get("versions")),
-        links: issue_links(f.get("issuelinks")),
+        links: issue_links(f.get("issuelinks"))
+            .into_iter()
+            .chain(web_links(v))
+            .collect(),
         story_points: map
             .story_points
             .as_ref()
@@ -486,6 +489,60 @@ fn issue_links(v: Option<&Value>) -> Vec<IssueLink> {
     // Deterministic ordering keeps diffs free of server-side reshuffling.
     out.sort_by(|a, b| (&a.link_type, &a.other_key).cmp(&(&b.link_type, &b.other_key)));
     out
+}
+
+/// Where a snapshot keeps an issue's web links. They are not a field of the
+/// issue payload — Jira serves them from a resource of their own — so the read
+/// that fetches them puts them here, beside `fields`, and every later reading
+/// of the snapshot finds them in one place.
+pub const REMOTE_LINKS: &str = "remotelinks";
+
+/// The web links a snapshot carries, as `links:` lines, in the order Jira
+/// listed them. They are written after the issue links.
+pub fn web_links(raw: &Value) -> Vec<IssueLink> {
+    raw.get(REMOTE_LINKS)
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|l| {
+                    let object = l.get("object")?;
+                    let url = object.get("url")?.as_str()?;
+                    let title = object.get("title").and_then(Value::as_str).unwrap_or("");
+                    Some(IssueLink {
+                        link_type: crate::doc::frontmatter::WEB.to_string(),
+                        other_key: crate::doc::frontmatter::web_value(url, title),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Put `links`, as the remote-link resource served them, into `issue`: the
+/// snapshot keeps them under [`REMOTE_LINKS`], and the model lists them after
+/// the issue links, as a fresh reading of the snapshot would.
+pub fn set_remote_links(issue: &mut RemoteIssue, links: Vec<Value>) {
+    if let Value::Object(map) = &mut issue.raw {
+        map.insert(REMOTE_LINKS.to_string(), Value::Array(links));
+    }
+    issue
+        .fields
+        .links
+        .retain(|l| l.link_type != crate::doc::frontmatter::WEB);
+    issue.fields.links.extend(web_links(&issue.raw));
+}
+
+/// Carry the web links of an earlier snapshot into `issue` when it was read
+/// without them: a fetch under `--slim`, an issue that did not change, a
+/// remote-link read that failed. Dropping them would read as every web link
+/// having been deleted on the server, and the next push would not send them.
+pub fn carry_remote_links(issue: &mut RemoteIssue, previous: &Value) {
+    if issue.raw.get(REMOTE_LINKS).is_some() {
+        return;
+    }
+    if let Some(links) = previous.get(REMOTE_LINKS).and_then(Value::as_array) {
+        set_remote_links(issue, links.clone());
+    }
 }
 
 fn subtasks(v: Option<&Value>) -> Vec<SubtaskRef> {

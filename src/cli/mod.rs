@@ -245,6 +245,8 @@ pub enum Command {
     /// Put a label on issues, or take one off
     #[command(subcommand)]
     Label(cmd::label::LabelCmd),
+    /// Link an issue to another, or to a web page
+    Link(cmd::link::LinkArgs),
     /// Which issues in this workspace match, without asking the server
     List(cmd::list_issues::ListArgs),
     /// Show what changed, newest first — the whole workspace, or one issue
@@ -291,6 +293,8 @@ pub enum Command {
     Status(cmd::status::StatusArgs),
     /// Change an issue's workflow status
     Transition(cmd::transition::TransitionArgs),
+    /// Take a link off an issue
+    Unlink(cmd::link::UnlinkArgs),
     /// Which binary this is, and what changed in it
     Version(cmd::version::VersionArgs),
     /// Watch issues, or stop watching them, on a screen of tick boxes
@@ -365,6 +369,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Init(a) => cmd::init::run(g, a, out),
         Command::InitAgents(a) => cmd::init_agents::run(g, a, out),
         Command::Label(a) => cmd::label::run(g, a, out),
+        Command::Link(a) => cmd::link::run_link(g, a, out),
         Command::List(a) => cmd::list_issues::run(g, a, out),
         Command::Log(a) => cmd::log::run(g, a, out),
         Command::Logwork(a) => cmd::logwork::run(g, a, out),
@@ -386,6 +391,7 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Sprints(a) => cmd::list::run_sprints(g, a, out),
         Command::Status(a) => cmd::status::run(g, a, out),
         Command::Transition(a) => cmd::transition::run(g, a, out),
+        Command::Unlink(a) => cmd::link::run_unlink(g, a, out),
         Command::Version(a) => cmd::version::run(g, a, out),
         Command::Watch(a) => cmd::watch::run(g, a, out),
         Command::Whoami(a) => cmd::whoami::run(g, a, out),

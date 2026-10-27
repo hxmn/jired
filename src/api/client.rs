@@ -224,6 +224,17 @@ pub trait JiraApi: Send + Sync {
     /// `issuelinks` entry, not either issue's.
     async fn delete_link(&self, link_id: &str) -> Result<()>;
 
+    /// An issue's web (remote) links as the server lists them: each with its
+    /// own `id`, and an `object` holding `url` and `title`.
+    async fn remote_links(&self, key: &str) -> Result<Vec<serde_json::Value>>;
+
+    /// Add a web link to an issue.
+    async fn create_remote_link(&self, key: &str, url: &str, title: &str) -> Result<()>;
+
+    /// Remove one of an issue's web links, by the id [`JiraApi::remote_links`]
+    /// gave it.
+    async fn delete_remote_link(&self, key: &str, link_id: &str) -> Result<()>;
+
     /// Write one of an issue's entity properties, replacing whatever it held.
     ///
     /// `value` is the property's whole document — a bare JSON string is a

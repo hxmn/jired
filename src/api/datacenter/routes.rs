@@ -378,6 +378,31 @@ route!(
     Api,
     "issueLink/{linkId}",
 );
+route!(
+    /// An issue's web links: a resource of their own rather than a field of the
+    /// issue, so the reads that need them ask for them separately.
+    REMOTE_LINKS,
+    "getRemoteIssueLinks",
+    "GET",
+    Api,
+    "issue/{issueIdOrKey}/remotelink",
+);
+route!(
+    CREATE_REMOTE_LINK,
+    "createOrUpdateRemoteIssueLink",
+    "POST",
+    Api,
+    "issue/{issueIdOrKey}/remotelink",
+);
+route!(
+    /// By the link's own id, which only the snapshot the link was last seen in
+    /// still knows: the file spells a web link as its URL.
+    DELETE_REMOTE_LINK,
+    "deleteRemoteIssueLinkById",
+    "DELETE",
+    Api,
+    "issue/{issueIdOrKey}/remotelink/{linkId}",
+);
 
 route!(
     /// Write one of an issue's entity properties: a JSON document an app keeps
@@ -548,6 +573,9 @@ pub const ALL: &[&Route] = &[
     &ISSUE_LINK_TYPES,
     &CREATE_ISSUE_LINK,
     &DELETE_ISSUE_LINK,
+    &REMOTE_LINKS,
+    &CREATE_REMOTE_LINK,
+    &DELETE_REMOTE_LINK,
     &SET_ISSUE_PROPERTY,
     &ADD_ATTACHMENT,
     &ADD_WATCHER,
@@ -687,6 +715,9 @@ mod tests {
             "getIssueLinkTypes",
             "linkIssues",
             "deleteIssueLink",
+            "getRemoteIssueLinks",
+            "createOrUpdateRemoteIssueLink",
+            "deleteRemoteIssueLinkById",
             "setProperty",
             "addAttachment",
             "addWatcher",
@@ -705,7 +736,7 @@ mod tests {
         ] {
             assert!(listed.contains(&id), "{id} is missing from ALL");
         }
-        assert_eq!(ALL.len(), 45, "a route was added without a test naming it");
+        assert_eq!(ALL.len(), 48, "a route was added without a test naming it");
 
         // `getIssue` is a method id in both modules, so nothing may key on the
         // id alone — the contract test keys on (method, path).

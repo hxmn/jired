@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/link/1",
+  "title": "jired link / unlink result",
+  "description": "Links staged onto issues as `links:` lines, or taken off them",
+  "type": "object",
+  "required": [
+    "schema",
+    "operation",
+    "links",
+    "issues",
+    "pushed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/link/1"
+    },
+    "operation": {
+      "enum": [
+        "link",
+        "unlink"
+      ]
+    },
+    "links": {
+      "type": "array",
+      "description": "The links named on the command line: an issue link as its direction and key (an empty direction, for unlink, means any), a web link as its URL and title",
+      "items": {
+        "type": "object",
+        "properties": {
+          "direction": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "web": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "description": "One entry per issue whose file was written",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "changed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the issue already had (for unlink: did not have) every link named"
+          }
+        }
+      }
+    },
+    "staged": {
+      "type": "boolean",
+      "description": "Whether the change is written in the files and waiting for `jired push`. True without `--push`, with `--dry-run`, and when the push failed."
+    },
+    "next": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The command that sends what is staged, when anything is."
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "push": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A jired/push/1 document when --push was given"
+    }
+  }
+}

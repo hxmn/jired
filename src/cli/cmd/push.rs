@@ -44,6 +44,16 @@ pub struct PushArgs {
     /// real conflict and is still refused.
     #[arg(long, conflicts_with = "force")]
     pub refresh_stale: bool,
+
+    /// Re-read every pushed issue and report any field that does not match
+    /// the file (exit 10)
+    ///
+    /// A 2xx is not proof: Jira accepts writes it does not apply. This compares
+    /// what each file asked for — the editable fields, the links (web ones
+    /// too), the description and the checklist — with what the server holds
+    /// afterwards, and names every difference.
+    #[arg(long)]
+    pub verify: bool,
 }
 
 pub fn run(g: &GlobalArgs, args: &PushArgs, out: Out) -> Result<ExitCode> {

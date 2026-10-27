@@ -186,11 +186,24 @@ impl IssueRow {
     /// a parent's stamp alone when a sub-task is created under it, moved away,
     /// renamed or resolved, so the timestamp alone kept `## Children` frozen at
     /// whatever it listed the day the parent itself was last edited.
+    ///
+    /// The links are compared too. A stamp is kept to the second, and a push
+    /// that creates an issue and links another to it in the same second moved
+    /// the other's `updated` by less than that: the refresh that followed found
+    /// it level, and the inverse link never reached its file.
     pub fn is_behind(&self) -> bool {
-        use crate::api::normalize::subtasks_of;
+        use crate::api::normalize::{subtasks_of, REMOTE_LINKS};
+        let links = |raw: &serde_json::Value| {
+            (
+                raw.pointer("/fields/issuelinks").cloned(),
+                raw.get(REMOTE_LINKS).cloned(),
+            )
+        };
         match (&self.base, &self.remote) {
             (Some(b), Some(r)) => {
-                r.updated > b.updated || subtasks_of(&r.raw) != subtasks_of(&b.raw)
+                r.updated > b.updated
+                    || subtasks_of(&r.raw) != subtasks_of(&b.raw)
+                    || links(&r.raw) != links(&b.raw)
             }
             (None, Some(_)) => true,
             _ => false,
@@ -879,6 +892,22 @@ impl StateStore {
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    // ---- link types ----------------------------------------------------------
+
+    /// The instance's link types as the last fetch listed them, so `jired link`
+    /// can check a direction while the typo is still on screen, offline.
+    /// Empty when no fetch has listed them, which is not "none exist".
+    pub fn link_types(&self) -> Result<Vec<crate::api::IssueLinkType>> {
+        Ok(self
+            .get_meta("link_types")?
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default())
+    }
+
+    pub fn save_link_types(&self, types: &[crate::api::IssueLinkType]) -> Result<()> {
+        self.set_meta("link_types", &serde_json::to_string(types)?)
     }
 
     // ---- versions ------------------------------------------------------------

@@ -16,6 +16,7 @@ pub mod fields;
 pub mod init;
 pub mod init_agents;
 pub mod label;
+pub mod link;
 pub mod list;
 pub mod list_issues;
 pub mod log;

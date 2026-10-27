@@ -200,7 +200,7 @@ an ignored field a file still carries, and `jired doctor` is what brings the fil
 into line in either direction.
 
 ### `jired push`
-`jired push [ISSUE…] [-n/--dry-run|preview] [--force] [--allow-lossy] [--allow-comment-delete] [--allow-worklog-delete] [--resume]`
+`jired push [ISSUE…] [-n/--dry-run|preview] [--force] [--allow-lossy] [--allow-comment-delete] [--allow-worklog-delete] [--resume] [--refresh-stale] [--verify]`
 Plans ops (D23 order), `--dry-run` prints exact API calls + diffs (human and JSON).
 Interactively it always plans first: the plan lines are printed and the run asks
 `send N operation(s) across M issue(s)?` before anything is sent. `-y` and
@@ -294,7 +294,40 @@ is what lets a chain go out together: in `push A B` with `A blocks B` and
 stale, and sends only `blocks C`. Links merge as a set in every pull — the
 server's links, less the ones the file removed since base, plus the ones it
 added — so they never conflict, and a link the server gained after the last sync
-is never in a position to be read as a deletion.
+is never in a position to be read as a deletion. The same-second case is covered
+too: an issue counts as behind the server when its links differ from base, not
+only when its stamp moved, because a stamp is kept to the second and a create
+followed by a link to it can land inside one.
+
+A web (remote) link is a `links:` line under the key `web`, its value the URL
+and, when it says more than the URL does, the title in quotes:
+`- web: https://wiki.example/display/TSK/Release "Release 1.0.0"`. Jira keeps
+them apart from issue links, in a resource of their own
+(`GET /issue/{key}/remotelink`), so `fetch` asks for them separately — only for
+an issue whose stamp moved, and not under `--slim` — and keeps them in the
+snapshot under `remotelinks`, beside `fields`. Otherwise, and when that read
+fails (a warning, not a failed fetch), the last snapshot's are carried forward:
+dropping them would read as every web link deleted on the server. Push sends an
+added line as `create_remote_link` (`POST /issue/{key}/remotelink`
+`{"object": {"url", "title"}}`, the title defaulting to the URL, which the
+server requires) and a removed one as `delete_remote_link`
+(`DELETE /issue/{key}/remotelink/{id}`, the id out of base). A changed title is
+both. On a `NEW-*` issue they are follow-ups, like issue links. After a push
+the web links are read back with the issue, so the rewritten file keeps them.
+They merge as a set, like issue links.
+
+`--verify` reads every issue the push changed back from the server and compares
+what its file asked for, as it was sent, with what the server now holds: every
+editable frontmatter field, `custom:` by id, the description and the checklist.
+Each field is compared the way it means — links and the list fields as sets,
+`sprint` as the one the issue is in now, a user by account id, names without
+regard to case — and a created issue only on what its file set, so a blank
+status is not held against the workflow's first one. Every difference is listed
+under `verify` as `{key, field, expected, actual}` and printed, and any one makes
+the exit code 10, the code for a write the server accepted and did not apply. An
+issue refused as stale, or whose every op failed, is not read back: it already
+says it failed. Without the flag `verify` is absent; with it and nothing amiss,
+it is `[]`.
 
 `sprint:` is resolved against the sprints the workspace has fetched, for an
 update and for a create's follow-up alike, and a name no board knows refuses the
@@ -694,6 +727,8 @@ resolves it, and the file carries the sprint's own name: an unknown one is exit
 2 while nothing exists. `--push --dry-run` plans from a draft and removes it
 afterwards, so a dry run leaves no `NEW-*` issue for a later push to create;
 `staged` in the JSON says whether the file is still a draft waiting for push.
+`--push --verify` reads the new issue back and names any field the server does
+not hold as the file asked, the way `push --verify` does.
 
 Degradation: full-screen form → line prompts for summary, type and project (a
 terminal that cannot do raw mode, `TERM=dumb`, or `JIRED_NO_TUI=1`) → exit 7
@@ -1247,6 +1282,26 @@ A label containing whitespace is exit 2 — Jira labels have no spaces, so it is
 list somebody separated the wrong way — and so is passing several to `add` or
 `remove`, which act on one at a time.
 JSON: `{"schema":"jired/label/1","operation":"add","labels":["regular"],"issues":[…],"pushed":false}`.
+
+### `jired link ISSUES DIRECTION OTHERS [--push] [--dry-run]` · `jired link ISSUES --web URL [--title T]` · `jired unlink ISSUES [DIRECTION] OTHERS` · `jired unlink ISSUES --web URL`
+Writes the `links:` line push turns into a link, without touching the YAML:
+`jired link TSK-740 is blocked by TSK-739`. The direction is the words between
+the two keys, so it needs no quotes, and either end may be several keys
+comma-separated. It is checked against the link types the last `fetch` listed
+and written in the instance's own spelling, so `Blocks` becomes `blocks`; a
+direction the instance does not have is exit 2 naming the ones it does. With no
+list cached nothing is checked here, and push refuses an unknown one at plan
+time as it always has. Linking an issue to itself is exit 2. `--web URL
+[--title T]` writes a `- web:` line instead; the same URL with a new title
+replaces the line rather than adding a second link to the page.
+
+`unlink` takes the lines out: with a direction, that link; without one, every
+link between the two issues; with `--web URL`, the web link to that page.
+Staged like `label` — `status` and `diff` show it, `push` sends it, `--push`
+sends it now — with `staged` and `next` in the JSON. An issue line goes before
+the first web line, where a pull puts it. A line already there (for `unlink`,
+already absent) is reported and not staged.
+JSON: `{"schema":"jired/link/1","operation":"link","links":[{"direction":"blocks","key":"TSK-741"}],"issues":[…],"staged":true,"next":"jired push TSK-740","pushed":false}`.
 
 ### `jired parent ISSUES… --to ISSUE [--push] [--dry-run]`
 Writes `parent:` across several sub-tasks at once, staged like `label` and
