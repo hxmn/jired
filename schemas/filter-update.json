@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/filter-update/1",
+  "title": "jired filter edit and share result",
+  "description": "A change to a filter that exists",
+  "type": "object",
+  "required": [
+    "schema",
+    "dry_run",
+    "filter",
+    "matches",
+    "requests"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/filter-update/1"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "True when --dry-run was given: nothing was sent and `filter` is null"
+    },
+    "filter": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/filter"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The filter as the server now holds it; null on a dry run"
+    },
+    "matches": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "How many issues a new --jql matched when it was checked; null when the JQL was left alone"
+    },
+    "requests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/call"
+      },
+      "description": "The API calls, sent unless dry_run; empty when there was nothing to change"
+    }
+  },
+  "$defs": {
+    "filter": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "jql",
+        "favourite",
+        "share_permissions",
+        "url"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "id",
+            "display_name"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The account id on Cloud, the username on Data Center"
+            },
+            "display_name": {
+              "type": "string"
+            }
+          }
+        },
+        "jql": {
+          "type": "string"
+        },
+        "favourite": {
+          "type": "boolean",
+          "description": "Whether this account has it starred"
+        },
+        "share_permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/share"
+          },
+          "description": "Empty when the filter is private"
+        },
+        "url": {
+          "type": "string",
+          "description": "The issue navigator with the filter applied: `…/issues/?filter=ID`"
+        }
+      }
+    },
+    "share": {
+      "type": "object",
+      "required": [
+        "type",
+        "spec"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What `filter share --remove` also takes"
+        },
+        "type": {
+          "enum": [
+            "project",
+            "project_role",
+            "group",
+            "user",
+            "authenticated",
+            "global"
+          ]
+        },
+        "spec": {
+          "type": "string",
+          "description": "The `--share` spelling: `project:TSK`, `project:TSK/Developers`, `group:G`, `user:U`, `authenticated`, `global`"
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The project key"
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "id",
+            "display_name"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The account id on Cloud, the username on Data Center"
+            },
+            "display_name": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "call": {
+      "type": "object",
+      "required": [
+        "method",
+        "path",
+        "body"
+      ],
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "description": "`{id}` stands for the id of a filter a dry run has not made"
+        },
+        "body": {
+          "description": "null for the calls that carry none"
+        }
+      }
+    }
+  }
+}

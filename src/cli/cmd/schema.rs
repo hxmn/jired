@@ -43,6 +43,20 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("error", include_str!("../../../schemas/error.json")),
     ("fetch", include_str!("../../../schemas/fetch.json")),
     ("fields", include_str!("../../../schemas/fields.json")),
+    ("filter", include_str!("../../../schemas/filter.json")),
+    (
+        "filter-create",
+        include_str!("../../../schemas/filter-create.json"),
+    ),
+    (
+        "filter-delete",
+        include_str!("../../../schemas/filter-delete.json"),
+    ),
+    (
+        "filter-update",
+        include_str!("../../../schemas/filter-update.json"),
+    ),
+    ("filters", include_str!("../../../schemas/filters.json")),
     (
         "fetch-spec",
         include_str!("../../../schemas/fetch-spec.json"),

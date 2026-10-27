@@ -156,6 +156,20 @@ impl FixtureClient {
                     .flatten()
                     .filter_map(|l| l.get("id").and_then(Value::as_u64)),
             )
+            // Filters and their shares draw on the same counter, and outlive
+            // the process that made them just as issues do.
+            .chain(
+                read_json(dir, "filters.json")
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default()
+                    .iter()
+                    .flat_map(|f| {
+                        let shares = f["sharePermissions"].as_array().cloned();
+                        std::iter::once(f.clone()).chain(shares.unwrap_or_default())
+                    })
+                    .filter_map(|v| v.get("id").map(id_text))
+                    .filter_map(|id| id.parse::<u64>().ok()),
+            )
             .max()
             .unwrap_or(0)
             .max(90000);
@@ -445,6 +459,166 @@ impl FixtureClient {
             let _ = std::fs::write(self.dir.join("versions.json"), text);
         }
     }
+}
+
+impl FixtureClient {
+    /// The saved filters, in the server's own shape on disk, as `versions.json`
+    /// keeps versions.
+    fn stored_filters(&self) -> Vec<Value> {
+        read_json(&self.dir, "filters.json")
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+    }
+
+    fn save_filters(&self, filters: &[Value]) {
+        if let Ok(text) = serde_json::to_string_pretty(filters) {
+            let _ = std::fs::write(self.dir.join("filters.json"), text);
+        }
+    }
+
+    /// Record one planned call, and act on it the way the server would.
+    fn apply_filter_call(&self, call: &crate::api::filter::Call) -> Result<()> {
+        self.record(call.method, &call.path, call.body.clone())?;
+        if !self.applies(call.method, &call.path) {
+            return Ok(());
+        }
+        let rest = call
+            .path
+            .strip_prefix(self.deployment.api_prefix())
+            .and_then(|p| p.strip_prefix("/filter/"))
+            .unwrap_or_default();
+        let mut parts = rest.split('/');
+        let id = parts.next().unwrap_or_default().to_string();
+        let mut all = self.stored_filters();
+        let Some(at) = all.iter().position(|f| filter_id(f) == id) else {
+            return Err(unavailable_filter());
+        };
+        match (call.method, parts.next(), parts.next()) {
+            ("PUT", None, _) => {
+                if let Value::Object(changes) = &call.body {
+                    for (k, v) in changes {
+                        all[at][k] = v.clone();
+                    }
+                }
+            }
+            ("DELETE", None, _) => {
+                all.remove(at);
+            }
+            ("PUT", Some("favourite"), _) => all[at]["favourite"] = json!(true),
+            ("DELETE", Some("favourite"), _) => all[at]["favourite"] = json!(false),
+            ("POST", Some("permission"), _) => {
+                let share = self.share_as_served(&call.body)?;
+                let shares = all[at]["sharePermissions"].as_array().cloned();
+                let mut shares = shares.unwrap_or_default();
+                // As the server documents: sharing with everyone replaces
+                // every other share.
+                if share["type"] == "global" {
+                    shares.clear();
+                }
+                shares.push(share);
+                all[at]["sharePermissions"] = json!(shares);
+            }
+            ("DELETE", Some("permission"), Some(pid)) => {
+                let shares = all[at]["sharePermissions"].as_array_mut();
+                let Some(shares) = shares else {
+                    return Err(bad_request("No share permission with that id"));
+                };
+                let before = shares.len();
+                shares.retain(|p| p.get("id").map(id_text) != Some(pid.to_string()));
+                if shares.len() == before {
+                    return Err(bad_request("No share permission with that id"));
+                }
+            }
+            _ => {}
+        }
+        self.save_filters(&all);
+        Ok(())
+    }
+
+    /// A share as the server answers with it, out of what was sent.
+    fn share_as_served(&self, body: &Value) -> Result<Value> {
+        let id = self.next_id();
+        let kind = body["type"].as_str().unwrap_or_default();
+        Ok(match kind {
+            "project" => {
+                let project_id = body["projectId"].as_str().unwrap_or_default();
+                let key = read_json(&self.dir, "projects.json")
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|p| p.get("id").map(id_text).as_deref() == Some(project_id))
+                    .and_then(|p| p.get("key").and_then(Value::as_str).map(str::to_string))
+                    .ok_or_else(|| bad_request(&format!("No project with id {project_id}")))?;
+                json!({ "id": id, "type": "project", "project": { "id": project_id, "key": key } })
+            }
+            "group" => json!({ "id": id, "type": "group", "group": { "name": body["groupname"] } }),
+            "user" => {
+                let who = body
+                    .get("accountId")
+                    .or_else(|| body.get("username"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let field = match self.deployment {
+                    Deployment::Cloud => "accountId",
+                    Deployment::DataCenter => "name",
+                };
+                json!({ "id": id, "type": "user", "user": { field: who, "displayName": who } })
+            }
+            "authenticated" => json!({ "id": id, "type": "loggedin" }),
+            "global" => json!({ "id": id, "type": "global" }),
+            other => return Err(bad_request(&format!("Unknown share type {other}"))),
+        })
+    }
+}
+
+fn filter_id(v: &Value) -> String {
+    v.get("id").map(id_text).unwrap_or_default()
+}
+
+fn id_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// What the server answers a 400 with, in the shape the HTTP client gives it:
+/// the message, the status beside it.
+fn bad_request(message: &str) -> JiredError {
+    JiredError::generic(format!("{message} (HTTP 400)")).with_detail("status", 400)
+}
+
+/// Jira's own words for a filter id that is not there, or not the caller's to
+/// see: the two are one answer, and a 400 rather than a 404.
+fn unavailable_filter() -> JiredError {
+    bad_request(
+        "The selected filter is not available to you, perhaps it has been deleted \
+         or had its permissions changed.",
+    )
+}
+
+/// The JQL mistakes a fixture can see without a parser: a bracket or a quote
+/// left open. A server refuses those with a 400, and so does this.
+fn jql_error(jql: &str) -> Option<&'static str> {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for c in jql.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => depth -= 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return Some("Error in the JQL Query: ')' is unexpected.");
+        }
+    }
+    if quote.is_some() {
+        return Some("Error in the JQL Query: The quoted string has not been completed.");
+    }
+    (depth > 0).then_some("Error in the JQL Query: Expecting ')' before the end of the query.")
 }
 
 /// A version back in the server's shape — what `versions.json` holds, and what
@@ -797,8 +971,95 @@ impl JiraApi for FixtureClient {
         Ok(updated)
     }
 
+    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>> {
+        let all: Vec<Filter> = self
+            .stored_filters()
+            .iter()
+            .filter_map(crate::api::filter::filter_from_json)
+            .collect();
+        Ok(match self.deployment {
+            // The same narrowing the Data Center client does, so a test on
+            // that deployment meets the server's limits rather than this one's.
+            Deployment::DataCenter => crate::api::filter::narrow(
+                listing,
+                all.into_iter().filter(|f| f.favourite).collect(),
+            ),
+            Deployment::Cloud => all
+                .into_iter()
+                .filter(|f| match listing {
+                    FilterListing::Favourites => f.favourite,
+                    FilterListing::Owned(me) => f.owner.as_ref().is_some_and(|o| o.id == me),
+                    FilterListing::Named(name) => f.name.eq_ignore_ascii_case(name.trim()),
+                })
+                .collect(),
+        })
+    }
+
+    async fn filter(&self, id: &str) -> Result<Filter> {
+        self.stored_filters()
+            .iter()
+            .find(|f| filter_id(f) == id)
+            .and_then(crate::api::filter::filter_from_json)
+            .ok_or_else(unavailable_filter)
+    }
+
+    async fn create_filter(&self, input: &FilterInput) -> Result<Filter> {
+        let plan = crate::api::filter::create(self.deployment, input, crate::api::filter::NEW);
+        self.record(plan[0].method, &plan[0].path, plan[0].body.clone())?;
+        let owner = read_json(&self.dir, "myself.json").unwrap_or(Value::Null);
+        let me = normalize::user_ref(Some(&owner)).map(|u| u.id);
+        let mut all = self.stored_filters();
+        // Jira keeps one filter of a name per owner.
+        let clash = all.iter().any(|f| {
+            f.get("name").and_then(Value::as_str).map(str::to_lowercase)
+                == Some(input.name.to_lowercase())
+                && normalize::user_ref(f.get("owner")).map(|u| u.id) == me
+        });
+        if clash {
+            return Err(bad_request("Filter with same name already exists."));
+        }
+        let id = self.next_id();
+        let mut made = plan[0].body.clone();
+        made["id"] = json!(id);
+        made["owner"] = owner;
+        made["favourite"] = json!(made.get("favourite").and_then(Value::as_bool) == Some(true));
+        made["sharePermissions"] = json!([]);
+        all.push(made);
+        self.save_filters(&all);
+        for call in &crate::api::filter::create(self.deployment, input, &id)[1..] {
+            self.apply_filter_call(call)?;
+        }
+        self.filter(&id).await
+    }
+
+    async fn update_filter(&self, current: &Filter, update: &FilterUpdate) -> Result<Filter> {
+        for call in crate::api::filter::update(self.deployment, current, update) {
+            self.apply_filter_call(&call)?;
+        }
+        self.filter(&current.id).await
+    }
+
+    async fn delete_filter(&self, id: &str) -> Result<()> {
+        self.apply_filter_call(&crate::api::filter::delete(self.deployment, id))
+    }
+
+    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()> {
+        self.apply_filter_call(&crate::api::filter::add_share(self.deployment, id, share))
+    }
+
+    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()> {
+        self.apply_filter_call(&crate::api::filter::remove_share(
+            self.deployment,
+            id,
+            permission_id,
+        ))
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         self.check_fault("POST", "/search")?;
+        if let Some(message) = jql_error(&query.jql) {
+            return Err(bad_request(message));
+        }
         self.read_once(None);
         let issues = self.issues.lock().expect("fixture lock").clone();
         let mut matching: Vec<Value> = issues
@@ -1692,6 +1953,15 @@ mod tests {
         let q = "project = PROJ AND updated >= \"2026-06-01 00:00\"";
         assert!(!jql_matches(q, &old));
         assert!(jql_matches(q, &new));
+    }
+
+    #[test]
+    fn jql_left_open_is_refused_as_the_server_refuses_it() {
+        assert!(jql_error("project = TSK AND (labels IS EMPTY OR labels != regular)").is_none());
+        assert!(jql_error("summary !~ \"RELEASE (draft\"").is_none());
+        assert!(jql_error("project = TSK AND (labels IS EMPTY").is_some());
+        assert!(jql_error("summary ~ \"RELEASE").is_some());
+        assert!(jql_error("project = TSK)").is_some());
     }
 
     #[test]

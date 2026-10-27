@@ -238,6 +238,11 @@ pub enum Command {
     FetchSpec(cmd::fetch_spec::FetchSpecArgs),
     /// What this instance's fields are called
     Fields(cmd::fields::FieldsArgs),
+    /// Work with saved filters: show, create, edit, share, delete, run
+    #[command(subcommand)]
+    Filter(cmd::filter::FilterCmd),
+    /// List saved filters you own or have starred
+    Filters(cmd::filter::FiltersArgs),
     /// Authenticate, pick a project, and set up the workspace
     Init(cmd::init::InitArgs),
     /// Write the agent instructions and the read-only command permissions
@@ -368,6 +373,8 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
         Command::Fetch(a) => cmd::fetch::run(g, a, out),
         Command::FetchSpec(a) => cmd::fetch_spec::run(g, a, out),
         Command::Fields(a) => cmd::fields::run(g, a, out),
+        Command::Filter(a) => cmd::filter::run(g, a, out),
+        Command::Filters(a) => cmd::filter::run_list(g, a, out),
         Command::Init(a) => cmd::init::run(g, a, out),
         Command::InitAgents(a) => cmd::init_agents::run(g, a, out),
         Command::Label(a) => cmd::label::run(g, a, out),

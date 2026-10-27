@@ -198,6 +198,48 @@ route!(
     "version/{id}",
 );
 
+// ---- Saved filters ---------------------------------------------------------
+//
+// A filter is a name, a JQL and the people it is shared with. Data Center
+// serves no way to list the filters an account owns — there is no `filter/my`
+// and no `filter/search` in its description — so `filter/favourite` is the only
+// listing, and the one a name is looked up in.
+
+route!(CREATE_FILTER, "createFilter", "POST", Api, "filter");
+route!(GET_FILTER, "getFilter", "GET", Api, "filter/{id}");
+route!(
+    /// Renaming, re-querying and starring are this one call.
+    EDIT_FILTER,
+    "editFilter",
+    "PUT",
+    Api,
+    "filter/{id}",
+);
+route!(DELETE_FILTER, "deleteFilter", "DELETE", Api, "filter/{id}");
+route!(
+    FAVOURITE_FILTERS,
+    "getFavouriteFilters",
+    "GET",
+    Api,
+    "filter/favourite",
+);
+route!(
+    /// One share per call. Sharing with everyone drops every other share, on
+    /// both deployments: a filter that is public needs nothing else.
+    ADD_FILTER_SHARE,
+    "addSharePermission",
+    "POST",
+    Api,
+    "filter/{id}/permission",
+);
+route!(
+    DELETE_FILTER_SHARE,
+    "deleteSharePermission",
+    "DELETE",
+    Api,
+    "filter/{id}/permission/{permission-id}",
+);
+
 route!(
     /// Search is a POST because a JQL naming a few dozen issue keys does not fit in
     /// a query string, and `fetch` builds exactly that.
@@ -552,6 +594,13 @@ pub const ALL: &[&Route] = &[
     &CREATE_VERSION,
     &GET_VERSION,
     &UPDATE_VERSION,
+    &CREATE_FILTER,
+    &GET_FILTER,
+    &EDIT_FILTER,
+    &DELETE_FILTER,
+    &FAVOURITE_FILTERS,
+    &ADD_FILTER_SHARE,
+    &DELETE_FILTER_SHARE,
     &SEARCH,
     &GET_ISSUE,
     &EDIT_ISSUE,
@@ -694,6 +743,13 @@ mod tests {
             "createVersion",
             "getVersion",
             "updateVersion",
+            "createFilter",
+            "getFilter",
+            "editFilter",
+            "deleteFilter",
+            "getFavouriteFilters",
+            "addSharePermission",
+            "deleteSharePermission",
             "searchUsingSearchRequest",
             "getIssue",
             "editIssue",
@@ -736,7 +792,7 @@ mod tests {
         ] {
             assert!(listed.contains(&id), "{id} is missing from ALL");
         }
-        assert_eq!(ALL.len(), 48, "a route was added without a test naming it");
+        assert_eq!(ALL.len(), 55, "a route was added without a test naming it");
 
         // `getIssue` is a method id in both modules, so nothing may key on the
         // id alone — the contract test keys on (method, path).

@@ -95,7 +95,8 @@ has nothing to ask about. Some of them refresh the read-only snapshot under
 | Codex | `.codex/rules/default.rules` — execpolicy `prefix_rule`s between `# BEGIN jired` and `# END jired`; Codex applies them once the project's `.codex/` layer is trusted |
 
 Granted: `status` (and `st`), `diff`, `log`, `report`, `search`, `fetch`,
-`whoami`, `projects`, `boards`, `sprints`, `releases`, `list`, `show`, `fields`, `schema`,
+`whoami`, `projects`, `boards`, `sprints`, `releases`, `filters`, `filter show|run`,
+`list`, `show`, `fields`, `schema`,
 `completion`, `version`,
 `attachments list`, `config get|list|path`, `resolve --list`, `init-agents --print`, and
 `pull`, `push`, `reset`, `clean` and `doctor` under `--dry-run`. Everything that
@@ -436,6 +437,7 @@ the filename you were just editing instead of retyping the key.
 | `projects` / `boards [--for-project KEY]` / `sprints [--board B]` | what you can address; `--board` takes a name or an id, and is needed only when the project's boards would answer differently; `boards` says which project each board is filed under |
 | `sprint create [NAME]` / `sprint start\|edit\|close SPRINT` / `sprint add ISSUES… --sprint S` / `sprint remove ISSUES…` | make a sprint, run it, and move issues in and out of one; `close --move-incomplete-to S` carries the unfinished ones over — see [Sprints](#sprints) |
 | `releases [--all]` / `release create NAME` / `release edit\|ship\|archive VERSION` | the project's versions — what `fix_versions:` names: list, make, rename, release and archive them; `ship --move-unfixed-to V` moves the unfinished issues on first — see [Versions](#versions) |
+| `filters` / `filter show\|run FILTER` / `filter create NAME --jql JQL` / `filter edit\|share\|delete FILTER` | saved filters: list, read and run them, and save, change, share and delete them, with the JQL checked on the server first — see [Saved filters](#saved-filters) |
 | `doctor` | check the workspace over and repair it — see below |
 | `config get\|set\|unset\|list\|path\|edit` | read and write settings |
 | `completion <shell>` | print a completion script |
@@ -723,6 +725,40 @@ checks version names against: a version you just created can go in
 `fix_versions:` straight away, and one that does not exist is refused at plan
 time — exit 2, in `--dry-run`, before anything is sent — rather than as a 400
 halfway through a push.
+
+### Saved filters
+
+`jired search` runs a JQL; `jired filter` saves one, so the query behind a board
+or a release report can be made and kept from a script.
+
+```sh
+jired filters                                  # yours and the ones you starred
+jired filter show "TSK 1.0.0"                  # JQL, owner, sharing, link
+
+jired filter create "TSK 1.0.0 без регулярных" \
+  --jql 'project = TSK AND fixVersion = "1.0.0"
+         AND (labels IS EMPTY OR labels != regular)
+         AND summary !~ "RELEASE" ORDER BY status, key' \
+  --share project:TSK -n                       # the exact calls, nothing sent
+
+jired filter run "TSK 1.0.0 без регулярных"    # the same output as jired search
+jired filter edit 10400 --jql '…'              # only what you pass is changed
+jired filter share 10400 --add group:qa --remove project:TSK
+jired filter delete 10400 --yes
+```
+
+The JQL is run on the server before it is saved, so a query Jira cannot parse
+is exit 2 with Jira's own complaint and nothing written — Jira itself would
+have saved it. A filter has no file, so like `release` these go straight to the
+server and every write takes `-n/--dry-run`. `FILTER` is an id or a name; a
+name two filters share is exit 2 listing their ids, and `id:10400` means the id
+alone. Shares are `project:KEY`, `group:NAME`, `user:NAME`, `authenticated` or
+`global`, spelled as `filter show` prints them.
+
+A new filter is starred unless you pass `--no-favourite`, as Jira's own "Save
+as" does. On Data Center that matters: the server has no filter search, so
+`filters` and a name only see your favourites, and an unstarred filter is
+reached by its id.
 
 ### Sub-tasks
 

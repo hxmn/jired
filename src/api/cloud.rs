@@ -71,6 +71,34 @@ pub const REMOVE_WATCHER: Route = Route {
     query: &["accountId"],
 };
 
+/// Cloud lists filters by owner and by name, pages and all; Data Center has no
+/// route that does either, and lists only the account's favourites.
+pub const FILTER_SEARCH: Route = Route {
+    id: "getFiltersPaginated",
+    method: "GET",
+    module: Module::Api,
+    path: "filter/search",
+    query: &["filterName", "accountId", "expand", "startAt", "maxResults"],
+};
+
+/// Cloud stars a filter with its own call; Data Center takes `favourite` in
+/// the filter's body.
+pub const SET_FAVOURITE_FILTER: Route = Route {
+    id: "setFavouriteForFilter",
+    method: "PUT",
+    module: Module::Api,
+    path: "filter/{id}/favourite",
+    query: &[],
+};
+
+pub const DELETE_FAVOURITE_FILTER: Route = Route {
+    id: "deleteFavouriteForFilter",
+    method: "DELETE",
+    module: Module::Api,
+    path: "filter/{id}/favourite",
+    query: &[],
+};
+
 /// Where Atlassian publishes the Cloud OpenAPI document.
 ///
 /// Named here so the error a Cloud user gets can point at it, not fetched: it

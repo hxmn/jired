@@ -257,6 +257,23 @@ fn command_output_matches_its_published_schema() {
         vec!["release", "edit", "2.6.0", "--release-date", "2026-11-30"],
         vec!["release", "ship", "2.4.0", "--move-unfixed-to", "2.6.0"],
         vec!["release", "archive", "2.3.0"],
+        vec!["filters"],
+        vec!["filter", "show", "Ready for review"],
+        vec![
+            "filter",
+            "create",
+            "Bugs in review",
+            "--jql",
+            "project = PROJ AND type = Bug",
+            "--share",
+            "project:PROJ",
+        ],
+        vec!["filter", "create", "Draft", "--jql", "project = PROJ", "-n"],
+        vec!["filter", "edit", "Bugs in review", "--no-favourite", "-n"],
+        vec!["filter", "edit", "id:10500", "--description", "Stand-up"],
+        vec!["filter", "share", "id:10500", "--add", "authenticated"],
+        vec!["filter", "run", "id:10500"],
+        vec!["filter", "delete", "id:10500"],
     ];
 
     let mut checked = 0;
@@ -283,6 +300,17 @@ fn data_center_output_matches_its_published_schema() {
     for args in [
         vec!["init", "--no-pull"],
         vec!["fetch-spec", "--output", out.to_str().unwrap()],
+        vec!["filters", "--mine"],
+        vec![
+            "filter",
+            "create",
+            "Bugs",
+            "--jql",
+            "project = DC",
+            "--share",
+            "group:jira-users",
+        ],
+        vec!["filter", "share", "Bugs", "--remove", "group:jira-users"],
     ] {
         let Some(doc) = ws.run(&args) else {
             panic!("`jired {}` produced no JSON", args.join(" "));

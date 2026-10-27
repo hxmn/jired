@@ -8,6 +8,33 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.24.0] — 2026-10-27
+
+### Added
+
+- **Saved filters: `jired filters` and `jired filter show|run|create|edit|share|delete`.**
+  A JQL could be run but not kept: saving one meant the browser, or calling
+  `/rest/api/2/filter` by hand with a token taken out of `.jired/`.
+  - `filter create NAME --jql JQL [--description T] [--share SPEC]…` runs the
+    JQL on the server first; a query Jira cannot parse is exit 2 with Jira's
+    message and nothing saved. The id, the `/issues/?filter=ID` link and the
+    match count come back.
+  - `filter edit` sends only what is passed; `filter share --add/--remove SPEC`
+    changes who can run it, `project:KEY`, `group:NAME`, `user:NAME`,
+    `authenticated` or `global`; `filter delete` asks first, and needs
+    `--yes` (exit 7 without it) when nobody is at a terminal.
+  - `filter run FILTER` takes `search`'s `--limit`, `--count`, `--columns` and
+    `--keys`, and prints what `search` prints.
+  - `FILTER` is an id or a name. A name two filters share, or a number that is
+    one filter's id and another's name, is exit 2 with the ids; `id:10400`
+    means the id alone.
+  - Every write takes `-n/--dry-run`, which prints the calls and sends none.
+  - A new filter is a favourite unless `--no-favourite` is passed, as Jira's
+    "Save as" does. Data Center has no filter search, so there `filters` and a
+    name see only your favourites, and an unstarred filter is reached by its id.
+  - `jired filters`, `jired filter show` and `jired filter run` are in the
+    read-only list `init-agents` grants.
+
 ## [0.23.0] — 2026-10-27
 
 ### Breaking

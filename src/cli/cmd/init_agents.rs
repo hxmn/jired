@@ -134,6 +134,18 @@ pub const READ_ONLY: &[ReadOnly] = &[
         "lists the project's versions and refreshes the local copy of the list",
     ),
     ro(
+        &["jired", "filters"],
+        "lists the saved filters the account owns or has starred",
+    ),
+    ro(
+        &["jired", "filter", "show"],
+        "prints one saved filter: its JQL, owner, sharing and link",
+    ),
+    ro(
+        &["jired", "filter", "run"],
+        "runs a saved filter's JQL on the server, as `jired search` does",
+    ),
+    ro(
         &["jired", "list"],
         "matches issues in the working copy; reads files and sends nothing",
     ),
@@ -1038,6 +1050,33 @@ pub fn render() -> String {
          first.\n\n",
     );
 
+    s.push_str("## Saved filters\n\n");
+    s.push_str(
+        "Never call the filter REST API by hand, and never take a token out of \
+         `.jired/`: `jired filter` covers it. `jired filters [--mine | --favourite]` \
+         lists them, `jired filter show FILTER` prints one with its JQL, sharing and \
+         its `/issues/?filter=ID` link, and `jired filter run FILTER` runs it with \
+         `jired search`'s flags and output. `jired filter create NAME --jql JQL \
+         [--description T] [--no-favourite] [--share SPEC]…` saves one, `jired filter \
+         edit FILTER [--name N] [--jql JQL] [--description T] [--favourite | \
+         --no-favourite]` changes only what is passed, `jired filter share FILTER \
+         --add SPEC | --remove SPEC` changes who can run it, and `jired filter delete \
+         FILTER` deletes one this account owns, asking first — pass `--yes` when \
+         nobody is at a terminal, or it is exit 7. A SPEC is `project:KEY`, \
+         `group:NAME`, `user:NAME`, `authenticated` or `global`, spelled as `filter \
+         show` prints it. Every write takes `-n/--dry-run`, which prints the calls \
+         and sends none.\n\n",
+    );
+    s.push_str(
+        "A JQL is run on the server before it is saved: one Jira cannot parse is \
+         exit 2 with the server's own complaint, and nothing is written; the count it \
+         matched is in `matches`. `FILTER` is an id or a name; a name two filters \
+         share, or a number that is one filter's id and another's name, is exit 2 \
+         with the ids in `details.ids`, and `id:10400` names the id alone. On Data \
+         Center a name is found only among the account's favourites — the server has \
+         no filter search — so a filter made with `--no-favourite` is reached by its \
+         id there.\n\n",
+    );
     s.push_str("## Repairing a workspace\n\n");
     s.push_str(
         "`jired doctor` checks the layout, the config file, the credentials, the filenames, \
@@ -1353,6 +1392,10 @@ mod tests {
                 "release",
                 "creates, edits, releases or archives a version on the server, \
                  and stages `fix_versions:` edits",
+            ),
+            (
+                "filter",
+                "creates, edits, shares or deletes a saved filter on the server",
             ),
             (
                 "watch",

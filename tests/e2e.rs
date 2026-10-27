@@ -10740,3 +10740,306 @@ fn a_description_an_earlier_rewrite_cut_short_is_not_pushed() {
     ws.json(&["reset", "DC-77", "--yes"]);
     assert_eq!(ws.read(file), clean);
 }
+
+// ---------------------------------------------------------------------------
+// filter
+// ---------------------------------------------------------------------------
+
+/// The filters the "server" holds now, off its own file.
+fn remote_filters(ws: &Ws) -> Vec<Value> {
+    let text = std::fs::read_to_string(ws.fixtures.join("filters.json")).unwrap();
+    serde_json::from_str::<Value>(&text)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// The writes among the calls a command journaled; the fixture journals only
+/// writes, so this is all of them.
+fn writes(calls: &[Value]) -> Vec<String> {
+    calls
+        .iter()
+        .map(|c| {
+            format!(
+                "{} {}",
+                c["method"].as_str().unwrap(),
+                c["path"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+/// The request's acceptance case, on both deployments: a dry run prints the
+/// calls and sends none; the real create answers with the id and the link; the
+/// saved filter runs to exactly what `search` finds with its JQL; and it can be
+/// edited, re-shared and deleted without the browser.
+#[test]
+fn a_filter_can_be_saved_run_edited_shared_and_deleted() {
+    for deployment in [Deployment::Cloud, Deployment::DataCenter] {
+        let ws = Ws::of(deployment);
+        ws.init();
+        let project = deployment.project();
+        let (prefix, project_id) = match deployment {
+            Deployment::Cloud => ("/rest/api/3", "10000"),
+            Deployment::DataCenter => ("/rest/api/2", "10200"),
+        };
+        let name = "TSK 1.0.0 без регулярных";
+        let jql = format!(
+            "project = {project} AND fixVersion = \"1.0.0\" \
+             AND (labels IS EMPTY OR labels != regular) AND summary !~ \"RELEASE\" \
+             ORDER BY status, key"
+        );
+        let share = format!("project:{project}");
+        let create = ["filter", "create", name, "--jql", &jql, "--share", &share];
+
+        let before = remote_filters(&ws);
+        let mut dry_args = create.to_vec();
+        dry_args.push("-n");
+        let (dry, calls) = journaled(&ws, &dry_args);
+        assert_eq!(dry["schema"], "jired/filter-create/1");
+        assert_eq!(dry["dry_run"], true);
+        assert_eq!(dry["filter"], Value::Null);
+        assert!(dry["matches"].as_u64().unwrap() > 0, "{dry}");
+        assert!(calls.is_empty(), "a dry run sent {calls:?}");
+        assert_eq!(remote_filters(&ws), before);
+        let requests = dry["requests"].as_array().unwrap();
+        assert_eq!(requests[0]["method"], "POST");
+        assert_eq!(requests[0]["path"], format!("{prefix}/filter"));
+        assert_eq!(requests[0]["body"]["name"], name);
+        assert_eq!(requests[0]["body"]["jql"], jql.as_str());
+        let last = requests.last().unwrap();
+        assert_eq!(last["path"], format!("{prefix}/filter/{{id}}/permission"));
+        assert_eq!(
+            last["body"],
+            serde_json::json!({ "type": "project", "projectId": project_id })
+        );
+        // Starred unless told otherwise — in the body on Data Center, with a
+        // call of its own on Cloud.
+        match deployment {
+            Deployment::DataCenter => assert_eq!(requests[0]["body"]["favourite"], true),
+            Deployment::Cloud => {
+                assert!(requests[0]["body"].get("favourite").is_none());
+                assert_eq!(
+                    requests[1]["path"],
+                    format!("{prefix}/filter/{{id}}/favourite")
+                );
+            }
+        }
+
+        let (made, calls) = journaled(&ws, &create);
+        let id = made["filter"]["id"].as_str().unwrap().to_string();
+        assert_eq!(
+            made["filter"]["url"],
+            format!("https://fixture.invalid/issues/?filter={id}")
+        );
+        assert_eq!(made["filter"]["favourite"], true);
+        assert_eq!(
+            made["filter"]["share_permissions"][0]["spec"],
+            share.as_str()
+        );
+        assert_eq!(
+            writes(&calls).last().unwrap(),
+            &format!("POST {prefix}/filter/{id}/permission")
+        );
+
+        // A filter is its JQL: running it is running the query.
+        let ran = ws.json(&["filter", "run", &id, "--limit", "100"]);
+        let searched = ws.json(&["search", "--jql", &jql, "--limit", "100"]);
+        assert_eq!(ran["schema"], "jired/search/1");
+        assert_eq!(ran["issues"], searched["issues"], "{deployment:?}");
+        assert!(!ran["issues"].as_array().unwrap().is_empty());
+        // By name too: it is starred, so even Data Center can find it.
+        let by_name = ws.json(&["filter", "show", name]);
+        assert_eq!(by_name["schema"], "jired/filter/1");
+        assert_eq!(by_name["filter"]["id"], id.as_str());
+
+        // Only what was asked for is changed, and the name always goes with it.
+        let edited = ws.json(&["filter", "edit", &id, "--description", "for the release"]);
+        assert_eq!(edited["schema"], "jired/filter-update/1");
+        assert_eq!(
+            edited["requests"][0]["body"],
+            serde_json::json!({ "name": name, "description": "for the release" })
+        );
+        assert_eq!(edited["filter"]["jql"], jql.as_str());
+        assert_eq!(edited["matches"], Value::Null);
+
+        let reshared = ws.json(&[
+            "filter",
+            "share",
+            &id,
+            "--remove",
+            &share,
+            "--add",
+            "authenticated",
+        ]);
+        let specs: Vec<&str> = reshared["filter"]["share_permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["spec"].as_str().unwrap())
+            .collect();
+        assert_eq!(specs, ["authenticated"], "{reshared}");
+        assert_eq!(reshared["requests"][0]["method"], "DELETE");
+
+        // Deleting asks, and a run that cannot ask is told to say --yes.
+        ws.json_err(&["filter", "delete", &id], 7);
+        assert!(remote_filters(&ws).iter().any(|f| f["id"] == id.as_str()));
+        let dry = ws.json(&["filter", "delete", &id, "-n"]);
+        assert_eq!(dry["deleted"], false);
+        assert_eq!(dry["request"]["path"], format!("{prefix}/filter/{id}"));
+        let gone = ws.json(&["filter", "delete", &id, "--yes"]);
+        assert_eq!(gone["schema"], "jired/filter-delete/1");
+        assert_eq!(gone["deleted"], true);
+        assert!(!remote_filters(&ws).iter().any(|f| f["id"] == id.as_str()));
+    }
+}
+
+/// A JQL the server cannot run is refused before anything is saved: Jira
+/// itself would store it without a word.
+#[test]
+fn a_filter_whose_jql_jira_refuses_is_exit_2_and_nothing_is_written() {
+    for deployment in [Deployment::Cloud, Deployment::DataCenter] {
+        let ws = Ws::of(deployment);
+        ws.init();
+        let journal = ws.path().join("calls.jsonl");
+        let before = remote_filters(&ws);
+        let bad = "project = PROJ AND (labels IS EMPTY OR labels != regular";
+        let out = ws
+            .cmd(&["filter", "create", "Broken", "--jql", bad, "--json"])
+            .env("JIRED_FIXTURE_JOURNAL", &journal)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "{deployment:?}");
+        let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+        assert!(
+            err["message"].as_str().unwrap().contains("Expecting ')'"),
+            "{err}"
+        );
+        assert_eq!(err["details"]["jql"], bad);
+        assert!(!journal.exists(), "something was sent");
+        assert_eq!(remote_filters(&ws), before);
+
+        // An edit checks the new query the same way.
+        let err = ws.json_err(&["filter", "edit", "10500", "--jql", bad], 2);
+        assert!(err["message"].as_str().unwrap().contains("refused the JQL"));
+        // And a dry run, which checks too, is refused just the same.
+        ws.json_err(&["filter", "create", "Broken", "--jql", bad, "-n"], 2);
+    }
+}
+
+/// `FILTER` is matched the way `--sprint` is: a name two people share, or a
+/// number that is one filter's id and another's name, is refused with the
+/// ids; `id:` says which.
+#[test]
+fn a_filter_name_that_could_be_two_filters_is_refused_with_their_ids() {
+    let ws = Ws::new();
+    ws.init();
+
+    let err = ws.json_err(&["filter", "show", "Open bugs"], 2);
+    assert_eq!(err["details"]["ids"], serde_json::json!(["10501", "10502"]));
+    assert!(err["hint"].as_str().unwrap().contains("id:10502"), "{err}");
+
+    // 10501 is "Open bugs"'s id and the name of another filter.
+    let err = ws.json_err(&["filter", "show", "10501"], 2);
+    assert_eq!(err["details"]["ids"], serde_json::json!(["10501", "10503"]));
+    let one = ws.json(&["filter", "show", "id:10501"]);
+    assert_eq!(one["filter"]["name"], "Open bugs");
+    assert_eq!(one["filter"]["owner"]["id"], "5b10a2ilya");
+
+    // Someone else's filter can be read and not deleted.
+    let theirs = ws.json(&["filter", "show", "id:10502"]);
+    assert_eq!(theirs["filter"]["share_permissions"][0]["spec"], "global");
+    let err = ws.json_err(&["filter", "delete", "id:10502", "--yes"], 3);
+    assert!(err["message"].as_str().unwrap().contains("Ann B"), "{err}");
+    assert_eq!(remote_filters(&ws).len(), 4);
+
+    // A second filter of the same name is one Jira refuses; refused here, with
+    // the one in the way named.
+    let err = ws.json_err(
+        &[
+            "filter",
+            "create",
+            "Ready for review",
+            "--jql",
+            "project = PROJ",
+        ],
+        2,
+    );
+    assert_eq!(err["details"]["filter_id"], "10500");
+}
+
+/// Data Center has no route that lists or searches filters but its
+/// favourites, so that is where `filters` and a name look — and where they
+/// say so, rather than reporting that a filter does not exist.
+#[test]
+fn data_center_finds_filters_by_name_only_among_the_favourites() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+
+    let listed = ws.json(&["filters"]);
+    assert_eq!(listed["schema"], "jired/filters/1");
+    let ids: Vec<&str> = listed["filters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap())
+        .collect();
+    // 10501 is ours and not starred.
+    assert!(!ids.contains(&"10501"), "{listed}");
+    let mine = ws.json(&["filters", "--mine"]);
+    assert_eq!(mine["filters"].as_array().unwrap().len(), 1);
+    assert_eq!(mine["filters"][0]["id"], "10500");
+
+    // So "Open bugs" is the one starred filter of that name, Ann's.
+    let found = ws.json(&["filter", "show", "Open bugs"]);
+    assert_eq!(found["filter"]["id"], "10502");
+    // An unstarred filter is found by its id.
+    let by_id = ws.json(&["filter", "show", "id:10501"]);
+    assert_eq!(by_id["filter"]["favourite"], false);
+    let err = ws.json_err(&["filter", "show", "Nobody's"], 2);
+    assert!(
+        err["hint"].as_str().unwrap().contains("favourites"),
+        "{err}"
+    );
+
+    // Starring it is a field of the filter on Data Center.
+    let starred = ws.json(&["filter", "edit", "id:10501", "--favourite"]);
+    assert_eq!(
+        starred["requests"],
+        serde_json::json!([{
+            "method": "PUT",
+            "path": "/rest/api/2/filter/10501",
+            "body": { "name": "Open bugs", "favourite": true },
+        }])
+    );
+    let err = ws.json_err(&["filter", "show", "Open bugs"], 2);
+    assert_eq!(err["details"]["ids"], serde_json::json!(["10501", "10502"]));
+}
+
+/// Cloud lists what the account owns as well as what it starred, and stars
+/// with a call of its own.
+#[test]
+fn cloud_lists_owned_and_starred_filters_and_stars_with_its_own_call() {
+    let ws = Ws::new();
+    ws.init();
+
+    let listed = ws.json(&["filters"]);
+    assert_eq!(listed["listing"], "all");
+    assert_eq!(listed["filters"].as_array().unwrap().len(), 4);
+    let mine = ws.json(&["filters", "--mine"]);
+    assert_eq!(mine["filters"].as_array().unwrap().len(), 2);
+    let starred = ws.json(&["filters", "--favourite"]);
+    assert_eq!(starred["filters"].as_array().unwrap().len(), 3);
+
+    let (doc, calls) = journaled(&ws, &["filter", "edit", "id:10501", "--favourite"]);
+    assert_eq!(writes(&calls), ["PUT /rest/api/3/filter/10501/favourite"]);
+    assert_eq!(doc["filter"]["favourite"], true);
+
+    // Nothing to change is said, and nothing is sent.
+    let (doc, calls) = journaled(&ws, &["filter", "edit", "id:10501", "--favourite"]);
+    assert!(calls.is_empty(), "{calls:?}");
+    assert_eq!(doc["requests"], serde_json::json!([]));
+    // No flags at all is a mistake about the command.
+    ws.json_err(&["filter", "edit", "id:10501"], 7);
+}

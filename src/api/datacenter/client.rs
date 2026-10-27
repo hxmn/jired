@@ -16,6 +16,7 @@
 //! - **`worklogs`** — the description declares no paging on this route and the
 //!   server answers with every worklog, so it is one call, not a loop.
 //! - **`search_users`** — `username`, where Cloud takes `query`.
+//! - **`filters`** — no `filter/search`; the favourites are the only listing.
 //! - **`move_subtask_parent`** — no REST route exists; the Move wizard does it.
 
 use crate::api::client::{ApiSpec, JiraApi, SearchPage, SearchQuery, SpecModule, UserScope};
@@ -103,6 +104,19 @@ impl JiraApi for DataCenter {
         self.rest
             .board_project_from(board_id, Source::Configuration)
             .await
+    }
+
+    /// Out of the favourites, there being nothing else to ask.
+    ///
+    /// Cloud's `filter/search` takes an owner and a name; Data Center's
+    /// description has neither it nor `filter/my`, and `filter/favourite` is
+    /// the one listing the server gives an account.
+    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>> {
+        let v = self.rest.get(&routes::FAVOURITE_FILTERS, &[], &[]).await?;
+        Ok(crate::api::filter::narrow(
+            listing,
+            crate::api::filter::filters_from_json(&v),
+        ))
     }
 
     /// One call, no paging.
@@ -219,6 +233,30 @@ impl JiraApi for DataCenter {
 
     async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version> {
         self.rest.update_version(id, update).await
+    }
+
+    async fn filter(&self, id: &str) -> Result<Filter> {
+        self.rest.filter(id).await
+    }
+
+    async fn create_filter(&self, input: &FilterInput) -> Result<Filter> {
+        self.rest.create_filter(input).await
+    }
+
+    async fn update_filter(&self, filter: &Filter, update: &FilterUpdate) -> Result<Filter> {
+        self.rest.update_filter(filter, update).await
+    }
+
+    async fn delete_filter(&self, id: &str) -> Result<()> {
+        self.rest.delete_filter(id).await
+    }
+
+    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()> {
+        self.rest.add_filter_share(id, share).await
+    }
+
+    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()> {
+        self.rest.delete_filter_share(id, permission_id).await
     }
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {

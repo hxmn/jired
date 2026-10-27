@@ -9,6 +9,7 @@ pub mod client;
 pub mod cloud;
 pub mod custom;
 pub mod datacenter;
+pub mod filter;
 pub mod fixture;
 pub mod http;
 pub mod model;

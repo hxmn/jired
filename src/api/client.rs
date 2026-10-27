@@ -159,6 +159,18 @@ pub trait JiraApi: Send + Sync {
     /// what the update does not name is what the version keeps.
     async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version>;
 
+    /// Saved filters. Data Center answers every listing out of the account's
+    /// favourites, having no other; see [`crate::api::filter::narrow`].
+    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>>;
+    async fn filter(&self, id: &str) -> Result<Filter>;
+    /// Send [`crate::api::filter::create`]'s plan; the filter as it now stands.
+    async fn create_filter(&self, input: &FilterInput) -> Result<Filter>;
+    /// Send [`crate::api::filter::update`]'s plan; the filter as it now stands.
+    async fn update_filter(&self, filter: &Filter, update: &FilterUpdate) -> Result<Filter>;
+    async fn delete_filter(&self, id: &str) -> Result<()>;
+    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()>;
+    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()>;
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage>;
     async fn issue(&self, key: &str) -> Result<RemoteIssue>;
     async fn changelog(&self, key: &str) -> Result<Vec<ChangelogEntry>>;

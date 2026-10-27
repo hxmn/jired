@@ -31,6 +31,18 @@ pub struct SearchArgs {
     #[arg(long, value_name = "JQL", conflicts_with = "query")]
     pub jql: Option<String>,
 
+    #[command(flatten)]
+    pub view: ResultArgs,
+
+    /// Also pull the matching issues into the working copy
+    #[arg(long, hide = true)]
+    pub pull: bool,
+}
+
+/// How a search's answer is printed, shared with `jired filter run` so that
+/// running a saved filter and running its JQL read the same.
+#[derive(Args, Debug, Clone)]
+pub struct ResultArgs {
     /// Maximum number of results; above 100 the pages are fetched in turn
     #[arg(long, default_value_t = 50)]
     pub limit: usize,
@@ -52,10 +64,6 @@ pub struct SearchArgs {
     /// Print only the keys, one per line, for piping into another command
     #[arg(long)]
     pub keys: bool,
-
-    /// Also pull the matching issues into the working copy
-    #[arg(long, hide = true)]
-    pub pull: bool,
 }
 
 /// A field `--columns` can ask for: the fields of a row of the JSON document,
@@ -175,7 +183,17 @@ pub fn run(g: &GlobalArgs, args: &SearchArgs, out: Out) -> Result<ExitCode> {
     let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
     let account = session.require_account()?;
     let client = crate::api::build_client(&mut ctx, &account)?;
+    answer(client.as_ref(), &jql, &args.view, out)
+}
 
+/// Run `jql` and print what it finds the way `args` asks.
+pub fn answer(
+    client: &dyn crate::api::JiraApi,
+    jql: &str,
+    args: &ResultArgs,
+    out: Out,
+) -> Result<ExitCode> {
+    let jql = jql.to_string();
     if args.count {
         // No issues, only the total the server reports beside them: one
         // request whatever the size of the answer. Counting by fetching was 75
@@ -205,7 +223,7 @@ pub fn run(g: &GlobalArgs, args: &SearchArgs, out: Out) -> Result<ExitCode> {
         ));
     }
 
-    let (issues, total) = fetch(client.as_ref(), &jql, limit)?;
+    let (issues, total) = fetch(client, &jql, limit)?;
     let rows: Vec<Row> = issues.iter().map(Row::of).collect();
 
     if args.keys {

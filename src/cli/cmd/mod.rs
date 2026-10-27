@@ -13,6 +13,7 @@ pub mod edit;
 pub mod fetch;
 pub mod fetch_spec;
 pub mod fields;
+pub mod filter;
 pub mod init;
 pub mod init_agents;
 pub mod label;

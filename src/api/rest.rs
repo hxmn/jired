@@ -20,7 +20,7 @@ use crate::api::datacenter::routes::{self, Module, Route};
 use crate::api::http::HttpClient;
 use crate::api::model::*;
 use crate::api::normalize::{self, FieldMap};
-use crate::api::{Deployment, Markup};
+use crate::api::{filter, Deployment, Markup};
 use crate::error::{JiredError, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -131,6 +131,14 @@ impl Rest {
         query: &[(&str, &str)],
     ) -> String {
         route.url(self.prefix(route.module), args, query)
+    }
+
+    /// Send one planned call, exactly as a dry run printed it.
+    pub(crate) async fn send(&self, call: &filter::Call) -> Result<Value> {
+        let method = reqwest::Method::from_bytes(call.method.as_bytes())
+            .expect("planned calls use the methods routes declare");
+        let body = (!call.body.is_null()).then(|| call.body.clone());
+        self.http.request_json(method, &call.path, body).await
     }
 
     /// `GET` one route.
@@ -610,6 +618,91 @@ impl JiraApi for Rest {
             )
             .await?;
         version_from_json(&v).ok_or_else(|| unreadable_version(id, v))
+    }
+
+    /// Cloud's `filter/search`, a page at a time, or its favourites.
+    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>> {
+        let (by, value) = match listing {
+            FilterListing::Favourites => {
+                let v = self.get(&routes::FAVOURITE_FILTERS, &[], &[]).await?;
+                return Ok(filter::filters_from_json(&v));
+            }
+            FilterListing::Owned(account) => ("accountId", account),
+            FilterListing::Named(name) => ("filterName", name.trim()),
+        };
+        let mut all = Vec::new();
+        loop {
+            let start = all.len().to_string();
+            let v = self
+                .get(
+                    &crate::api::cloud::FILTER_SEARCH,
+                    &[],
+                    &[
+                        (by, value),
+                        ("expand", filter::CLOUD_EXPAND),
+                        ("startAt", start.as_str()),
+                        ("maxResults", "100"),
+                    ],
+                )
+                .await?;
+            let page = filter::filters_from_json(&v);
+            let last = page.is_empty() || v.get("isLast").and_then(Value::as_bool) != Some(false);
+            all.extend(page);
+            if last {
+                break;
+            }
+        }
+        // `filterName` matches a part of the name; the question was the whole.
+        if let FilterListing::Named(name) = listing {
+            all.retain(|f| f.name.eq_ignore_ascii_case(name.trim()));
+        }
+        Ok(all)
+    }
+
+    async fn filter(&self, id: &str) -> Result<Filter> {
+        let v = self.get(&routes::GET_FILTER, &[("id", id)], &[]).await?;
+        filter::filter_from_json(&v).ok_or_else(|| unreadable_filter(id, v))
+    }
+
+    async fn create_filter(&self, input: &FilterInput) -> Result<Filter> {
+        let plan = filter::create(self.deployment, input, filter::NEW);
+        let v = self.send(&plan[0]).await?;
+        let made = filter::filter_from_json(&v).ok_or_else(|| unreadable_filter(&input.name, v))?;
+        // Planned again with the id the server gave: the rest address it.
+        let follow_ups = &filter::create(self.deployment, input, &made.id)[1..];
+        if follow_ups.is_empty() {
+            return Ok(made);
+        }
+        for call in follow_ups {
+            self.send(call).await?;
+        }
+        self.filter(&made.id).await
+    }
+
+    async fn update_filter(&self, current: &Filter, update: &FilterUpdate) -> Result<Filter> {
+        for call in filter::update(self.deployment, current, update) {
+            self.send(&call).await?;
+        }
+        // Read back rather than taken from the PUT: on Cloud the star is a
+        // second call the PUT's answer predates.
+        self.filter(&current.id).await
+    }
+
+    async fn delete_filter(&self, id: &str) -> Result<()> {
+        self.send(&filter::delete(self.deployment, id)).await?;
+        Ok(())
+    }
+
+    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()> {
+        self.send(&filter::add_share(self.deployment, id, share))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()> {
+        self.send(&filter::remove_share(self.deployment, id, permission_id))
+            .await?;
+        Ok(())
     }
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -1335,6 +1428,13 @@ pub fn version_from_json(v: &Value) -> Option<Version> {
         start_date: text("startDate").as_deref().and_then(parse_day),
         release_date: text("releaseDate").as_deref().and_then(parse_day),
     })
+}
+
+fn unreadable_filter(which: &str, response: Value) -> JiredError {
+    JiredError::generic(format!(
+        "filter {which} came back in a shape jired cannot read"
+    ))
+    .with_detail("response", response)
 }
 
 fn unreadable_version(which: &str, response: Value) -> JiredError {

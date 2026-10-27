@@ -1281,6 +1281,88 @@ already released, or archived, is exit 2; so is moving to itself, or to one that
 has shipped.
 JSON: `{"schema":"jired/release-ship/1","dry_run":false,"released":true,"project":"TSK","version":{…}|null,"request":{…},"unfinished":[{"key","file","status"}],"moved_to":{"id","name"}|null,"issues":[{"key","file","changed"}],"push":{…}|null}`.
 
+### `jired filters [--mine | --favourite]`
+Saved filters, one per line: id, a star when this account has it as a
+favourite, the name, the owner (`you` for this account) and who it is shared
+with, in `--share` spelling. Without a flag Cloud lists what the account owns
+(`GET …/filter/search?accountId=…`) together with its favourites (`GET
+…/filter/favourite`). Data Center's description has no `filter/my` and no
+`filter/search` — `filter/favourite` is the only listing it serves — so there
+every listing, `--mine` included, is read out of the favourites, and a hint says
+so. JSON: `{"schema":"jired/filters/1","listing":"all"|"mine"|"favourite","filters":[{…}]}`,
+each filter `{"id","name","description","owner":{"id","display_name"}|null,"jql","favourite","share_permissions":[{"id","type","spec","project","role","group","user"}],"url"}`.
+
+### `jired filter show FILTER` · `jired filter run FILTER [--limit N] [--count] [--columns C] [--keys]`
+`show` prints one filter: owner, star, each share with its id, the description,
+the link — `…/issues/?filter=ID`, the same path on both deployments — and the
+JQL. JSON: `{"schema":"jired/filter/1","filter":{…}}`. `run` runs the filter's
+JQL through `jired search`, flags and output alike: its document is
+`jired/search/1`.
+
+`FILTER` is an id or a name, matched the way `--sprint` is. `id:10400` is the id
+and nothing else. A bare number is looked up both as an id (`GET
+…/filter/{id}`) and as a name, and taken only when the two readings agree; a
+name more than one filter carries — two people saving the same query under the
+same name — is exit 2 with `details.ids` and a hint naming each `id:`. Names are
+matched whole and without regard to case. Cloud finds a name among every filter
+the account can see (`filter/search?filterName=…`, which matches a part of the
+name, narrowed here to the whole); Data Center only among its favourites, and a
+miss there says to pass the id. Jira answers a filter that does not exist and
+one the account cannot see with the same 400, and both are a miss.
+
+### `jired filter create NAME --jql JQL [--description T] [--no-favourite] [--share SPEC]… [-n]`
+Saving a JQL needed the browser, or a hand-made call with a token taken out of
+the session store. Like `release create`, it goes straight to the server and
+`-n/--dry-run` prints the calls; a dry run's follow-up calls write `{id}` for the
+id the filter has not been given.
+
+The JQL is run first, as a search with room for no issues: Jira saves a filter
+whose query it cannot run without a word. A 400 from that search is exit 2 with
+the server's message, before anything is written, in a dry run too; the count is
+`matches`, and is said either way. A name this account already has a filter of
+is exit 2 naming it, rather than Jira's 400.
+
+The filter is a favourite unless `--no-favourite` says otherwise: Jira's own
+"Save as" stars a filter, and on Data Center a favourite is the only kind a name
+can find. Data Center takes `favourite` in the `POST …/filter` body; Cloud stars
+it with `PUT …/filter/{id}/favourite` after. Each `--share` is a `POST
+…/filter/{id}/permission` once the filter exists. A SPEC is `project:KEY`
+(sent as the project's id), `group:NAME`, `user:NAME` (looked up, and sent as
+the account id on Cloud and the username on Data Center; a name that matches
+several people is exit 2), `authenticated` or `global`; a project role is
+refused. If a share fails the filter is kept, and the hint is the `filter share`
+that finishes the job. Data Center applies the account's default share scope to
+a filter made over REST, so a share nobody asked for is warned about with the
+command that removes it.
+JSON: `{"schema":"jired/filter-create/1","dry_run":false,"filter":{…}|null,"matches":12,"requests":[{"method","path","body"}]}`.
+
+### `jired filter edit FILTER [--name N] [--jql JQL] [--description T] [--favourite | --no-favourite] [-n]`
+`PUT …/filter/{id}` with the name and only the fields given: Cloud refuses an
+edit without a name, and the server merges the rest. `--description ''` clears
+it. A new `--jql` is checked as `create` checks it. On Cloud the star is its own
+call (`PUT` or `DELETE …/filter/{id}/favourite`), so `--favourite` alone sends
+no `PUT` of the filter; on Data Center it is `favourite` in the body. A star the
+filter already has is said and not sent. No flags is exit 7; sharing is `filter
+share`.
+JSON: `{"schema":"jired/filter-update/1","dry_run":false,"filter":{…}|null,"matches":12|null,"requests":[…]}`.
+
+### `jired filter share FILTER (--add SPEC | --remove SPEC)… [-n]`
+`--remove` takes a spec as `filter show` prints it (`project:TSK/Developers`
+for a role share) or the share's id, and is `DELETE
+…/filter/{id}/permission/{permission-id}`; a spec the filter is not shared with
+is exit 2 listing the ones it is. `--add` is the `POST` `create --share` sends;
+a share the filter already has is said and skipped. Removals go first. Adding
+`global` warns that Jira drops every other share of a public filter.
+JSON: `jired/filter-update/1`, `matches` null.
+
+### `jired filter delete FILTER [-n]`
+`DELETE …/filter/{id}`, after a confirmation: at a terminal it asks, and
+anywhere else it needs `--yes` and is exit 7 without it. A filter another
+account owns is exit 3 before anything is sent — the filter a name matched may
+be the one somebody's board runs on.
+JSON: `{"schema":"jired/filter-delete/1","dry_run":false,"deleted":true,"filter":{…},"request":{…}}`;
+`deleted` is false on a dry run and when the question was answered no.
+
 ### `jired create` — the field flags
 `--assignee`, `--sprint`, `--labels`, `--priority`, `--component` (repeatable),
 `--epic`, and `--set field=value` (repeatable) for everything else, including an

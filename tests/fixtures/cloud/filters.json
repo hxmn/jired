@@ -1,0 +1,37 @@
+[
+  {
+    "id": "10500",
+    "name": "Ready for review",
+    "description": "What the team looks at in stand-up",
+    "owner": { "accountId": "5b10a2ilya", "displayName": "Ilya A" },
+    "jql": "project = PROJ AND status = \"In Review\" ORDER BY updated DESC",
+    "favourite": true,
+    "sharePermissions": [
+      { "id": 20100, "type": "project", "project": { "id": "10000", "key": "PROJ", "name": "Platform" } }
+    ]
+  },
+  {
+    "id": "10501",
+    "name": "Open bugs",
+    "owner": { "accountId": "5b10a2ilya", "displayName": "Ilya A" },
+    "jql": "project = PROJ AND type = Bug AND resolution IS EMPTY",
+    "favourite": false,
+    "sharePermissions": []
+  },
+  {
+    "id": "10502",
+    "name": "Open bugs",
+    "owner": { "accountId": "6c21b3ann", "displayName": "Ann B" },
+    "jql": "type = Bug AND resolution IS EMPTY",
+    "favourite": true,
+    "sharePermissions": [{ "id": 20101, "type": "global" }]
+  },
+  {
+    "id": "10503",
+    "name": "10501",
+    "owner": { "accountId": "6c21b3ann", "displayName": "Ann B" },
+    "jql": "project = OPS",
+    "favourite": true,
+    "sharePermissions": [{ "id": 20102, "type": "loggedin" }]
+  }
+]

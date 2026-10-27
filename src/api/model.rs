@@ -267,6 +267,110 @@ impl VersionUpdate {
     }
 }
 
+/// A saved filter: a name, a JQL, and who else can run it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Filter {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub owner: Option<UserRef>,
+    #[serde(default)]
+    pub jql: String,
+    /// Whether the account jired runs as has it starred — not the owner.
+    #[serde(default)]
+    pub favourite: bool,
+    #[serde(default)]
+    pub share_permissions: Vec<SharePermission>,
+}
+
+/// One way a filter is shared.
+///
+/// `spec` is the same spelling `--share` takes, so what `filter show` prints
+/// can be handed back to `filter share --remove` as it stands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SharePermission {
+    #[serde(default)]
+    pub id: Option<String>,
+    /// `project`, `project_role`, `group`, `user`, `authenticated`, `global`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub spec: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub user: Option<UserRef>,
+}
+
+/// A filter on its way to the server.
+#[derive(Debug, Clone, Default)]
+pub struct FilterInput {
+    pub name: String,
+    pub jql: String,
+    pub description: Option<String>,
+    pub favourite: bool,
+}
+
+/// A change to a filter that already exists: `None` leaves a field alone, and
+/// `description: Some("")` clears it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FilterUpdate {
+    pub name: Option<String>,
+    pub jql: Option<String>,
+    pub description: Option<String>,
+    pub favourite: Option<bool>,
+}
+
+impl FilterUpdate {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Who a share is for, resolved to the ids the server takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShareInput {
+    /// The project's id, and its key for saying so.
+    Project {
+        id: String,
+        key: String,
+    },
+    Group(String),
+    /// The account id on Cloud, the username on Data Center.
+    User(String),
+    Authenticated,
+    Global,
+}
+
+impl ShareInput {
+    /// The `--share` spelling, compared against [`SharePermission::spec`] to
+    /// tell a share the filter already has from a new one.
+    pub fn spec(&self) -> String {
+        match self {
+            ShareInput::Project { key, .. } => format!("project:{key}"),
+            ShareInput::Group(group) => format!("group:{group}"),
+            ShareInput::User(user) => format!("user:{user}"),
+            ShareInput::Authenticated => "authenticated".to_string(),
+            ShareInput::Global => "global".to_string(),
+        }
+    }
+}
+
+/// Which filters a listing asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterListing<'a> {
+    Favourites,
+    /// Owned by this account id.
+    Owned(&'a str),
+    /// Named this, without regard to case, whoever owns them.
+    Named(&'a str),
+}
+
 /// A day as Jira writes a version's dates: `2026-10-29`.
 pub fn format_day(day: &NaiveDate) -> String {
     day.format("%Y-%m-%d").to_string()
