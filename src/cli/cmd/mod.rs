@@ -39,6 +39,7 @@ pub mod sprint;
 pub mod stage;
 pub mod status;
 pub mod transition;
+pub mod users;
 pub mod version;
 pub mod watch;
 pub mod whoami;

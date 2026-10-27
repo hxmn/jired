@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/log-field/1",
+  "title": "jired log --field result",
+  "description": "The history of the fields named with --field: one flat row per change, newest first (oldest first with --reverse), each carrying its issue, time and author",
+  "type": "object",
+  "required": [
+    "schema",
+    "key",
+    "scope",
+    "fields",
+    "total",
+    "changes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/log-field/1"
+    },
+    "key": {
+      "description": "The issue asked for; null when the history covers the whole workspace",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "enum": [
+        "issue",
+        "workspace"
+      ]
+    },
+    "fields": {
+      "description": "The field names asked for, as typed; matching ignores case",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "total": {
+      "description": "How many changes matched before --limit cut them",
+      "type": "integer",
+      "minimum": 0
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "created",
+          "author",
+          "field",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "created": {
+            "description": "When the change was made, UTC",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field": {
+            "description": "The field as the changelog names it: `Sprint`, `status`, `Fix Version`",
+            "type": "string"
+          },
+          "from": {
+            "description": "The value before; null when there was none",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "description": "The value after; null when it was cleared",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

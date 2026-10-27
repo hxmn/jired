@@ -38,17 +38,46 @@ pub struct ShowArgs {
     /// The server's own payload, including the fields jired does not model
     #[arg(long)]
     pub raw: bool,
+
+    /// Print only the issue file's path, relative to the workspace
+    ///
+    /// File names carry a zero-padded number — `TSK-0710. Summary.md` — so the
+    /// name cannot be guessed from the key, and `ls TSK-710*` finds nothing.
+    #[arg(long, conflicts_with = "raw")]
+    pub path: bool,
 }
 
 pub fn run(g: &GlobalArgs, args: &ShowArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let engine = Engine::open(&mut ctx)?;
     let key = crate::project::naming::key_from_input(&args.issue)?;
+    let file = engine.projector.locate(&key)?.map(|f| f.relative);
+
+    if args.path {
+        let Some(file) = file else {
+            // Asked of the snapshot first, so an issue the workspace has never
+            // heard of says so rather than claiming it merely lacks a file.
+            lookup::raw(&engine, &key)?;
+            return Err(crate::error::JiredError::usage(format!(
+                "{key} has no file in this workspace"
+            ))
+            .with_detail("issue", key.clone())
+            .with_hint(format!("`jired pull {key}` writes one")));
+        };
+        // The bare path even on a terminal: it is what `$(jired show K --path)`
+        // and `xargs` want, and there is nothing else to say.
+        out.say(&file);
+        out.emit("show", &serde_json::json!({ "key": key, "file": file }));
+        return Ok(ExitCode::Success);
+    }
 
     if args.raw {
         let raw = lookup::raw(&engine, &key)?;
         out.say(serde_json::to_string_pretty(&raw)?);
-        out.emit("show", &serde_json::json!({ "key": key, "raw": raw }));
+        out.emit(
+            "show",
+            &serde_json::json!({ "key": key, "file": file, "raw": raw }),
+        );
         return Ok(ExitCode::Success);
     }
 
@@ -108,6 +137,7 @@ pub fn run(g: &GlobalArgs, args: &ShowArgs, out: Out) -> Result<ExitCode> {
         "show",
         &serde_json::json!({
             "key": fm.key,
+            "file": file,
             "source": source,
             "frontmatter": fm,
             "description": doc.description,

@@ -476,7 +476,7 @@ for one is not nagged about it. It does not make the workspace unclean — nothi
 is at risk — but a stale doc is what an agent plans against, so it is said out
 loud rather than left to be discovered.
 
-### `jired log [ISSUE] [--limit N|SPAN] [--links] [--refresh]`
+### `jired log [ISSUE] [--limit N|SPAN] [--field NAME… [--reverse]] [--links] [--refresh]`
 Everything that happened, newest first, each entry tagged with its issue. With
 no `ISSUE` it covers the whole workspace, the way `git log` does; naming one
 narrows to it.
@@ -571,6 +571,21 @@ must not be asked about twice, and one the server has moved on from is asked
 about exactly once. `--refresh` overrides both. In workspace mode a single
 unreadable issue warns and stops the fetch rather than losing the rest of the
 log.
+
+`--field NAME` (repeatable, or comma-separated) is the history of named fields
+instead of the timeline: one flat row per change, matched against the
+changelog's own field name ignoring case — `Sprint`, `status`, `Fix Version`.
+Each row carries its issue, its time and its author beside `from` and `to`, so
+"which sprints did this go through, and when" is one command rather than a
+recursive `jq` over the timeline's nested items — the one an agent wrote kept the
+values and dropped the dates. No comments or worklogs, no grouping, and no
+default cap: `--limit` still cuts from the newest end when given. Newest first,
+oldest first with `--reverse`. The text form is one line per change,
+`KEY  2026-10-20 14:03  Author  Sprint: Sprint 16 → Sprint 17`, with a full date
+because a field's history spans months; a long or multi-line value is flattened
+and cut there and travels whole in the JSON. Fetching and caching are the
+timeline's, `--refresh` included.
+JSON: `{"schema":"jired/log-field/1","key":"PROJ-142"|null,"scope":"issue"|"workspace","fields":["Sprint"],"total":3,"changes":[{"key","created","author","field","from","to"}]}`.
 
 ### `jired comment [ISSUE] [-m "text"] [--push] [--dry-run]`
 Appends a `### [new]` section to the file; `--push` sends immediately. Without
@@ -1152,18 +1167,26 @@ named one when both exist. A template is a partial file: the identity fields
 (`key`, `id`, `jired`) are supplied if it does not carry them, so a skeleton with
 frontmatter no longer needs a placeholder key to get past the parser.
 
-### `jired show ISSUE [--raw]`
+### `jired show ISSUE [--raw|--path]`
 Everything the workspace knows about one issue, from the file when there is one
 and from the snapshot when there is not — the preference `create --like` uses
 too, and the reason both live on `cmd::lookup`. The default is the issue as jired
 models it; `--raw` is the server's own payload.
+
+`--path` prints the issue's file and nothing else, relative to the workspace, so
+`$EDITOR "$(jired show TSK-710 --path)"` works. File names carry a zero-padded
+number — `TSK-0710. Summary.md` — so `ls TSK-710*` finds nothing, and guessing
+the padding is not something a caller should have to do. `ISSUE` is a key in any
+case and with or without the padding. An issue the workspace knows but has no
+file for is exit 2, as is one it does not know at all. Every form of the JSON
+carries `file`, null when there is none.
 
 `--raw` is the point of the command. An unset field is not written into a `.md`
 file, so the file cannot answer "is this empty, or does this instance not have
 that field?" — and the answer was `sqlite3 .jired/state.db` with `json_extract`
 over `remote_raw`, an agent reverse-engineering a private schema to ask
 something the tool already knows.
-JSON: `{"schema":"jired/show/1","key":"PROJ-142","source":"file","frontmatter":{…},"description":"…"}`.
+JSON: `{"schema":"jired/show/1","key":"PROJ-142","file":"PROJ-0142. Fix login flow.md","source":"file","frontmatter":{…},"description":"…"}`.
 
 ### `jired fields [TEXT] [--custom]`
 What this instance's fields are called, out of the definitions the last fetch
@@ -1172,6 +1195,18 @@ across instances and the only one nobody can read; finding out what
 `customfield_10015` is meant opening `state.db` in `sqlite3`. `TEXT` filters on
 the name or the id, `--custom` narrows to the instance's own.
 JSON: `{"schema":"jired/fields/1","count":42,"fields":[{"id","name","custom","schema_type","items"}]}`.
+
+### `jired users [TEXT]`
+The people this workspace knows and the mention that names each, offline: the
+assignees, reporters, comment and worklog authors in the snapshots, and every
+`@[Name](id)` in the files. The id is the half of a mention nobody can type — an
+account id on Cloud, a username on Data Center — and finding one was a `grep`
+over the working copy that also listed a renamed person once per name. One entry
+per id: named by the name seen most recently (the issue's last update, the
+comment, the worklog — a mention in a file carries no date and never outranks
+one that does), the others under `also_known_as`. Most mentioned first. `TEXT`
+filters on any of the names or the id, ignoring case.
+JSON: `{"schema":"jired/users/1","count":1,"users":[{"display_name","account_id","mention":"@[Name](id)","also_known_as":[],"seen":12}]}`.
 
 ### `jired list [--summary-contains T] [--label L] [--status S…] [--not-status S…] [--category new|indeterminate|done] [--sprint S] [--assignee U] [--issue-type T] [--columns COLS] [--keys]`
 `search` is JQL on the server; this is its offline half, and the other half of

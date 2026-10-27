@@ -146,6 +146,10 @@ pub const READ_ONLY: &[ReadOnly] = &[
         "names this instance's fields out of the cached definitions",
     ),
     ro(
+        &["jired", "users"],
+        "lists the people the workspace knows, out of the snapshots and files",
+    ),
+    ro(
         &["jired", "config", "get"],
         "prints one effective setting; the writes are `set`, `add`, `remove`, `unset`",
     ),

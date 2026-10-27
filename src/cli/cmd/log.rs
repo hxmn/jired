@@ -48,9 +48,22 @@ pub struct LogArgs {
     ///
     /// `--limit 20` is the newest twenty entries; `--limit 1d` is everything
     /// from the last day, however many that is. Spans are written in weeks,
-    /// days, hours and minutes — `2w`, `1d12h`, `36h`, `90m`.
-    #[arg(long, value_name = "N|SPAN", default_value = "20", value_parser = parse_limit)]
-    pub limit: Limit,
+    /// days, hours and minutes — `2w`, `1d12h`, `36h`, `90m`. Twenty by
+    /// default; everything with `--field`.
+    #[arg(long, value_name = "N|SPAN", value_parser = parse_limit)]
+    pub limit: Option<Limit>,
+    /// Only the changes to this field, one flat row per change: `Sprint`,
+    /// `status`, `Fix Version`
+    ///
+    /// Matched against the changelog's own field name, ignoring case; repeat
+    /// the flag or separate names with commas for several. Each row is one
+    /// field changing once — who, when, from what to what — with no comments,
+    /// worklogs or grouping around it.
+    #[arg(long = "field", value_name = "NAME", value_delimiter = ',')]
+    pub field: Vec<String>,
+    /// With --field, oldest first
+    #[arg(long, requires = "field")]
+    pub reverse: bool,
     /// Make every issue key a link to the issue in a browser
     ///
     /// On a terminal the key itself becomes clickable and the rows stay the
@@ -61,6 +74,19 @@ pub struct LogArgs {
     /// Ignore the cached copy and ask the server
     #[arg(long)]
     pub refresh: bool,
+}
+
+impl LogArgs {
+    /// The limit in force, if any. A field's history is asked for whole — the
+    /// sprints an issue went through are not something to see the newest
+    /// twenty of — so `--field` has no default cap.
+    fn limit(&self) -> Option<Limit> {
+        match (self.limit, self.field.is_empty()) {
+            (Some(limit), _) => Some(limit),
+            (None, true) => Some(Limit::Count(20)),
+            (None, false) => None,
+        }
+    }
 }
 
 /// What `--limit` asked for: how many entries, or how far back.
@@ -326,6 +352,10 @@ pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
         fetch_into(&mut ctx, &engine, &stale, &mut known, one.is_some(), out)?;
     }
 
+    if !args.field.is_empty() {
+        return field_history(&known, one.as_deref(), args, out);
+    }
+
     let partial = partial_snapshots(&known);
     let mut events = timeline(&known);
     // Newest first: the last thing that happened is the thing being asked
@@ -338,7 +368,7 @@ pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
     });
     let total = events.len();
     let now = Utc::now();
-    apply_limit(&mut events, args.limit, now);
+    apply_limit(&mut events, args.limit().unwrap_or(Limit::Count(20)), now);
 
     render(
         &events,
@@ -360,6 +390,159 @@ pub fn run(g: &GlobalArgs, args: &LogArgs, out: Out) -> Result<ExitCode> {
         }),
     );
     Ok(ExitCode::Success)
+}
+
+/// One field changing once: the row `--field` prints.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FieldChange {
+    key: String,
+    /// When the change was made, in UTC.
+    created: Option<String>,
+    author: Option<String>,
+    field: String,
+    from: Option<String>,
+    to: Option<String>,
+    #[serde(skip)]
+    at: Option<DateTime<Utc>>,
+    #[serde(skip)]
+    id: String,
+}
+
+/// The changes to the named fields, every one its own row.
+///
+/// Flat on purpose. The timeline groups a field change under the entry that
+/// made it, and getting one field's history out of that took a recursive `jq`
+/// that was easy to get subtly wrong — the agent that wrote one kept the
+/// values and dropped the dates. Here each row already carries the issue, the
+/// time and the author beside the change.
+fn field_changes(known: &[Known], wanted: &[String]) -> Vec<FieldChange> {
+    let wanted: Vec<String> = wanted
+        .iter()
+        .map(|f| f.trim().to_lowercase())
+        .filter(|f| !f.is_empty())
+        .collect();
+    let mut rows = Vec::new();
+    for k in known {
+        for entry in &k.changelog {
+            for item in &entry.items {
+                if !wanted.contains(&item.field.to_lowercase()) {
+                    continue;
+                }
+                rows.push(FieldChange {
+                    key: k.key.clone(),
+                    created: entry
+                        .created
+                        .as_ref()
+                        .map(crate::api::model::format_timestamp),
+                    author: entry.author.clone(),
+                    field: item.field.clone(),
+                    from: item.from.clone().filter(|v| !v.is_empty()),
+                    to: item.to.clone().filter(|v| !v.is_empty()),
+                    at: entry.created,
+                    id: entry.id.clone(),
+                });
+            }
+        }
+    }
+    // The same order the timeline uses, so the two agree on what "newest" is.
+    rows.sort_by(|a, b| {
+        b.at.cmp(&a.at)
+            .then_with(|| b.id.cmp(&a.id))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    rows
+}
+
+/// `jired log --field`: the history of named fields, one row per change.
+fn field_history(known: &[Known], one: Option<&str>, args: &LogArgs, out: Out) -> Result<ExitCode> {
+    let mut rows = field_changes(known, &args.field);
+    let total = rows.len();
+    // Cut from the newest end whichever way the rows are then printed: a limit
+    // is "the most recent N", not "the first N of whatever order I asked for".
+    if let Some(limit) = args.limit() {
+        limit.keep(&mut rows, Utc::now(), |r| r.at);
+    }
+    if args.reverse {
+        rows.reverse();
+    }
+
+    if rows.is_empty() {
+        out.say(match (total, one) {
+            (0, Some(key)) => format!("{key}: no change to {} recorded", args.field.join(", ")),
+            (0, None) => format!(
+                "no change to {} recorded in this workspace",
+                args.field.join(", ")
+            ),
+            _ => "nothing to show at this limit".to_string(),
+        });
+    }
+    let key_width = rows
+        .iter()
+        .map(|r| r.key.chars().count())
+        .max()
+        .unwrap_or(0);
+    let author_width = rows
+        .iter()
+        .map(|r| r.author.as_deref().unwrap_or("").chars().count())
+        .max()
+        .unwrap_or(0);
+    for r in &rows {
+        // A full date, not the timeline's relative one: a field's history spans
+        // months, and rows that drop the year halfway down do not line up.
+        let when =
+            r.at.map(|at| {
+                at.with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_else(|| " ".repeat(16));
+        let value = |v: &Option<String>| match v {
+            Some(v) => one_line(v),
+            None => "(none)".to_string(),
+        };
+        out.say(format!(
+            "{}  {}  {}  {}: {} {} {}",
+            style::out(CYAN, pad(&r.key, key_width)),
+            style::out(DIM, when),
+            pad(r.author.as_deref().unwrap_or(""), author_width),
+            r.field,
+            style::out(RED, value(&r.from)),
+            style::out(DIM, "→"),
+            style::out(GREEN, value(&r.to)),
+        ));
+    }
+    if rows.len() < total {
+        out.hint(format!(
+            "{} of {total} changes; raise --limit to see more",
+            rows.len()
+        ));
+    }
+
+    out.emit(
+        "log-field",
+        &serde_json::json!({
+            "key": one,
+            "scope": if one.is_some() { "issue" } else { "workspace" },
+            "fields": args.field,
+            "total": total,
+            "changes": rows,
+        }),
+    );
+    Ok(ExitCode::Success)
+}
+
+/// A value on one line of a row: newlines flattened, a long one cut. The JSON
+/// carries it whole.
+fn one_line(value: &str) -> String {
+    let flat = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > ARROW_BUDGET {
+        format!(
+            "{}…",
+            flat.chars().take(ARROW_BUDGET - 1).collect::<String>()
+        )
+    } else {
+        flat
+    }
 }
 
 /// Every event the workspace knows about, in no particular order yet.
@@ -705,6 +888,7 @@ fn render(
     base_url: &str,
     out: Out,
 ) {
+    let limit = args.limit().unwrap_or(Limit::Count(20));
     if events.is_empty() {
         // History that exists but sits outside the window is a different answer
         // from no history at all, and saying the second when the first is true
@@ -716,7 +900,7 @@ fn render(
                 out.hint("run `jired pull` to bring issues in, then `jired log`");
             }
             _ => {
-                match args.limit {
+                match limit {
                     Limit::Span(span) => {
                         out.say(format!("nothing happened in the last {}", describe(span)))
                     }
@@ -724,7 +908,7 @@ fn render(
                 }
                 out.hint(format!(
                     "{total} older entries; --limit {} to look further back",
-                    args.limit.wider()
+                    limit.wider()
                 ));
             }
         }
@@ -820,7 +1004,7 @@ fn render(
         out.hint(format!(
             "{} of {total} entries; --limit {} to see more",
             events.len(),
-            args.limit.wider()
+            limit.wider()
         ));
     }
     for p in partial.iter().take(3) {
