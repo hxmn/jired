@@ -194,7 +194,7 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
 /// somebody reading them, and a delimiter `cut -f2` can name is for whatever is
 /// on the other end of the pipe. Neither caller should have to say which they
 /// are, and the padding that helps the first breaks the second.
-fn tab_separated() -> bool {
+pub(crate) fn tab_separated() -> bool {
     use is_terminal::IsTerminal;
     !std::io::stdout().is_terminal()
 }
@@ -229,21 +229,35 @@ fn cell(m: &Match, column: Column) -> String {
 fn rows(matched: &[Match], columns: &[Column], tabs: bool) -> Vec<String> {
     let cells: Vec<Vec<String>> = matched
         .iter()
-        .map(|m| {
-            columns
-                .iter()
-                // A tab or a newline inside a summary would forge a column
-                // boundary in the output, which is worse than losing it.
-                .map(|&c| cell(m, c).replace(['\t', '\n', '\r'], " "))
+        .map(|m| columns.iter().map(|&c| cell(m, c)).collect())
+        .collect();
+    let keyed: Vec<bool> = columns.iter().map(|c| *c == Column::Key).collect();
+    layout(cells, &keyed, tabs)
+}
+
+/// Lay rows of cells out as lines: tab-separated for a pipe, padded to line up
+/// for a terminal, the columns flagged in `keyed` painted as keys.
+///
+/// Shared with `search --columns`, so the two listings — one of the working
+/// copy, one of the server — read and pipe the same way.
+pub(crate) fn layout(cells: Vec<Vec<String>>, keyed: &[bool], tabs: bool) -> Vec<String> {
+    // A tab or a newline inside a summary would forge a column boundary in the
+    // output, which is worse than losing it.
+    let cells: Vec<Vec<String>> = cells
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|c| c.replace(['\t', '\n', '\r'], " "))
                 .collect()
         })
         .collect();
+    let width = keyed.len();
     if tabs {
         return cells.iter().map(|row| row.join("\t")).collect();
     }
     // Measured in characters rather than bytes: a Cyrillic summary is half as
     // many characters as it is bytes, and a byte width would over-pad it.
-    let widths: Vec<usize> = (0..columns.len())
+    let widths: Vec<usize> = (0..width)
         .map(|i| {
             cells
                 .iter()
@@ -265,8 +279,8 @@ fn rows(matched: &[Match], columns: &[Column], tabs: bool) -> Vec<String> {
                     true => value.clone(),
                     false => format!("{value:<width$}", width = widths[i]),
                 };
-                line.push_str(&match columns[i] {
-                    Column::Key => style::out(CYAN, text),
+                line.push_str(&match keyed.get(i) {
+                    Some(true) => style::out(CYAN, text),
                     _ => text,
                 });
                 if !last {

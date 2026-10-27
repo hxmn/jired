@@ -67,6 +67,10 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("pull", include_str!("../../../schemas/pull.json")),
     ("push", include_str!("../../../schemas/push.json")),
     (
+        "report-issues",
+        include_str!("../../../schemas/report-issues.json"),
+    ),
+    (
         "report-time",
         include_str!("../../../schemas/report-time.json"),
     ),
@@ -86,6 +90,10 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("reset", include_str!("../../../schemas/reset.json")),
     ("resolve", include_str!("../../../schemas/resolve.json")),
     ("search", include_str!("../../../schemas/search.json")),
+    (
+        "search-count",
+        include_str!("../../../schemas/search-count.json"),
+    ),
     ("set", include_str!("../../../schemas/set.json")),
     (
         "sprint-close",

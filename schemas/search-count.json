@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/search-count/1",
+  "title": "jired search --count result",
+  "description": "How many issues a JQL query matches, from one request that fetches none of them",
+  "type": "object",
+  "required": [
+    "schema",
+    "jql",
+    "total"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/search-count/1"
+    },
+    "jql": {
+      "type": "string"
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

@@ -14,6 +14,10 @@ pub enum FieldSet {
     Summary,
     /// Everything jired models, including description and comments.
     Full,
+    /// What a listing or a count reads — type, parent, sprint, versions,
+    /// labels and the rest of the frontmatter's scalar fields — without the
+    /// description, comments, worklogs and changelog `*all` drags in.
+    Listing,
 }
 
 #[derive(Debug, Clone)]

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/report-issues/1",
+  "title": "jired report issues result",
+  "description": "How many issues, broken down by one field, or by two as a matrix. An issue with several values for a field (the sprints it has been in, its labels, its fix versions) counts once under each, the way JQL's `sprint = X` matches; every total counts each issue once.",
+  "type": "object",
+  "required": [
+    "schema",
+    "by",
+    "source",
+    "total",
+    "columns",
+    "rows",
+    "totals"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jired/report-issues/1"
+    },
+    "by": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {
+        "enum": [
+          "sprint",
+          "type",
+          "status",
+          "category",
+          "assignee",
+          "label",
+          "fix_version",
+          "priority",
+          "parent",
+          "epic",
+          "component"
+        ]
+      },
+      "description": "The rows' field, then the columns' field when there are two"
+    },
+    "source": {
+      "enum": [
+        "workspace",
+        "server"
+      ],
+      "description": "`workspace`: the working copy's files, offline. `server`: the issues `jql` found"
+    },
+    "jql": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Issues counted, each once"
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The second field's values, in column order; empty for one field"
+    },
+    "rows": {
+      "type": "array",
+      "description": "One per value of the first field, in natural order (`Sprint 9` before `Sprint 10`), `(none)` last for the issues with no value",
+      "items": {
+        "type": "object",
+        "required": [
+          "value",
+          "counts",
+          "total"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Per column, the issues in this cell; empty for one field. A column with none is absent"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Issues in this row, each once"
+          }
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "Per column, the issues in it, each once; empty for one field"
+    }
+  }
+}
