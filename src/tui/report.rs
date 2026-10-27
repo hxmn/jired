@@ -201,6 +201,15 @@ impl<'a> ReportScreen<'a> {
         }
     }
 
+    /// Open on a window that ends `back` days before today: where `--since`
+    /// and `--until` put it, rather than on this week.
+    pub fn go_back(&mut self, back: u32) {
+        if back != self.back {
+            self.back = back.min(MAX_DAYS);
+            self.reload();
+        }
+    }
+
     fn today(&mut self) {
         if self.back != 0 {
             self.back = 0;
@@ -733,6 +742,8 @@ mod tests {
         Source {
             issues,
             me: "Ilya A".into(),
+            lookup: crate::report::Lookup::default(),
+            rollup: false,
             now: now(),
             project: Some("PROJ".into()),
             last_fetch: None,

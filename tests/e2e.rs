@@ -3615,6 +3615,117 @@ fn report_time_prints_a_table_when_there_is_no_terminal() {
     assert!(deep.contains("Fix login flow"), "{deep}");
 }
 
+/// The field report's worklog table, in one command: a fixed Monday-to-Friday
+/// style window by its dates, sub-task time folded into the parent, a column
+/// per person, as Markdown with a total row — what took `--days`, jq and sixty
+/// lines of Python. And a person renamed in Jira is one column, not two: the
+/// file pulled before the rename says `Jane D`, the one after says `Jane Doe`,
+/// and the snapshots say both are `5b1af9jane`.
+#[test]
+fn report_time_draws_the_parent_level_table_for_a_window_of_dates() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.mutate_remote("PROJ-150", |issue| {
+        issue["fields"]["worklog"] = serde_json::json!({
+            "startAt": 0, "maxResults": 20, "total": 1,
+            "worklogs": [{
+                "id": "10600",
+                "author": {"accountId": "5b1af9jane", "displayName": "Jane Doe"},
+                "started": "2026-08-18T09:00:00.000+0000",
+                "timeSpent": "1h", "timeSpentSeconds": 3600,
+            }],
+        });
+    });
+    ws.json(&["pull"]);
+    // Staged on the sub-task, so it is the account's and rolls up into PROJ-142.
+    ws.json(&[
+        "logwork",
+        "PROJ-143",
+        "45m",
+        "--started",
+        "2026-08-17T09:00:00Z",
+    ]);
+
+    let args = [
+        "report",
+        "time",
+        "--since",
+        "2026-08-15",
+        "--until",
+        "2026-08-19",
+        "--rollup",
+        "parent",
+        "--columns",
+        "people",
+        "--format",
+        "md",
+    ];
+    let out = ws.cmd(&args).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        "| Issue | Jane Doe | Ilya A | Total |\n\
+         |---|---:|---:|---:|\n\
+         | PROJ-142 Fix login flow | 2h 30m | 1h 45m | 4h 15m |\n\
+         | PROJ-150 Rotate IdP certificate | 1h |  | 1h |\n\
+         | Total | 3h 30m | 1h 45m | 5h 15m |"
+    );
+
+    let report = ws.json(&args);
+    assert_eq!(report["days"], 5);
+    assert_eq!(report["dates"][0], "2026-08-15");
+    assert_eq!(report["dates"][4], "2026-08-19");
+    assert_eq!(report["rollup"], "parent");
+    let jane = &report["people"][0];
+    assert_eq!(jane["account_id"], "5b1af9jane", "{report}");
+    assert_eq!(jane["name"], "Jane Doe");
+    assert_eq!(jane["also_known_as"], serde_json::json!(["Jane D"]));
+    assert_eq!(report["people"][1]["account_id"], "5b10a2ilya", "{report}");
+    let top = &report["issues"][0];
+    assert_eq!(top["key"], "PROJ-142");
+    assert_eq!(top["type"], "Story");
+    assert_eq!(top["rolled_up"], serde_json::json!(["PROJ-143"]));
+
+    // Without the rollup the sub-task is its own row, saying where it hangs.
+    let flat = ws.json(&[
+        "report",
+        "time",
+        "--since",
+        "2026-08-15",
+        "--until",
+        "2026-08-19",
+    ]);
+    let sub = flat["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["key"] == "PROJ-143")
+        .unwrap_or_else(|| panic!("{flat}"));
+    assert_eq!(sub["parent"], "PROJ-142");
+
+    // Dates the wrong way round are a usage error, naming both.
+    let err = ws.json_err(
+        &[
+            "report",
+            "time",
+            "--since",
+            "2026-08-19",
+            "--until",
+            "2026-08-15",
+        ],
+        2,
+    );
+    assert!(
+        err["message"].as_str().unwrap().contains("2026-08-15"),
+        "{err}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Attachments [M3.3]
 // ---------------------------------------------------------------------------
