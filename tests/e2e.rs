@@ -3543,6 +3543,27 @@ fn linked_release_tasks_are_created_and_verified_with_jired_alone() {
     assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
 }
 
+/// A chain written from its far end — `B is blocked by A` in B's file — makes
+/// its inverse on an issue the push has already sent. `--verify` held each
+/// issue to exactly the links its file had, called that inverse a failure, and
+/// exited 10 on a push that had done everything asked.
+#[test]
+fn verify_does_not_count_a_link_another_issue_made_as_a_failure() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    // PROJ-143 has an edit of its own, so it is sent — and held to its file —
+    // before PROJ-150's link reaches it.
+    ws.json(&["label", "add", "release", "PROJ-143"]);
+    ws.json(&["link", "PROJ-150", "is blocked by", "PROJ-143"]);
+
+    let pushed = ws.json(&["push", "--verify"]);
+    assert_eq!(pushed["summary"]["failed"], 0, "{pushed}");
+    assert_eq!(pushed["verify"], serde_json::json!([]), "{pushed}");
+    let a = ws.read("PROJ-0143. Add integration test.md");
+    assert!(a.contains("- blocks: PROJ-150"), "{a}");
+}
+
 /// The same on Data Center, whose remote-link routes are the ones its own
 /// description declares (`tests/dc_spec_contract.rs` holds them to it).
 #[test]

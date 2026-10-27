@@ -8,6 +8,91 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.22.0] — 2026-10-27
+
+Every common ask in the field report that prompted this version — counts per
+sprint, a week's worklog table, a sprint history, a person's id, linked release
+tasks — needed `jq`, Python or `grep` around jired. Each is now one command.
+
+### Added
+
+- **`jired report issues --by FIELD[,FIELD]`** counts issues by one field, or
+  by two as a matrix with totals. `--by sprint,type --jql "project = TSK"
+  --format md` is the per-sprint chart in one command, where it used to be 75
+  searches and `jq`. It reads the working copy offline, or the server with
+  `--jql`. An issue counts under every sprint it has been in, the way JQL's
+  `sprint = X` matches.
+- **`jired search --count`** prints only how many issues match, from one
+  request.
+- **Search rows carry what the next question needs**: type, parent, epic, the
+  sprint history, fix versions, labels, priority, components, created, updated
+  and the assignee's id. `--columns` prints any of them the way `list
+  --columns` does, and `--keys` prints keys alone. A page is fetched as a
+  listing rather than `*all`, so it costs no descriptions, comments or
+  worklogs. `--limit` pages past 100, up to 1000, instead of clamping.
+- **`list --columns` takes `parent`, `epic`, `priority` and `fix_versions`**:
+  the stories of a sprint with the issue each hangs from, without a second
+  lookup per key.
+- **`report time --since DATE --until DATE`** counts a window named by its
+  dates, both ends included, rather than only `--days N` back from today.
+- **`report time --rollup parent`** files each sub-task's time under the issue
+  at the top of its `parent:` chain. The row lists what it folded in
+  (`rolled_up`), and a parent with no file of its own is still a row, named
+  from the snapshot.
+- **`report time --columns people --format md`** prints issues against people as
+  a Markdown table with a total row and column, ready to paste into a page.
+  `--format md` with the default columns gives people against days. `report-time`
+  JSON gains `account_id` and `also_known_as` per person, `type`, `parent` and
+  `rolled_up` per issue row, and a top-level `issues` list with who booked each
+  issue.
+- **`log --field NAME`: one field's history as flat rows.** Each change of
+  `Sprint`, `status` or any field the changelog names is one row carrying its
+  issue, time and author beside `from` and `to`. Getting this out of the
+  timeline took a recursive `jq`, and the one an agent wrote kept the values and
+  dropped the dates. No default cap; `--reverse` is oldest first.
+- **`jired users [TEXT]`: the people the workspace knows, with the mention to
+  paste.** It reads the snapshots and the files offline, gives one entry per
+  account id under the newest name, and keeps earlier names in
+  `also_known_as`.
+- **`show ISSUE --path` prints the issue's file.** File numbers are zero-padded
+  (`TSK-0710. …`), so `ls TSK-710*` found nothing. `show`'s JSON now always
+  carries `file`.
+- **`jired link` and `jired unlink`** write and remove `links:` lines:
+  `jired link TSK-740 is blocked by TSK-739`. The direction is checked against
+  the link types the last fetch listed and written the instance's way. They
+  stage like `label`, with `--push` to send now. Linking issues no longer means
+  a script that edits the YAML.
+- **Web links in `links:`.** `- web: https://wiki.example/x "Release notes"` is
+  a link to a page. Fetch reads an issue's remote links, push creates and
+  deletes them, and `link --web URL --title T` writes one. A Confluence page no
+  longer has to go into the description.
+- **`push --verify`** (and `create --push --verify`). Every pushed issue is read
+  back, and each field the server does not hold as the file asked is listed
+  under `verify`, with exit 10. A write Jira accepted and dropped is caught by
+  the push that made it. Links are held to the change: each link the file has
+  must be there and each it removed must be gone. A link another issue in the
+  same push made is not a difference.
+- **`version --changelog --since VERSION`** prints only the releases after that
+  one.
+- **The agent docs `init-agents` writes** now have:
+  - **First command of a session**: check `status` for `stale_agent_docs`, read
+    `version --changelog --since` the version that wrote the docs, and
+    regenerate them.
+  - **No result envelope**: rows are `.issues[]` and counts `.total`, not
+    `.result`.
+  - **Recipes**: one command for each common ask. A test parses every recipe,
+    so one cannot drift from the CLI.
+  - **Traps**: what stages and what goes straight to the server, zero-padded
+    file names, `--fields` not being a count, and when to use `list` rather
+    than `search`.
+
+### Fixed
+
+- **An inverse link made in the same second as its issue now reaches the
+  file.** An issue counted as behind the server only when its `updated` moved
+  by a whole second, so creating an issue and linking another to it at once
+  left the other file without `is blocked by`.
+
 ## [0.21.0] — 2026-10-27
 
 ### Breaking

@@ -481,8 +481,8 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     }
 
     // What each file asked for, as it was sent, for `--verify` to hold the
-    // server to; `true` for an issue this push created.
-    let mut planned: BTreeMap<String, (IssueDoc, bool)> = BTreeMap::new();
+    // server to.
+    let mut planned: BTreeMap<String, Asked> = BTreeMap::new();
 
     // Locally created issues go first: an existing issue may name one as its
     // parent or epic, and that reference has to resolve to a real key.
@@ -511,7 +511,14 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 if let Some(new_key) = &result.new_key {
                     rekeyed.push((row.key.clone(), new_key.clone()));
                     if let Some(doc) = asked {
-                        planned.insert(new_key.clone(), (doc, true));
+                        planned.insert(
+                            new_key.clone(),
+                            Asked {
+                                doc,
+                                created: true,
+                                removed_links: Vec::new(),
+                            },
+                        );
                     }
                 }
                 report.results.push(result);
@@ -603,6 +610,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         // that one bad issue does not stop the others, and a `?` here would
         // throw away the report of everything already pushed.
         let mut asked: Option<IssueDoc> = None;
+        let mut removed_links: Vec<(String, String)> = Vec::new();
         let prepared = (|| -> Result<Vec<Op>> {
             let mut working = engine.projector.read(&file.relative)?;
             let base_issue = crate::api::normalize::issue_from_json(&base.raw, markup, &fields)?;
@@ -657,6 +665,13 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                     sent.frontmatter.status = to.clone();
                 }
             }
+            let kept = working.frontmatter.link_pairs();
+            removed_links = base_doc
+                .frontmatter
+                .link_pairs()
+                .into_iter()
+                .filter(|p| !kept.contains(p))
+                .collect();
             asked = Some(sent);
 
             let raw = engine.state.raw_blocks(&row.key, "description")?;
@@ -752,7 +767,14 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 }
                 let touched = done_links(&others, &result.ops);
                 if let Some(doc) = asked {
-                    planned.insert(row.key.clone(), (doc, false));
+                    planned.insert(
+                        row.key.clone(),
+                        Asked {
+                            doc,
+                            created: false,
+                            removed_links,
+                        },
+                    );
                 }
                 report.results.push(result);
                 if refresh_linked(
@@ -1676,6 +1698,17 @@ fn done_links(others: &[Option<String>], reports: &[OpReport]) -> Vec<String> {
     keys
 }
 
+/// What one issue's file asked of a push, for `--verify` to hold the server to.
+struct Asked {
+    /// The file as it was sent.
+    doc: IssueDoc,
+    /// Created by this push, so held only to what its file set.
+    created: bool,
+    /// The links the file removed: what "asked for" means of a link besides
+    /// adding one.
+    removed_links: Vec<(String, String)>,
+}
+
 /// `--verify`: read every issue this push changed back from the server and
 /// name each field that is not what its file asked for.
 ///
@@ -1689,7 +1722,7 @@ fn verify(
     engine: &Engine,
     client: &dyn JiraApi,
     report: &PushReport,
-    planned: &BTreeMap<String, (IssueDoc, bool)>,
+    planned: &BTreeMap<String, Asked>,
 ) -> Vec<Mismatch> {
     let mut found = Vec::new();
     let ignored = engine.field_map().map(|f| f.ignored).unwrap_or_default();
@@ -1699,7 +1732,12 @@ fn verify(
             continue;
         }
         let key = result.new_key.as_ref().unwrap_or(&result.key);
-        let Some((asked, created)) = planned.get(key) else {
+        let Some(Asked {
+            doc: asked,
+            created,
+            removed_links: removed,
+        }) = planned.get(key)
+        else {
             continue;
         };
         let issue = match crate::api::block_on(client.issue(key)) {
@@ -1730,7 +1768,7 @@ fn verify(
                 continue;
             }
         };
-        for (field, expected, actual) in differences(asked, &server, *created, &ignored) {
+        for (field, expected, actual) in differences(asked, &server, *created, removed, &ignored) {
             found.push(Mismatch {
                 key: key.clone(),
                 field,
@@ -1750,10 +1788,17 @@ fn verify(
 /// list is history no write can change), a user by account id, names without
 /// regard to case. A created issue is held only to what its file set: a blank
 /// status or priority means "whatever the server starts it on".
+///
+/// Links are held to the change and not to equality: each link the file has
+/// must be there and each one it removed must be gone. Anything more is a link
+/// another issue made — in a chain pushed together, every issue but the last
+/// gains the inverse of the next one's link — and calling that a failure made
+/// a correct push exit 10.
 fn differences(
     asked: &IssueDoc,
     server: &IssueDoc,
     created: bool,
+    removed: &[(String, String)],
     ignored: &std::collections::BTreeSet<String>,
 ) -> Vec<(String, Value, Value)> {
     let (a, s) = (&asked.frontmatter, &server.frontmatter);
@@ -1773,6 +1818,15 @@ fn differences(
             continue;
         };
         if created && blank(&want) {
+            continue;
+        }
+        if *name == "links" {
+            let have_pairs = s.link_pairs();
+            let missing = a.link_pairs().iter().any(|p| !have_pairs.contains(p));
+            let lingering = removed.iter().any(|p| have_pairs.contains(p));
+            if missing || lingering {
+                out.push((name.to_string(), want, have));
+            }
             continue;
         }
         if !same_value(name, &want, &have) {

@@ -319,8 +319,11 @@ They merge as a set, like issue links.
 `--verify` reads every issue the push changed back from the server and compares
 what its file asked for, as it was sent, with what the server now holds: every
 editable frontmatter field, `custom:` by id, the description and the checklist.
-Each field is compared the way it means — links and the list fields as sets,
-`sprint` as the one the issue is in now, a user by account id, names without
+Each field is compared the way it means — the list fields as sets, links by the
+change (each link the file has is there, each it removed is gone, and one
+another issue made is not a difference: a chain pushed together gives every
+issue but the last the inverse of the next one's link), `sprint` as the one the
+issue is in now, a user by account id, names without
 regard to case — and a created issue only on what its file set, so a blank
 status is not held against the workflow's first one. Every difference is listed
 under `verify` as `{key, field, expected, actual}` and printed, and any one makes
