@@ -107,8 +107,14 @@ mod tests {
     fn a_range_is_the_releases_after_the_one_named() {
         let log = "# Changelog\n\npreamble\n\n## [0.10.0] — x\n\nten\n## [0.9.1] — x\n\nnine-one\n## [0.9.0] — x\n\nnine\n";
         let after = newer_than(log, &parse_version("0.9.0").unwrap());
-        assert!(after.contains("ten") && after.contains("nine-one"), "{after}");
-        assert!(!after.contains("\nnine\n") && !after.contains("preamble"), "{after}");
+        assert!(
+            after.contains("ten") && after.contains("nine-one"),
+            "{after}"
+        );
+        assert!(
+            !after.contains("\nnine\n") && !after.contains("preamble"),
+            "{after}"
+        );
         assert_eq!(newer_than(log, &parse_version("0.10.0").unwrap()), "");
         assert!(parse_version("latest").is_err());
     }

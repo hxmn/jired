@@ -517,7 +517,9 @@ fn recipes(s: &mut String) {
     s.push_str("# Link issues (a chain goes out in one push) and link a Confluence page\n");
     s.push_str("jired link TSK-741 is blocked by TSK-740\n");
     s.push_str("jired link TSK-742 is blocked by TSK-741\n");
-    s.push_str("jired link TSK-740 --web https://wiki.example.com/x/AbCd --title \"Release 1.0.0\"\n");
+    s.push_str(
+        "jired link TSK-740 --web https://wiki.example.com/x/AbCd --title \"Release 1.0.0\"\n",
+    );
     s.push_str("jired push TSK-740 TSK-741 TSK-742 --verify\n");
     s.push_str("# Put issues in a sprint and send it now\n");
     s.push_str("jired sprint add TSK-740 TSK-741 --sprint 17 --push\n");
