@@ -285,6 +285,37 @@ fn flush(hunks: &mut Vec<Hunk>, pending: &mut Vec<String>) {
     }
 }
 
+/// Collapse the conflict markers a merging pull wrote into `text` to one side.
+///
+/// For `resolve --ours`/`--theirs` after `pull --strategy merge`: by then base
+/// has moved to the server's copy, so the merge cannot be run again, and the
+/// markers are the only record left of which lines were whose.
+pub fn take_side_of_markers(text: &str, theirs: bool) -> String {
+    enum In {
+        Neither,
+        Ours,
+        Theirs,
+    }
+    let mut at = In::Neither;
+    let mut out: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        match at {
+            In::Neither if line.starts_with("<<<<<<< ") => at = In::Ours,
+            In::Ours if line == "=======" => at = In::Theirs,
+            In::Theirs if line.starts_with(">>>>>>> ") => at = In::Neither,
+            In::Neither => out.push(line),
+            In::Ours if !theirs => out.push(line),
+            In::Theirs if theirs => out.push(line),
+            _ => {}
+        }
+    }
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
 /// True when a file still holds unresolved conflict markers.
 pub fn has_markers(text: &str) -> bool {
     text.lines()
@@ -381,6 +412,15 @@ mod tests {
     fn appending_on_both_sides_conflicts_rather_than_interleaving() {
         let m = merge_text("a", "a\nours", "a\ntheirs");
         assert!(m.has_conflict());
+    }
+
+    #[test]
+    fn markers_collapse_to_either_side() {
+        let m = merge_text("a\nb\nc", "a\nours\nc", "a\ntheirs\nc");
+        let written = m.render("PROJ-1");
+        assert_eq!(take_side_of_markers(&written, false), "a\nours\nc");
+        assert_eq!(take_side_of_markers(&written, true), "a\ntheirs\nc");
+        assert_eq!(take_side_of_markers("plain\n", true), "plain\n");
     }
 
     #[test]

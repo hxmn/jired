@@ -130,12 +130,44 @@ pub fn run(g: &GlobalArgs, args: &ResolveArgs, out: Out) -> Result<ExitCode> {
     } else {
         Strategy::Theirs
     };
-    let pull_args = PullArgs {
-        no_fetch: true,
-        strategy,
-        ..Default::default()
+    // Behind the server, the three-way merge can still be run, and is. Level
+    // with it — what `pull --strategy merge` leaves — there is nothing to
+    // re-merge against, and the recorded fields are settled in the file.
+    let mut behind = Vec::new();
+    for key in &keys {
+        match engine.state.issue(key)? {
+            Some(row) if row.is_behind() => behind.push(key.clone()),
+            _ => {
+                let fields: Vec<String> = conflicts
+                    .iter()
+                    .filter(|c| &c.issue_key == key)
+                    .map(|c| c.field.clone())
+                    .collect();
+                crate::sync::pull::settle_in_place(&engine, key, &fields, strategy)?;
+            }
+        }
+    }
+    let report = match behind.is_empty() {
+        true => None,
+        false => {
+            let pull_args = PullArgs {
+                no_fetch: true,
+                strategy,
+                ..Default::default()
+            };
+            Some(crate::sync::pull::run_scoped(
+                &mut ctx,
+                &pull_args,
+                Some(&behind),
+            )?)
+        }
     };
-    let report = crate::sync::pull::run_scoped(&mut ctx, &pull_args, Some(&keys))?;
+    // Every one of them is decided now, whichever way it went: the pull clears
+    // only the issues it wrote, and one with nothing left to write still had
+    // its record standing for `resolve --list` to show again.
+    for key in &keys {
+        engine.state.clear_conflicts(key)?;
+    }
 
     out.say(format!(
         "resolved {} issue(s) in favour of {}",

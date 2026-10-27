@@ -363,9 +363,15 @@ pub fn run_scoped(
 
                 if !outcome.conflicts.is_empty() && strategy == Strategy::Abort {
                     for field in &outcome.conflicts {
-                        engine
-                            .state
-                            .record_conflict(&row.key, field, None, None, None)?;
+                        let (b, o, t) =
+                            conflict_values(field, &base_doc, &working_doc, &remote_doc.doc);
+                        engine.state.record_conflict(
+                            &row.key,
+                            field,
+                            b.as_deref(),
+                            o.as_deref(),
+                            t.as_deref(),
+                        )?;
                     }
                     report.conflicts.push(Conflict {
                         key: row.key.clone(),
@@ -385,9 +391,15 @@ pub fn run_scoped(
                     // already decided it.
                     if strategy == Strategy::Merge {
                         for field in &outcome.conflicts {
-                            engine
-                                .state
-                                .record_conflict(&row.key, field, None, None, None)?;
+                            let (b, o, t) =
+                                conflict_values(field, &base_doc, &working_doc, &remote_doc.doc);
+                            engine.state.record_conflict(
+                                &row.key,
+                                field,
+                                b.as_deref(),
+                                o.as_deref(),
+                                t.as_deref(),
+                            )?;
                         }
                         report.conflicts.push(conflict);
                     } else {
@@ -863,7 +875,22 @@ pub fn merge_docs(
     field!("epic", frontmatter.epic);
     field!("fix_versions", frontmatter.fix_versions);
     field!("affects_versions", frontmatter.affects_versions);
-    field!("links", frontmatter.links);
+    // Links merge as a set, not as one value: a link is a pair that exists or
+    // does not, and two people adding different ones have not disagreed. Taken
+    // as one value, the inverse of a link another issue's push had just made
+    // conflicted with a link added here, the merge kept the file's list, and
+    // the next push read the missing inverse as a deletion and sent it.
+    let links = merge_links(&base.frontmatter, &remote.frontmatter, &working.frontmatter);
+    if links != base.frontmatter.link_pairs() {
+        merged.push("links".to_string());
+    }
+    // Rebuilt only when neither side already says it, so a list that matches
+    // one of them keeps that side's order and a pull does not reorder a file.
+    if links == working.frontmatter.link_pairs() && links != remote.frontmatter.link_pairs() {
+        out.frontmatter.links = working.frontmatter.links.clone();
+    } else if links != remote.frontmatter.link_pairs() {
+        out.frontmatter.set_links(&links);
+    }
     field!("story_points", frontmatter.story_points);
     field!("custom", frontmatter.custom);
     field!("children", children);
@@ -912,6 +939,164 @@ pub fn merge_docs(
         conflicts,
         merged_fields: merged,
     }
+}
+
+/// What base, the file and the server each said of a conflicted field, for the
+/// conflict record — so `resolve --list` shows what there is to decide between
+/// rather than a field name and three nulls.
+///
+/// `None` for the parts kept whole rather than as one value — the checklist,
+/// the children, the sections — where the file itself is the clearer record.
+fn conflict_values(
+    field: &str,
+    base: &IssueDoc,
+    ours: &IssueDoc,
+    theirs: &IssueDoc,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let value = |doc: &IssueDoc| -> Option<String> {
+        if field == "description" {
+            return Some(doc.description.clone());
+        }
+        if let Some(id) = field.strip_prefix("comment:") {
+            return doc.comment(id).map(|c| c.body.clone());
+        }
+        if let Some(id) = field.strip_prefix("worklog:") {
+            return doc
+                .worklog(id)
+                .map(|w| format!("{} {} {}", w.time_spent, w.started, w.body));
+        }
+        doc.frontmatter.field(field).map(|v| match v {
+            serde_json::Value::String(s) => s,
+            other => other.to_string(),
+        })
+    };
+    (value(base), value(ours), value(theirs))
+}
+
+/// Settle the recorded conflicts of an issue that is already level with the
+/// server: what `pull --strategy merge` leaves behind.
+///
+/// That pull moved base to the server's copy, so re-running the merge finds
+/// nothing behind and writes nothing — which is how `resolve --theirs` used to
+/// report success while the file kept the local values and every conflict
+/// stayed recorded. Base *is* the server's side now, so `theirs` takes each
+/// conflicted part from it, and the markers in the text say which lines were
+/// whose. `ours` is the file as it stands, less the markers.
+pub fn settle_in_place(
+    engine: &Engine,
+    key: &str,
+    fields: &[String],
+    strategy: Strategy,
+) -> Result<Option<String>> {
+    let Some(row) = engine.state.issue(key)? else {
+        return Ok(None);
+    };
+    let (Some(base), Some(found)) = (&row.base, engine.projector.locate(key)?) else {
+        return Ok(None);
+    };
+    let markup = engine.markup();
+    let names = engine.field_map()?;
+    let base_url = engine.base_url().to_string();
+    let base_doc = render_issue(
+        &parse_snapshot(&base.raw, markup, &names, key)?,
+        &RenderContext {
+            markup,
+            base_url: &base_url,
+            ignored_custom: &names.ignored,
+        },
+    )?
+    .doc;
+    let mut doc = engine.projector.read(&found.relative)?;
+    let theirs = strategy == Strategy::Theirs;
+    for field in fields {
+        take_side(field, &base_doc, &mut doc, theirs);
+    }
+    let outcome = engine.projector.write(&doc, Some(&found.relative))?;
+    Ok(Some(outcome.relative))
+}
+
+/// Put one conflicted part of `doc` on the side asked for, `server` being the
+/// server's rendering of the issue.
+fn take_side(field: &str, server: &IssueDoc, doc: &mut IssueDoc, theirs: bool) {
+    if field == "description" {
+        doc.description = merge::take_side_of_markers(&doc.description, theirs);
+        return;
+    }
+    if !theirs {
+        return;
+    }
+    if let Some(id) = field.strip_prefix("comment:") {
+        if let (Some(from), Some(to)) = (
+            server.comment(id).cloned(),
+            doc.comments
+                .iter_mut()
+                .find(|c| matches!(&c.id, CommentId::Existing(i) if i == id)),
+        ) {
+            to.body = from.body;
+        }
+        return;
+    }
+    if let Some(id) = field.strip_prefix("worklog:") {
+        if let (Some(from), Some(to)) = (
+            server.worklog(id).cloned(),
+            doc.worklogs
+                .iter_mut()
+                .find(|w| matches!(&w.id, WorklogId::Existing(i) if i == id)),
+        ) {
+            to.time_spent = from.time_spent;
+            to.started = from.started;
+            to.body = from.body;
+        }
+        return;
+    }
+    let (s, d) = (&server.frontmatter, &mut doc.frontmatter);
+    match field {
+        "type" => d.issue_type = s.issue_type.clone(),
+        "status" => d.status = s.status.clone(),
+        "priority" => d.priority = s.priority.clone(),
+        "summary" => d.summary = s.summary.clone(),
+        "labels" => d.labels = s.labels.clone(),
+        "components" => d.components = s.components.clone(),
+        "assignee" => d.assignee = s.assignee.clone(),
+        "sprint" => d.sprint = s.sprint.clone(),
+        "parent" => d.parent = s.parent.clone(),
+        "epic" => d.epic = s.epic.clone(),
+        "fix_versions" => d.fix_versions = s.fix_versions.clone(),
+        "affects_versions" => d.affects_versions = s.affects_versions.clone(),
+        "links" => d.links = s.links.clone(),
+        "story_points" => d.story_points = s.story_points,
+        "custom" => d.custom = s.custom.clone(),
+        "children" => doc.children = server.children.clone(),
+        "extra_sections" => doc.extra_sections = server.extra_sections.clone(),
+        "checklist" => doc.checklist = server.checklist.clone(),
+        "preamble" => doc.preamble = server.preamble.clone(),
+        _ => {}
+    }
+}
+
+/// The server's links, less the ones the file removed, plus the ones it added.
+///
+/// What the file did is measured against base, so a link the file never had
+/// because it arrived from the server after the last sync is the server's
+/// addition, not the file's removal.
+fn merge_links(
+    base: &crate::doc::Frontmatter,
+    remote: &crate::doc::Frontmatter,
+    working: &crate::doc::Frontmatter,
+) -> Vec<(String, String)> {
+    let (base, remote, working) = (base.link_pairs(), remote.link_pairs(), working.link_pairs());
+    let mut out: Vec<(String, String)> = remote
+        .iter()
+        .filter(|p| !(base.contains(p) && !working.contains(p)))
+        .cloned()
+        .collect();
+    for added in working.iter().filter(|p| !base.contains(p)) {
+        if !out.contains(added) {
+            out.push(added.clone());
+        }
+    }
+    out.sort();
+    out
 }
 
 fn merge_comments(
@@ -1020,6 +1205,79 @@ mod tests {
             attachments: vec![],
             extra_sections: vec![],
         }
+    }
+
+    fn with_links(mut d: IssueDoc, links: &[(&str, &str)]) -> IssueDoc {
+        let pairs: Vec<(String, String)> = links
+            .iter()
+            .map(|(t, k)| (t.to_string(), k.to_string()))
+            .collect();
+        d.frontmatter.set_links(&pairs);
+        d
+    }
+
+    /// The field report's data loss: another issue's push made the inverse
+    /// link on the server while this file gained a link of its own. Neither
+    /// is a conflict, and both have to be in the file the next push reads.
+    #[test]
+    fn links_added_on_both_sides_are_both_kept() {
+        let base = doc("S", "body", &[]);
+        let remote = with_links(base.clone(), &[("is blocked by", "PROJ-1")]);
+        let working = with_links(base.clone(), &[("blocks", "PROJ-3")]);
+
+        for strategy in [
+            Strategy::Abort,
+            Strategy::Merge,
+            Strategy::Ours,
+            Strategy::Theirs,
+        ] {
+            let out = merge_docs(&base, &remote, &working, strategy, "PROJ-2");
+            assert!(
+                out.conflicts.is_empty(),
+                "{strategy:?}: {:?}",
+                out.conflicts
+            );
+            assert_eq!(
+                out.doc.frontmatter.link_pairs(),
+                [
+                    ("blocks".to_string(), "PROJ-3".to_string()),
+                    ("is blocked by".to_string(), "PROJ-1".to_string()),
+                ],
+                "{strategy:?}"
+            );
+        }
+    }
+
+    /// A removal is the file's only when base had the link: one the server
+    /// added after the last sync was never in the file to be removed.
+    #[test]
+    fn a_link_removed_here_stays_removed_and_one_removed_there_goes() {
+        let base = with_links(
+            doc("S", "body", &[]),
+            &[("blocks", "A-1"), ("relates to", "A-2")],
+        );
+        let remote = with_links(
+            base.clone(),
+            &[("blocks", "A-1"), ("relates to", "A-2"), ("clones", "A-9")],
+        );
+        let working = with_links(base.clone(), &[("relates to", "A-2")]);
+        let out = merge_docs(&base, &remote, &working, Strategy::Abort, "PROJ-1");
+        assert!(out.conflicts.is_empty());
+        assert_eq!(
+            out.doc.frontmatter.link_pairs(),
+            [
+                ("clones".to_string(), "A-9".to_string()),
+                ("relates to".to_string(), "A-2".to_string()),
+            ]
+        );
+
+        let remote = with_links(base.clone(), &[("blocks", "A-1")]);
+        let working = base.clone();
+        let out = merge_docs(&base, &remote, &working, Strategy::Abort, "PROJ-1");
+        assert_eq!(
+            out.doc.frontmatter.link_pairs(),
+            [("blocks".to_string(), "A-1".to_string())]
+        );
     }
 
     #[test]

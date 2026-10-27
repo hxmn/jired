@@ -42,6 +42,17 @@
         }
       }
     },
+    "staged": {
+      "type": "boolean",
+      "description": "Whether the change is written in the files and waiting for `jired push`. True without `--push`, with `--dry-run`, and when the push failed."
+    },
+    "next": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The command that sends what is staged, when anything is."
+    },
     "pushed": {
       "type": "boolean"
     },

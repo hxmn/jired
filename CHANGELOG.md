@@ -8,6 +8,57 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.21.0] — 2026-10-27
+
+### Breaking
+
+- **A `sprint:` no board knows refuses the issue at plan time (exit 2).** `push`
+  used to warn and carry on, and the warning went unseen while the exit code
+  said success. That is how a new issue created with `--sprint 17` landed in the
+  backlog. Both updates and a create's follow-ups now fail the issue before
+  anything is sent, and the hint lists the open sprints.
+- **`create --sprint` is resolved when the issue is staged**, the way `sprint
+  add` resolves it, and the file carries the sprint's own name. A sprint the
+  workspace does not know is exit 2 before anything is written.
+
+### Added
+
+- **A bare number names the sprint whose name ends in it**: `--sprint 17` for
+  `TSK Sprint 17`, on `create`, `sprint add` and the sprint commands that take a
+  name. Taken only when one sprint answers to it, and exit 2 naming them when
+  several do. A sprint's id still wins.
+- **`staged` and `next` in the JSON of `sprint add|remove`, `label`, `parent`,
+  `assign` and `set`.** Without `--push` these commands only write the files.
+  The hint saying so went to stderr, which an agent reading `--json` never sees,
+  so `"pushed": false` was easy to take for a detail. `next` is the push to run.
+- **`staged` in `create`'s JSON**: whether the file is still a draft waiting for
+  `push`.
+- **A recorded conflict carries its values.** `resolve --list` shows the base,
+  local and remote values of a conflicted frontmatter field, comment, worklog or
+  description, where every one used to be `null`.
+
+### Fixed
+
+- **A link pushed to one issue no longer deletes a link from the other.** With
+  `A blocks B` and `B blocks C`, `push A B` refused B as stale, because the
+  link from A had changed B on the server. The merging pull that followed called
+  B's links a conflict, kept the file's list and dropped the inverse link. The
+  next `push B` read that as a deletion and removed `is blocked by: A` on the
+  server. Three changes fix it. Links merge as a set (the server's, less what
+  the file removed since base, plus what it added), so they never conflict and a
+  link the server gained cannot look like a deletion. After every link it makes
+  or removes, push re-reads the other end and merges it into its file. That is
+  also what lets the whole chain go out in one push.
+- **`create --push --dry-run` leaves nothing behind.** The `NEW-*` draft it
+  planned from stayed staged, and the next plain `push` created it.
+- **`resolve --ours`/`--theirs` work after `pull --strategy merge`.** That pull
+  had already moved base to the server's copy, so the merge `resolve` re-ran
+  found nothing to write. It reported success while the file kept the local
+  values and markers, and both conflicts stayed listed. Such an issue is now
+  settled in the file: `--theirs` takes each recorded field from the server's
+  side and the remote lines between the markers, and `--ours` keeps the local
+  ones. Every resolved record is cleared.
+
 ## [0.20.0] — 2026-10-20
 
 ### Breaking

@@ -50,7 +50,7 @@ pub struct CreateArgs {
     /// Assign it: a name, an email, or an account id
     #[arg(long)]
     pub assignee: Option<String>,
-    /// Sprint to put it in, by name or id
+    /// Sprint to put it in: a name, an id, or the number that ends its name
     #[arg(long)]
     pub sprint: Option<String>,
     /// Labels, comma-separated
@@ -89,6 +89,13 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
 
     let engine = Engine::open(&mut ctx)?;
     let key = new_key(&engine)?;
+    // Resolved before anything is written, to the name the file carries and
+    // push moves by. Written as typed, `--sprint 17` named no sprint, the push
+    // moved the issue nowhere, and it landed in the backlog.
+    let sprint = match &args.sprint {
+        Some(wanted) => Some(crate::cli::cmd::sprint::resolve_sprint(&ctx, wanted)?.name),
+        None => None,
+    };
     // The template is the starting point for both the form and the flags-only
     // path, so it is read before either decides anything.
     let mut doc = template(&ctx, args)?;
@@ -116,7 +123,7 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
     // the draft so a flag beats what a template said, and through the same
     // setter `jired set` uses so the two cannot disagree about what a field is
     // called or how its value is spelled.
-    apply_flags(&mut doc.frontmatter, args)?;
+    apply_flags(&mut doc.frontmatter, args, sprint.as_deref())?;
 
     let outcome = engine.projector.write(&doc, None)?;
     // Recording it now is what makes `status` list it and `push` find it.
@@ -131,13 +138,21 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
     } else {
         None
     };
+    // The draft existed only so the dry run had something to plan from. Left
+    // behind, it was a `NEW-*` issue nobody asked to stage, which the next
+    // plain `push` would have created.
+    if args.dry_run {
+        engine.projector.remove(&outcome.relative)?;
+        engine.state.forget_issue(&key)?;
+        engine.state.forget_new_issue_project(&key)?;
+    }
 
     let created_as = pushed
         .as_ref()
         .and_then(|r| r.results.first())
         .and_then(|r| r.new_key.clone());
     match (&pushed, &created_as) {
-        (Some(r), _) if r.dry_run => {}
+        (Some(r), _) if r.dry_run => out.say("nothing was created, and no draft was kept"),
         (Some(_), Some(real)) => out.say(format!("created {real}")),
         (Some(_), None) => out.say(format!(
             "{key} is staged in {}, but the push failed — \
@@ -150,12 +165,14 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
         )),
     }
 
+    let staged = !args.dry_run && created_as.is_none();
     out.emit(
         "create",
         &serde_json::json!({
             "key": key,
             "new_key": created_as,
             "file": outcome.relative,
+            "staged": staged,
             "project": draft.project,
             "type": draft.issue_type,
             "summary": draft.summary,
@@ -330,10 +347,10 @@ fn copy_from(fm: &mut Frontmatter, model: &Frontmatter) {
 ///
 /// `--set` is applied last so it can override a flag as well as a template,
 /// which is what makes one template plus overrides a way to stamp out issues.
-fn apply_flags(fm: &mut Frontmatter, args: &CreateArgs) -> Result<()> {
+fn apply_flags(fm: &mut Frontmatter, args: &CreateArgs, sprint: Option<&str>) -> Result<()> {
     for (field, value) in [
         ("assignee", args.assignee.clone()),
-        ("sprint", args.sprint.clone()),
+        ("sprint", sprint.map(str::to_string)),
         ("epic", args.epic.clone()),
     ] {
         if let Some(v) = value {

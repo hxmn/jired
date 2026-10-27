@@ -21,6 +21,10 @@
     "file": {
       "type": "string"
     },
+    "staged": {
+      "type": "boolean",
+      "description": "Whether `file` is still a staged NEW-* draft that a later `jired push` will create. False once the issue was created, and after `--push --dry-run`, which removes the draft it planned from."
+    },
     "project": {
       "type": "string"
     },

@@ -308,7 +308,13 @@ $EDITOR "PROJ-0142. Fix login flow.md" && jired resolve --done
 ```
 
 `--done` refuses any file that still contains markers, so `<<<<<<<` cannot reach
-Jira.
+Jira. After a merging pull, `--ours` and `--theirs` settle the markers and the
+recorded fields in the file itself, since the server's side is already base.
+
+`links:` never conflicts: links merge as a set, so a link the server gained and a
+different one you added both end up in the file. A push that links two issues
+re-reads the other end straight away, which is what lets `A blocks B` and
+`B blocks C` go out in one `jired push A B`.
 
 ### Colour
 
@@ -640,10 +646,12 @@ it means the same thing on a workflow that says `Done` and one that says `Гот
 issue's sprint, alongside `transition`, `assign` and `comment`: they write the
 frontmatter and stage it, so the change shows up in `status` and `diff` and goes
 out with the next `push` — or immediately with `--push`. `--sprint` takes a name
-or an id, matched against the sprints this workspace has fetched, and a name no
-board knows is an error rather than a push that quietly skips it. An issue
-already in the sprint is left alone and said so, rather than staged as a change
-that does nothing.
+or an id — or the number that ends a name, `17` for `TSK Sprint 17` — matched
+against the sprints this workspace has fetched, and a name no board knows is an
+error rather than a push that quietly skips it. `create --sprint` resolves it the
+same way. An issue already in the sprint is left alone and said so, rather than
+staged as a change that does nothing. Without `--push` the `--json` document
+says `"staged": true` and gives the push to run under `next`.
 
 A sub-task is the one issue none of this reaches: it is not a board item, and
 takes its sprint from whatever its parent is in. `push` refuses a `sprint:` on

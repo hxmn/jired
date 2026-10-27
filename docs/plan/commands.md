@@ -156,7 +156,11 @@ Default: abort-on-conflict — exit 5, list conflicting files/fields, write noth
 `merge` writes git-style markers, records conflicts, **and still exits 5**: a
 non-zero status does not mean the working copy is unchanged. `ours` and `theirs`
 settle each conflict by taking that side: it is written, reported under
-`decided` rather than `conflicts`, and the pull exits 0. `--force` ≡ theirs
+`decided` rather than `conflicts`, and the pull exits 0. `links:` is the
+exception to field-level merging: it merges as a set and never conflicts (see
+`push`). A recorded conflict carries the base, local and remote values of a
+frontmatter field, a comment or the description, so `resolve --list` shows what
+there is to decide between. `--force` ≡ theirs
 everywhere, and both it and `--strategy theirs` list the issues whose local edits
 would be lost and ask before discarding them (`-y`/non-interactive proceeds).
 `--dry-run` renders the plan without writing.
@@ -278,7 +282,23 @@ unrecoverable content someone else may have written, while a link is exactly
 the pair on the deleted line, and an ordinary revert puts it back. On a `NEW-*`
 issue the links are follow-ups after the create — the create call has no field
 for them — planned before it so the dry run lists them and an unknown
-direction refuses the issue while nothing has been sent. `epic` remains the
+direction refuses the issue while nothing has been sent.
+
+Jira records a link on both issues and moves both `updated` stamps, so the
+other end goes stale the moment a link to it is made or removed. After every
+`create_link`/`delete_link` that went through, push re-reads the other end and
+merges it into its file through a scoped `pull` (under `abort`, so a file whose
+own edits conflict is left alone and named in `warnings`). Within one push that
+is what lets a chain go out together: in `push A B` with `A blocks B` and
+`B blocks C`, B takes in `is blocked by: A` before its own turn, is no longer
+stale, and sends only `blocks C`. Links merge as a set in every pull — the
+server's links, less the ones the file removed since base, plus the ones it
+added — so they never conflict, and a link the server gained after the last sync
+is never in a position to be read as a deletion.
+
+`sprint:` is resolved against the sprints the workspace has fetched, for an
+update and for a create's follow-up alike, and a name no board knows refuses the
+issue at plan time (exit 2, the hint listing the open sprints). `epic` remains the
 one editable field with no call behind it; a change to it is warned about
 rather than sent.
 
@@ -669,6 +689,12 @@ options taken from what the workspace has already pulled (ranked by use) rather
 than from the server. It is offline like the rest of the command. The form draws
 on the alternate screen over stderr, so `--json` stdout stays a single document.
 
+`--sprint` is resolved before anything is written, the way `sprint add`
+resolves it, and the file carries the sprint's own name: an unknown one is exit
+2 while nothing exists. `--push --dry-run` plans from a draft and removes it
+afterwards, so a dry run leaves no `NEW-*` issue for a later push to create;
+`staged` in the JSON says whether the file is still a draft waiting for push.
+
 Degradation: full-screen form → line prompts for summary, type and project (a
 terminal that cannot do raw mode, `TERM=dumb`, or `JIRED_NO_TUI=1`) → exit 7
 naming the missing summary (`--no-input`, or no terminal at all). Backing out of
@@ -812,7 +838,12 @@ Lists the recorded conflicts (issue key and field). A bare `resolve` prints that
 list and then exits 7 rather than choosing for the user; `--list` prints it and
 exits 0. `--ours`/`--theirs` re-run the merge under that strategy so they cannot
 drift from `pull --strategy`; `--theirs` names what it would discard and asks
-first. `--done` accepts files edited by hand and refuses (exit 5) any that still
+first. An issue a `pull --strategy merge` already wrote is level with the server
+— base moved to the server's copy — so there is nothing left to re-merge
+against. Its recorded fields are settled in the file instead: `--theirs` takes
+each from base, which is the server's side, and collapses the description's
+markers to the remote lines; `--ours` keeps the file's values and collapses the
+markers to the local lines. Either way every resolved record is cleared. `--done` accepts files edited by hand and refuses (exit 5) any that still
 contain conflict markers. `--field` is hidden and unimplemented — it narrows the
 listing, and combining it with a resolution flag fails immediately with exit 2.
 There is no TUI and no `$EDITOR` hunk picker; both are M4 work.
@@ -1262,7 +1293,9 @@ the key order and that its last entry is the one a move can act on.
 
 `--sprint` takes a name or an id, matched against the sprints the workspace has
 fetched, preferring an open one where a name repeats; the board's own spelling is
-what gets written, whatever case was typed. A name no board knows is exit 2 here,
+what gets written, whatever case was typed. A bare number that is no sprint's id
+is taken as the number that ends a name — `17` for `TSK Sprint 17` — when exactly
+one sprint answers to it, and is exit 2 naming them when several do. A name no board knows is exit 2 here,
 listing the open ones — the same condition `push` could only report afterwards as
 a warning, having already skipped the issue.
 
@@ -1273,7 +1306,10 @@ something to explain. `remove` empties the list, which is what the backlog looks
 like in a file. Issues are named as keys or file paths, positionally or
 comma-separated; one that the workspace does not have is a warning and the others
 still move, and exit 2 only when none of them are here.
-JSON: `{"schema":"jired/sprint-move/1","sprint":{…}|null,"issues":[{"key","file","changed"}],"pushed":false}`.
+Without `--push` nothing reaches the server, and the JSON says so where an agent
+reads it rather than only in a stderr hint: `staged: true` and `next`, the push
+that sends it. `label`, `parent`, `assign` and `set` carry the same two fields.
+JSON: `{"schema":"jired/sprint-move/1","sprint":{…}|null,"issues":[{"key","file","changed"}],"staged":true,"next":"jired push PROJ-142","pushed":false}`.
 
 ### `jired version [--changelog]`
 The same lines `--version` prints, as a command — and, with `--changelog`, the

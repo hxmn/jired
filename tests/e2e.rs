@@ -3194,6 +3194,86 @@ fn a_link_edit_becomes_its_own_calls_on_push() {
     assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
 }
 
+/// The field report's data loss, step for step. `A blocks B` changes B on the
+/// server, so B used to be refused as stale in the same push; the merging pull
+/// that followed kept B's own new link and dropped the inverse one, and the
+/// next push of B deleted `is blocked by: A` from the server. Now the push
+/// takes B's inverse link in before B's turn, and both go out together.
+#[test]
+fn a_chain_of_links_goes_out_in_one_push_and_deletes_nothing() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let a = "PROJ-0143. Add integration test.md";
+    let b = "PROJ-0150. Rotate IdP certificate.md";
+    ws.write(
+        a,
+        &ws.read(a)
+            .replace("links: []", "links:\n- blocks: PROJ-150"),
+    );
+    ws.write(
+        b,
+        &ws.read(b)
+            .replace("links: []", "links:\n- relates to: PROJ-142"),
+    );
+
+    let push = ws.json(&["push", "PROJ-143", "PROJ-150"]);
+    assert_eq!(push["summary"]["failed"], 0, "{push}");
+    assert!(push["stale"].as_array().unwrap().is_empty(), "{push}");
+    let kinds: Vec<&str> = push["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|r| r["ops"].as_array().unwrap())
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create_link", "create_link"], "{push}");
+
+    let b_now = ws.read(b);
+    assert!(b_now.contains("- is blocked by: PROJ-143"), "{b_now}");
+    assert!(b_now.contains("- relates to: PROJ-142"), "{b_now}");
+    let status = ws.json(&["status"]);
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+}
+
+/// The other half of the same report: a link the server gained while the file
+/// gained a different one is not a conflict, under any strategy, and the push
+/// after the pull sends the new link and deletes nothing.
+#[test]
+fn a_pull_keeps_links_added_on_both_sides() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let b = "PROJ-0150. Rotate IdP certificate.md";
+    ws.write(
+        b,
+        &ws.read(b)
+            .replace("links: []", "links:\n- relates to: PROJ-142"),
+    );
+    ws.mutate_remote("PROJ-150", |issue| {
+        issue["fields"]["issuelinks"] = serde_json::json!([{
+            "id": "10777",
+            "type": {"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+            "inwardIssue": {"key": "PROJ-143"},
+        }]);
+    });
+
+    let pull = ws.json(&["pull", "--strategy", "merge"]);
+    assert!(pull["conflicts"].as_array().unwrap().is_empty(), "{pull}");
+    let text = ws.read(b);
+    assert!(text.contains("- is blocked by: PROJ-143"), "{text}");
+    assert!(text.contains("- relates to: PROJ-142"), "{text}");
+
+    let dry = ws.json(&["push", "--dry-run", "PROJ-150"]);
+    let kinds: Vec<&str> = dry["results"][0]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create_link"], "{dry}");
+}
+
 /// A direction the instance does not define is refused while nothing has been
 /// sent: exit 2, in the plan, the hint naming the directions it does offer —
 /// the spelling is per instance, not a fixed vocabulary.
@@ -3262,6 +3342,77 @@ fn a_new_issue_pushes_its_links_after_the_create() {
     let created = ws.read(&format!("PROJ-{number:0>4}. Wire the audit log.md"));
     assert!(created.contains("is blocked by: PROJ-143"), "{created}");
     assert!(created.contains("relates to: PROJ-150"), "{created}");
+}
+
+/// The field report: `create --sprint 17 … --push` sent no sprint, the plan
+/// showed no move, and the issue landed in the backlog — `17` was written into
+/// the file as typed and named no sprint. It now resolves to the sprint whose
+/// name ends in it, the dry run shows the move, and the dry run leaves no
+/// draft behind for a later push to create.
+#[test]
+fn create_resolves_its_sprint_and_a_dry_run_leaves_nothing() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.write_fixture(
+        "sprints.json",
+        serde_json::json!([
+            {"id": "917", "name": "TSK Sprint 17", "state": "future", "board_id": "12"},
+            {"id": "42", "name": "Sprint 42", "state": "active", "board_id": "12"},
+        ]),
+    );
+    ws.json(&["fetch"]);
+
+    let dry = ws.json(&[
+        "create",
+        "--summary",
+        "Ship 1.0.0",
+        "--sprint",
+        "17",
+        "--push",
+        "--dry-run",
+    ]);
+    assert_eq!(dry["staged"], false, "{dry}");
+    let ops = dry["push"]["results"][0]["ops"].as_array().unwrap();
+    let kinds: Vec<&str> = ops.iter().map(|o| o["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["create_issue", "move_sprint"], "{dry}");
+    assert_eq!(
+        ops[1]["request"]["path"], "/rest/agile/1.0/sprint/917/issue",
+        "{dry}"
+    );
+    assert!(
+        !ws.path().join(dry["file"].as_str().unwrap()).exists(),
+        "the draft the dry run planned from is gone"
+    );
+    let status = ws.json(&["status"]);
+    assert!(
+        status["new_issues"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+
+    // Staged for real, the file carries the sprint's name, not the number.
+    let staged = ws.json(&["create", "--summary", "Ship 1.0.0", "--sprint", "17"]);
+    assert_eq!(staged["staged"], true);
+    let text = ws.read(staged["file"].as_str().unwrap());
+    assert!(text.contains("sprint: TSK Sprint 17"), "{text}");
+
+    // A sprint nobody has is refused before anything is written.
+    let err = ws.json_err(&["create", "--summary", "Nope", "--sprint", "99"], 2);
+    assert!(err["message"].as_str().unwrap().contains("99"), "{err}");
+
+    // And one written into a file by hand is refused at plan time, not warned
+    // about while the issue goes to the backlog.
+    let file = staged["file"].as_str().unwrap();
+    ws.write(file, &ws.read(file).replace("TSK Sprint 17", "Sprint 99"));
+    let refused = ws.json_code(&["push", "--dry-run"], 2);
+    assert_eq!(refused["results"][0]["ok"], false, "{refused}");
+    assert!(
+        refused["results"][0]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("TSK Sprint 17"),
+        "{refused}"
+    );
 }
 
 #[test]
@@ -3704,6 +3855,90 @@ fn resolve_ours_keeps_the_local_value_and_leaves_it_to_push() {
         .as_array()
         .unwrap()
         .contains(&Value::from("summary")));
+}
+
+/// A merging pull: the summary conflicts in the frontmatter and a line of
+/// the description conflicts in the body, so both kinds are recorded.
+fn merged_with_markers(ws: &Ws) {
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("summary: Fix login flow", "summary: Ours")
+        .replace("Steps to reproduce are below.", "Our steps.");
+    ws.write(ISSUE_FILE, &text);
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["summary"] = "Theirs".into();
+        let content = issue["fields"]["description"]["content"]
+            .as_array_mut()
+            .unwrap();
+        content[2]["content"][0]["text"] = "Their steps.".into();
+    });
+    let out = ws
+        .cmd(&["pull", "--strategy", "merge", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5), "the setup must conflict");
+}
+
+/// The field report: after `pull --strategy merge`, `resolve --theirs` said
+/// it had resolved the issue, the file kept the local values, and `resolve
+/// --list` still listed both conflicts with every value null. The merge had
+/// already moved base to the server's copy, so the pull `resolve` re-ran found
+/// nothing to write — and only an issue it wrote had its record cleared.
+#[test]
+fn resolve_theirs_after_a_merging_pull_takes_the_server_side() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    merged_with_markers(&ws);
+
+    // What there is to decide between is on the record.
+    let listed = ws.json(&["resolve", "--list"]);
+    let summary = listed["conflicts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["field"] == "summary")
+        .expect("summary is recorded");
+    assert_eq!(summary["ours_val"], "Ours", "{listed}");
+    assert_eq!(summary["theirs_val"], "Theirs", "{listed}");
+
+    ws.json(&["resolve", "--theirs", "--yes"]);
+    let text = ws.read("PROJ-0142. Theirs.md");
+    assert!(text.contains("summary: Theirs"), "{text}");
+    assert!(text.contains("Their steps."), "{text}");
+    assert!(!text.contains("Our steps."), "{text}");
+    assert!(!text.contains("<<<<<<<"), "{text}");
+
+    assert!(ws.json(&["resolve", "--list"])["conflicts"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let status = ws.json(&["status"]);
+    assert!(
+        status["conflicts"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+    assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+}
+
+#[test]
+fn resolve_ours_after_a_merging_pull_keeps_the_local_side() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    merged_with_markers(&ws);
+
+    ws.json(&["resolve", "--ours"]);
+    let text = ws.read("PROJ-0142. Ours.md");
+    assert!(text.contains("Our steps."), "{text}");
+    assert!(!text.contains("Their steps."), "{text}");
+    assert!(!text.contains("<<<<<<<"), "{text}");
+    let status = ws.json(&["status"]);
+    assert!(
+        status["conflicts"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+    assert_eq!(status["dirty"][0]["key"], "PROJ-142", "{status}");
 }
 
 #[test]
@@ -4932,9 +5167,10 @@ fn editing_sprint_history_is_reported_rather_than_attempted() {
 }
 
 /// A name no board knows cannot be resolved to an id, and guessing would move
-/// the issue somewhere nobody asked for.
+/// the issue somewhere nobody asked for. Refused at plan time, exit 2: a
+/// warning beside exit 0 was read as the move having happened.
 #[test]
-fn a_sprint_the_workspace_does_not_know_is_reported_rather_than_guessed() {
+fn a_sprint_the_workspace_does_not_know_is_refused_rather_than_guessed() {
     let ws = Ws::new();
     ws.init();
     ws.json(&["pull"]);
@@ -4944,18 +5180,18 @@ fn a_sprint_the_workspace_does_not_know_is_reported_rather_than_guessed() {
         .replace("sprint: Sprint 42", "sprint: Sprint 99");
     ws.write(ISSUE_FILE, &text);
 
-    let report = ws.json(&["push"]);
-    let warnings = report["warnings"].as_array().unwrap();
+    let report = ws.json_code(&["push"], 2);
+    let result = &report["results"][0];
+    assert_eq!(result["ok"], false, "{report}");
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap().contains("Sprint 99")),
-        "{warnings:?}"
+        result["error"].as_str().unwrap().contains("Sprint 99"),
+        "{report}"
     );
     assert!(
-        report["results"].as_array().unwrap().is_empty(),
+        result["ops"].as_array().unwrap().is_empty(),
         "nothing was sent"
     );
+    assert!(ws.read(ISSUE_FILE).contains("sprint: Sprint 99"));
 }
 
 /// A sub-task is not a board item: it takes its sprint from its parent, and the
@@ -5725,6 +5961,10 @@ fn sprint_add_stages_the_move_on_every_issue_named() {
     assert_eq!(out["sprint"]["id"], "43");
     assert_eq!(out["sprint"]["name"], "Sprint 43");
     assert_eq!(out["pushed"], false);
+    // Said in the document, where an agent reading --json looks: the moves
+    // are in the files and nothing has reached the server.
+    assert_eq!(out["staged"], true);
+    assert_eq!(out["next"], "jired push PROJ-142 PROJ-150");
     let keys: Vec<&str> = out["issues"]
         .as_array()
         .unwrap()
@@ -5800,6 +6040,8 @@ fn sprint_remove_sends_the_issue_back_to_the_backlog() {
     let out = ws.json(&["sprint", "remove", "PROJ-142", "--push"]);
     assert_eq!(out["sprint"], Value::Null);
     assert_eq!(out["pushed"], true);
+    assert_eq!(out["staged"], false);
+    assert_eq!(out["next"], Value::Null);
     let op = &out["push"]["results"][0]["ops"][0];
     assert_eq!(op["kind"], "move_sprint");
     assert_eq!(op["status"], "done");

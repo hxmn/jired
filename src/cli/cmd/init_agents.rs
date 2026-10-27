@@ -541,7 +541,9 @@ pub fn render() -> String {
          instance's own directed wording: `- is blocked by: PROJ-1`, `- blocks: PROJ-2`. \
          Adding a line creates the link on the next push, deleting one deletes it; a \
          direction this Jira does not define is refused at plan time, naming the ones \
-         it does.\n\n",
+         it does. Links merge as a set and never conflict, and a push re-reads the \
+         other end of every link it makes, so a chain — `A blocks B`, `B blocks C` — \
+         goes out in one `jired push A B`.\n\n",
     );
     s.push_str(&format!(
         "Read-only fields: {}; `jired:` is the whole sync block. They only report \
@@ -853,9 +855,12 @@ pub fn render() -> String {
         "`jired sprint add KEY… --sprint S` and `jired sprint remove KEY…` are the \
          scriptable way to move issues, and stage like `transition` and `assign` do: \
          they write `sprint:` and `push` sends it, or `--push` does immediately. \
-         `--sprint` takes a name or an id and is checked against the sprints already \
-         fetched, so a name no board knows is exit 2 rather than a skipped push. An \
-         issue already in the sprint is reported, not staged.\n\n",
+         `--sprint` takes a name, an id, or the number that ends a name (`17` for \
+         `TSK Sprint 17`), and is checked against the sprints already fetched, so a \
+         name no board knows is exit 2 rather than a skipped push. An issue already in \
+         the sprint is reported, not staged. **Without `--push` nothing reaches the \
+         server**: the JSON says `\"staged\": true` and gives the push to run under \
+         `next`. `create --sprint` resolves the sprint the same way.\n\n",
     );
     s.push_str(
         "`jired sprint create NAME [--board B] [--start TS] [--end TS] [--goal TEXT] \
@@ -984,7 +989,8 @@ pub fn render() -> String {
     s.push_str("```\n\n");
     s.push_str(
         "`--ours` and `--theirs` re-run the same merge under that strategy rather than \
-         editing the file a second way. `--done` refuses any file that still contains \
+         editing the file a second way; after a merging pull they settle the markers \
+         and the recorded fields in the file. `--done` refuses any file that still contains \
          markers and exits 5 listing them, so `<<<<<<<` cannot reach Jira.\n\n",
     );
 

@@ -324,6 +324,8 @@ enum Action {
     /// it exists, since the file spells a link as a direction and a key.
     DeleteLink {
         id: String,
+        /// The other end, which the deletion changes too.
+        other_key: String,
     },
 }
 
@@ -443,11 +445,18 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             args,
             &mut link_types,
         ) {
-            Ok(result) => {
+            Ok((result, touched)) => {
                 if let Some(new_key) = &result.new_key {
                     rekeyed.push((row.key.clone(), new_key.clone()));
                 }
                 report.results.push(result);
+                refresh_linked(
+                    ctx,
+                    &engine,
+                    client.as_ref(),
+                    &touched,
+                    &mut report.warnings,
+                )?;
             }
             Err(e) => report.results.push(IssueResult::failed(&row.key, &e)),
         }
@@ -472,10 +481,17 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         moves.into_iter().map(|m| (m.key, m.to_status)).collect();
     report.warnings.extend(move_warnings);
 
-    for row in engine.state.issues()? {
-        if row.key.starts_with("NEW-") {
+    let mut files = files;
+    for listed in engine.state.issues()? {
+        if listed.key.starts_with("NEW-") {
             continue;
         }
+        // Read again rather than trusted from the listing: a link pushed for
+        // an issue earlier in this loop changed this one on the server, and
+        // the refresh that followed moved its base and maybe its file.
+        let Some(row) = engine.state.issue(&listed.key)? else {
+            continue;
+        };
         // Created a moment ago, and already reported. A follow-up that failed
         // left its part in the file, so the issue reads as dirty — and sending
         // that again here would retry the same failure in the same push.
@@ -640,6 +656,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             continue;
         }
 
+        let others: Vec<Option<String>> = ops.iter().map(|o| linked_issue(&o.action)).collect();
         match execute(
             ctx,
             &engine,
@@ -656,7 +673,17 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 if result.error_kind.as_deref() == Some("conflict") {
                     report.stale.push(row.key.clone());
                 }
+                let touched = done_links(&others, &result.ops);
                 report.results.push(result);
+                if refresh_linked(
+                    ctx,
+                    &engine,
+                    client.as_ref(),
+                    &touched,
+                    &mut report.warnings,
+                )? {
+                    files = engine.projector.scan()?;
+                }
             }
             Err(e) => report.results.push(IssueResult::failed(&row.key, &e)),
         }
@@ -864,7 +891,7 @@ fn create_issue(
     file: &str,
     args: &PushArgs,
     link_types: &mut LinkTypes<'_>,
-) -> Result<IssueResult> {
+) -> Result<(IssueResult, Vec<String>)> {
     let doc = engine.projector.read(file)?;
     let project = engine
         .state
@@ -1008,15 +1035,18 @@ fn create_issue(
             request: Some(f.request.clone()),
             error: None,
         }));
-        return Ok(IssueResult {
-            key: temp_key.to_string(),
-            ok: true,
-            new_key: None,
-            error: None,
-            error_kind: None,
-            hint: None,
-            ops,
-        });
+        return Ok((
+            IssueResult {
+                key: temp_key.to_string(),
+                ok: true,
+                new_key: None,
+                error: None,
+                error_kind: None,
+                hint: None,
+                ops,
+            },
+            Vec::new(),
+        ));
     }
 
     let op_ids = engine
@@ -1029,21 +1059,24 @@ fn create_issue(
             engine
                 .state
                 .mark_op(op_ids[0], "failed", Some(&e.message))?;
-            return Ok(IssueResult {
-                key: temp_key.to_string(),
-                ok: false,
-                new_key: None,
-                error: Some(e.message.clone()),
-                error_kind: Some(e.kind.as_str().to_string()),
-                hint: e.hint.clone(),
-                ops: vec![OpReport {
-                    kind: "create_issue",
-                    status: "failed",
-                    summary: None,
-                    request: None,
+            return Ok((
+                IssueResult {
+                    key: temp_key.to_string(),
+                    ok: false,
+                    new_key: None,
                     error: Some(e.message.clone()),
-                }],
-            });
+                    error_kind: Some(e.kind.as_str().to_string()),
+                    hint: e.hint.clone(),
+                    ops: vec![OpReport {
+                        kind: "create_issue",
+                        status: "failed",
+                        summary: None,
+                        request: None,
+                        error: Some(e.message.clone()),
+                    }],
+                },
+                Vec::new(),
+            ));
         }
     };
     engine.state.mark_op(op_ids[0], "done", None)?;
@@ -1150,16 +1183,23 @@ fn create_issue(
     })?;
     engine.state.clear_ops(&new_key)?;
 
+    // The create's report lists the create first and the follow-ups after it.
+    let others: Vec<Option<String>> = follow_ups.iter().map(|f| linked_issue(&f.action)).collect();
+    let touched = done_links(&others, &reports[1..]);
+
     if failed.is_empty() {
-        return Ok(IssueResult {
-            key: temp_key.to_string(),
-            ok: true,
-            new_key: Some(new_key),
-            error: None,
-            error_kind: None,
-            hint: None,
-            ops: reports,
-        });
+        return Ok((
+            IssueResult {
+                key: temp_key.to_string(),
+                ok: true,
+                new_key: Some(new_key),
+                error: None,
+                error_kind: None,
+                hint: None,
+                ops: reports,
+            },
+            touched,
+        ));
     }
 
     // Journaled under the real key, the way a failed update is: `pending_ops`
@@ -1186,7 +1226,7 @@ fn create_issue(
             )
         })
         .collect();
-    Ok(IssueResult {
+    let result = IssueResult {
         key: temp_key.to_string(),
         ok: false,
         new_key: Some(new_key.clone()),
@@ -1204,7 +1244,8 @@ fn create_issue(
              fix the cause, then `jired push --resume` (or `jired push {new_key}`)"
         )),
         ops: reports,
-    })
+    };
+    Ok((result, touched))
 }
 
 /// Put back into a freshly created issue's file the part of it a failed
@@ -1307,6 +1348,24 @@ fn sprint_target(
             .map(|s| s.name.clone())
             .collect()),
     }
+}
+
+/// A `sprint:` entry no board in this workspace has, refused at plan time.
+///
+/// Refused rather than warned about: the warning scrolled past while the push
+/// reported success, and a new issue created with `--sprint 17` landed in the
+/// backlog with nothing in the exit code to say so.
+fn unknown_sprint(key: &str, name: &str, known: &[String]) -> JiredError {
+    JiredError::usage(format!(
+        "{key}: `{name}` is not a sprint this workspace knows"
+    ))
+    .with_detail("issue", key.to_string())
+    .with_detail("sprint", name.to_string())
+    .with_detail("known", json!(known))
+    .with_hint(match known.is_empty() {
+        true => "run `jired fetch` to pick up the boards and their sprints".to_string(),
+        false => format!("one of: {}", known.join(", ")),
+    })
 }
 
 /// Plan the custom-field half of an update.
@@ -1503,6 +1562,109 @@ fn refresh_parents(ctx: &mut Context, engine: &Engine, report: &mut PushReport) 
     Ok(())
 }
 
+/// The other issue a link operation changes, if the action is one.
+fn linked_issue(action: &Action) -> Option<String> {
+    match action {
+        Action::CreateLink { other_key, .. } | Action::DeleteLink { other_key, .. } => {
+            Some(other_key.clone())
+        }
+        _ => None,
+    }
+}
+
+/// The other ends of the link operations that went through, `others` lined up
+/// with `reports` op for op.
+fn done_links(others: &[Option<String>], reports: &[OpReport]) -> Vec<String> {
+    let mut keys: Vec<String> = others
+        .iter()
+        .zip(reports)
+        .filter(|(_, r)| r.status == "done")
+        .filter_map(|(other, _)| other.clone())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Bring the other end of a link this push just made or removed level with the
+/// server, merging it into its file. Reports whether anything was rewritten.
+///
+/// Jira records a link on both issues and moves both `updated` stamps, so the
+/// other end is stale from that moment. Left alone, the next issue in the same
+/// push — `B` in `A blocks B`, `B blocks C` — was refused as stale over a
+/// change this push had made itself, and the pull that followed met the
+/// inverse link as somebody else's edit. The merge goes through `pull`, scoped
+/// and under `Abort` as in [`refresh_parents`], so a file whose own edits
+/// conflict with the server is left for the user rather than merged behind
+/// their back; links themselves merge as a set and never conflict.
+fn refresh_linked(
+    ctx: &mut Context,
+    engine: &Engine,
+    client: &dyn JiraApi,
+    keys: &[String],
+    warnings: &mut Vec<String>,
+) -> Result<bool> {
+    // Only an issue this workspace already has a file for: one it has never
+    // pulled is the next pull's to write, not a side effect of this push.
+    let mut pending = Vec::new();
+    for key in keys {
+        if !matches!(engine.state.issue(key), Ok(Some(row)) if row.base.is_some()) {
+            continue;
+        }
+        match crate::api::block_on(client.issue(key)) {
+            Ok(issue) => {
+                engine.state.upsert_remote(&issue)?;
+                pending.push(key.clone());
+            }
+            Err(e) => warnings.push(format!(
+                "{key}: could not re-read it after linking it: {} — `jired pull {key}` does",
+                e.message
+            )),
+        }
+    }
+    if pending.is_empty() {
+        return Ok(false);
+    }
+    let pull_args = crate::cli::cmd::pull::PullArgs {
+        no_fetch: true,
+        strategy: crate::cli::cmd::pull::Strategy::Abort,
+        ..Default::default()
+    };
+    let mut wrote = false;
+    // Twice at most, as in `refresh_parents`: `Abort` writes nothing when any
+    // one conflicts, so the second round is the ones that merge cleanly.
+    for _ in 0..2 {
+        let pulled = match crate::sync::pull::run_scoped(ctx, &pull_args, Some(&pending)) {
+            Ok(pulled) => pulled,
+            Err(e) => {
+                warnings.push(format!(
+                    "could not merge the new links into {}: {} — `jired pull` does",
+                    pending.join(", "),
+                    e.message
+                ));
+                break;
+            }
+        };
+        wrote |= !pulled.updated.is_empty() || !pulled.renamed.is_empty();
+        if pulled.conflicts.is_empty() {
+            break;
+        }
+        for c in &pulled.conflicts {
+            warnings.push(format!(
+                "{}: the link reached it on the server, but the file has edits that conflict \
+                 with what the server holds, so it was not rewritten — `jired pull --strategy \
+                 merge` writes conflict markers",
+                c.key
+            ));
+        }
+        pending.retain(|k| !pulled.conflicts.iter().any(|c| &c.key == k));
+        if pending.is_empty() {
+            break;
+        }
+    }
+    Ok(wrote)
+}
+
 /// An operation the create call cannot carry, to run once the issue has a key.
 struct FollowUp {
     kind: &'static str,
@@ -1601,9 +1763,7 @@ fn follow_ups_after_create(
                     },
                 });
             }
-            Err(_) => warnings.push(format!(
-                "`{name}` is not a sprint this workspace knows; the new issue was not moved into it"
-            )),
+            Err(known) => return Err(unknown_sprint(&doc.frontmatter.key, name, &known)),
         }
     }
 
@@ -1921,7 +2081,10 @@ fn plan_links(
                 kind: "delete_link",
                 summary: format!("{direction} {other}"),
                 request: json!({"method": "DELETE", "path": format!("/issueLink/{id}")}),
-                action: Action::DeleteLink { id },
+                action: Action::DeleteLink {
+                    id,
+                    other_key: other.clone(),
+                },
             }),
             // A snapshot too old to carry the id: nothing to aim a DELETE at,
             // and guessing would delete somebody's other link.
@@ -2364,15 +2527,13 @@ fn plan(
                         },
                     });
                 }
-                Err(known) => warnings.push(format!(
-                    "`{}` is not a sprint this workspace knows{}; the change was not sent",
-                    after.map(String::as_str).unwrap_or(""),
-                    if known.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" (it has {})", known.join(", "))
-                    }
-                )),
+                Err(known) => {
+                    return Err(unknown_sprint(
+                        &bf.key,
+                        after.map(String::as_str).unwrap_or(""),
+                        &known,
+                    ))
+                }
             }
         } else {
             // Only the earlier entries moved. Which sprints an issue has been
@@ -3133,7 +3294,7 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                 let (inward, outward) = link_ends(key, other_key, *self_is_inward);
                 client.create_link(type_name, &inward, &outward).await
             }
-            Action::DeleteLink { id } => client.delete_link(id).await,
+            Action::DeleteLink { id, .. } => client.delete_link(id).await,
             Action::CreateComment(body) => client.add_comment(key, body).await.map(|_| ()),
             Action::UpdateComment { id, body } => {
                 client.update_comment(key, id, body).await.map(|_| ())

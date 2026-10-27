@@ -134,8 +134,17 @@ pub fn finish(
         }
     }
 
+    // Said in the document as well as on stderr: an agent reading `--json`
+    // never sees the hint, took `"pushed": false` for a detail, and believed
+    // the issues had moved.
+    let waiting: Vec<String> = match &pushed {
+        Some(r) if !r.dry_run && r.results.iter().all(|x| x.ok) => Vec::new(),
+        _ => changed.iter().map(|s| s.key.clone()).collect(),
+    };
     let mut doc = serde_json::json!({
         "issues": staged,
+        "staged": !waiting.is_empty(),
+        "next": (!waiting.is_empty()).then(|| format!("jired push {}", waiting.join(" "))),
         "pushed": pushed.is_some(),
         "push": pushed,
     });

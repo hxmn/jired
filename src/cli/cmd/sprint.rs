@@ -225,7 +225,7 @@ pub fn run(g: &GlobalArgs, cmd: &SprintCmd, out: Out) -> Result<ExitCode> {
 /// sprints`, a name from the board. Resolving here rather than at push time is
 /// what turns "the change was not sent" — a warning after the fact — into an
 /// error while the typo is still on screen.
-fn resolve_sprint(ctx: &Context, wanted: &str) -> Result<SprintRow> {
+pub(crate) fn resolve_sprint(ctx: &Context, wanted: &str) -> Result<SprintRow> {
     let wanted = wanted.trim();
     let sprints = crate::store::state::StateStore::open(&ctx.workspace)?.sprints()?;
     if let Some(by_id) = sprints.iter().find(|s| s.id == wanted) {
@@ -233,17 +233,50 @@ fn resolve_sprint(ctx: &Context, wanted: &str) -> Result<SprintRow> {
     }
     // An open sprint wins over a closed one of the same name: names repeat
     // across the years and nobody means the finished one.
+    let by_state = |s: &&SprintRow| match s.state.as_str() {
+        "active" => 0,
+        "future" => 1,
+        _ => 2,
+    };
     let mut named: Vec<&SprintRow> = sprints
         .iter()
         .filter(|s| s.name.eq_ignore_ascii_case(wanted))
         .collect();
-    named.sort_by_key(|s| match s.state.as_str() {
-        "active" => 0,
-        "future" => 1,
-        _ => 2,
-    });
+    named.sort_by_key(by_state);
     if let Some(hit) = named.first() {
         return Ok((*hit).clone());
+    }
+    // A bare number that is no sprint's id is how people say a sprint out
+    // loud: `17` for `TSK Sprint 17`. Taken only when one sprint answers to it,
+    // because the number is a guess at a name and two answers mean it is not.
+    if is_id(wanted) {
+        let number = wanted.trim_start_matches('0');
+        let mut numbered: Vec<&SprintRow> = sprints
+            .iter()
+            .filter(|s| {
+                s.name
+                    .split_whitespace()
+                    .next_back()
+                    .is_some_and(|last| last.trim_start_matches('0') == number)
+            })
+            .collect();
+        numbered.sort_by_key(by_state);
+        if let [only] = numbered.as_slice() {
+            return Ok((*only).clone());
+        }
+        if numbered.len() > 1 {
+            let names: Vec<String> = numbered
+                .iter()
+                .map(|s| format!("{} ({})", s.name, s.id))
+                .collect();
+            return Err(JiredError::usage(format!(
+                "`{wanted}` could be any of {} sprints",
+                names.len()
+            ))
+            .with_detail("sprint", wanted.to_string())
+            .with_detail("known", serde_json::json!(names))
+            .with_hint(format!("name one of: {}", names.join(", "))));
+        }
     }
 
     let open: Vec<String> = sprints
