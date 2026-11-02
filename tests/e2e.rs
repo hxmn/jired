@@ -930,6 +930,54 @@ fn pull_counts_new_comments_rather_than_quoting_them() {
     assert_eq!(change["removed"], 0);
 }
 
+/// A corrected worklog is `1 edited`, not `1 entries → 1 entries`. An issue
+/// the server moved without changing anything the file shows says what did
+/// move — its `updated` — rather than `updated PROJ-142 []`.
+#[test]
+fn pull_names_an_edited_worklog() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let change = |report: &Value, field: &str| -> Value {
+        report["updated"][0]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["field"] == field)
+            .unwrap_or_else(|| panic!("no {field} change: {report}"))
+            .clone()
+    };
+
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["worklog"]["worklogs"][0]["timeSpent"] = "3h".into();
+        issue["fields"]["worklog"]["worklogs"][0]["timeSpentSeconds"] = 10800.into();
+    });
+    let report = ws.json(&["pull"]);
+    let worklogs = change(&report, "worklogs");
+    assert_eq!(worklogs["to"], "1 edited", "{report}");
+    assert_eq!(worklogs["added"], 0);
+    assert!(worklogs["from"].is_null(), "{worklogs}");
+}
+
+/// One server change per test: `mutate_remote` stamps whole seconds, and a
+/// second change inside the same second is not one an incremental fetch sees.
+#[test]
+fn pull_names_a_bare_timestamp_move_rather_than_an_empty_list() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    // Nothing a file shows; only the stamp.
+    ws.mutate_remote("PROJ-142", |_| {});
+    let report = ws.json(&["pull"]);
+    let changes = report["updated"][0]["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1, "{report}");
+    assert_eq!(changes[0]["field"], "updated", "{report}");
+    assert_eq!(
+        report["updated"][0]["fields"],
+        serde_json::json!(["updated"])
+    );
+}
+
 #[test]
 fn a_remote_summary_change_renames_the_file_and_keeps_the_key() {
     let ws = Ws::new();
@@ -8735,6 +8783,42 @@ fn a_note_on_an_issue_with_none_round_trips() {
     );
 }
 
+/// Item text that starts in brackets survives the round trip. Sent bare, the
+/// plugin read `[03.11 18:00]` as the name of a custom status, had none such,
+/// and dropped it: the server held `Check the release`, push failed waiting
+/// for a checklist that was never coming, and the next pull met the plugin's
+/// copy as a conflict.
+#[test]
+fn an_item_starting_in_brackets_keeps_them_on_the_server() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["config", "set", "checklist.apply_wait", "0"]);
+    ws.json(&["pull"]);
+    let file = "DC-0078. Document the LDAP rollback plan.md";
+    let edited = ws.read(file).replace(
+        "## Checklist\n",
+        "## Checklist\n\n- [ ] [03.11 18:00] Check the release\n",
+    );
+    ws.write(file, &edited);
+
+    let dry = ws.json(&["push", "DC-78", "--dry-run"]);
+    assert_eq!(
+        dry["results"][0]["ops"][0]["request"]["body"],
+        Value::from("- \\[03.11 18:00\\] Check the release\n"),
+        "{dry}"
+    );
+    let push = ws.json(&["push", "DC-78"]);
+    assert_eq!(push["summary"]["ok"], 1, "{push}");
+    assert_eq!(
+        section(&ws.read(file), "## Checklist").trim(),
+        "- [ ] [03.11 18:00] Check the release",
+        "read back without the escape"
+    );
+    let pull = ws.json(&["pull"]);
+    assert!(pull["conflicts"].as_array().unwrap().is_empty(), "{pull}");
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+}
+
 /// The report's second half. A checklist the server would not take, on an
 /// issue being created: the issue exists, so the create stands — but the
 /// result is a failure, the checklist is still in the renamed file, `status`
@@ -9458,6 +9542,64 @@ fn pull_and_fetch_take_issues_positionally() {
     let report = ws.json(&["pull", "PROJ-142"]);
     assert_eq!(report["schema"], "jired/pull/1");
     assert!(ws.path().join(ISSUE_FILE).exists());
+}
+
+/// The issues named bound what the pull writes, not only what it fetches. An
+/// issue an earlier fetch had left behind was written too: `pull TSK-793`
+/// reported eighteen others as updated.
+#[test]
+fn pull_with_issues_named_writes_only_those() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let other = ws.read(ISSUE_FILE);
+    for key in ["PROJ-142", "PROJ-143"] {
+        ws.mutate_remote(key, |issue| {
+            issue["fields"]["summary"] = "Renamed on the server".into();
+        });
+    }
+    // Both are behind now; only one is asked for.
+    ws.json(&["fetch"]);
+
+    let report = ws.json(&["pull", "PROJ-143"]);
+    let updated: Vec<&str> = report["updated"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(updated, ["PROJ-143"], "{report}");
+    assert_eq!(ws.read(ISSUE_FILE), other, "PROJ-142 was not asked for");
+
+    // And the plain pull still brings it in.
+    let report = ws.json(&["pull"]);
+    assert_eq!(report["updated"][0]["key"], "PROJ-142", "{report}");
+}
+
+/// A recorded conflict needs local edits to stand on. One whose file holds
+/// none — given up by hand, or recorded by a version that conflicted where
+/// this one merges — is cleared by the next pull instead of standing in
+/// `status` for ever.
+#[test]
+fn a_conflict_over_a_file_with_no_local_edits_is_cleared_by_the_next_pull() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let clean = ws.read(ISSUE_FILE);
+    conflicted(&ws);
+    assert_eq!(
+        ws.json(&["status"])["conflicts"].as_array().unwrap().len(),
+        1
+    );
+
+    ws.write(ISSUE_FILE, &clean);
+    ws.json(&["pull"]);
+    let status = ws.json(&["status"]);
+    assert!(
+        status["conflicts"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+    assert!(ws.read("PROJ-0142. Theirs.md").contains("summary: Theirs"));
 }
 
 /// A preview that writes nothing is the only safe way to inspect what a pull

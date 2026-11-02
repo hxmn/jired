@@ -754,10 +754,13 @@ pub fn render() -> String {
          items; indented lines under an item are its note. Editing it is a push: the \
          list goes back in the plugin's own syntax, so an issue can be created and its \
          checklist filled in without leaving the CLI. Only what the section shows is \
-         writable — the four statuses its markers spell (`TO DO`, `IN PROGRESS`, \
-         `DONE`, `SKIPPED`), groups, notes. Anything else in the field (a mandatory \
-         item, a status the instance configured itself) makes push refuse the whole \
-         section and say so, rather than send it with that part dropped. On Data \
+         writable — the four built-in statuses (`TO DO`, `IN PROGRESS`, `DONE`, \
+         `SKIPPED`), a status the instance configured (sent as `- [IN QA] Title`, \
+         so it has to exist there), groups, notes. Text that starts in brackets, \
+         `- [ ] [03.11] Check`, is escaped on the way out so the plugin does not \
+         take it for a status. Anything else in the field (a mandatory item) makes \
+         push refuse the whole section and say so, rather than send it with that \
+         part dropped. On Data \
          Center the list is written to Smart Checklist's issue property \
          (`update_checklist` in the plan), which no edit screen governs; on Cloud \
          it is the plugin's text field, in the same `PUT /issue` as the rest. The \

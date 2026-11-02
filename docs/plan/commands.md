@@ -159,15 +159,21 @@ settle each conflict by taking that side: it is written, reported under
 `decided` rather than `conflicts`, and the pull exits 0. `links:` is the
 exception to field-level merging: it merges as a set and never conflicts (see
 `push`). A recorded conflict carries the base, local and remote values of a
-frontmatter field, a comment or the description, so `resolve --list` shows what
-there is to decide between. `--force` ≡ theirs
+frontmatter field, a comment, the description, or — as the file spells them —
+the checklist, the children and the extra sections, so `resolve --list` shows
+what there is to decide between. A conflict recorded against an issue whose
+file holds no local edits has nothing left to decide, and the next pull clears
+it. Issues named positionally (or with `--issues`) bound the whole pull: only
+those are fetched, and only those are written. `--force` ≡ theirs
 everywhere, and both it and `--strategy theirs` list the issues whose local edits
 would be lost and ask before discarding them (`-y`/non-interactive proceeds).
 `--dry-run` renders the plan without writing.
 Prints a change summary: one line per issue, then one line per field with its
-before and after — body text and comments as counts rather than quoted content,
-custom fields named individually (by the instance's own field name where it has
-one). `jired diff` remains the way to see the full text.
+before and after — body text, comments, worklogs and attachments as counts
+rather than quoted content, a checklist or children list as its done tally or,
+when the tally did not move, its lines, custom fields named individually (by
+the instance's own field name where it has one). An issue the server moved
+without changing anything the file shows lists `updated` with its two stamps. `jired diff` remains the way to see the full text.
 
 ```
   updated   PROJ-142
@@ -384,7 +390,12 @@ held for it. On a `NEW-*` issue either route is a follow-up after the
 create, because a plugin's field is rarely on the create screen. What goes out is
 the plugin's own syntax rebuilt from the section: `# ` for a `### ` group, `-`
 `~` `+` `x` for the four statuses the checkbox and its backticked name spell,
-and a note on the line below its item. The derived fields are never written: the
+`- [NAME]` or `+ [NAME]` for any other status — the plugin's spelling of one
+the instance configured — and a note on the line below its item. A bare `[…]`
+at the start of an item's text would be read as a status name, and dropped
+when the instance has no such status, so it is sent escaped, `\[03.11\] text`,
+the vendor's documented spelling for text in brackets; `\[` and `\]` read back
+as plain brackets. The derived fields are never written: the
 progress string is the plugin's, and the object dump is not a document anything
 could write back.
 The dialect is learned from the field rather than assumed. jired writes the
@@ -395,8 +406,7 @@ and `>` — the plugin's own, in every current vendor guide — where it has no 
 to learn from. `>>` is a nested quote to the plugin: `>> note` is stored as
 `> > note`, a note whose text begins with `> `.
 Where the two do not match there is something in the field this jired does not
-model — a mandatory item, a status the instance configured itself, a syntax this
-plugin version spells differently — and sending the field would drop it, so the
+model — a mandatory item, a syntax this plugin version spells differently — and sending the field would drop it, so the
 section is refused in `warnings` and left alone while the rest of the issue goes.
 The plugin's fields are found by display name, the schema deciding which of the
 pair is the writable text one (`string`) and which the object (`any`);

@@ -32,14 +32,34 @@ fn served(v: &Value) -> Value {
 
 /// What Smart Checklist stores for the text it is given, as far as a live
 /// instance has shown it: a detail line is `> ` and the rest of that line, so
-/// `>> text` — to the plugin a nested quote — comes back as `> > text`.
+/// `>> text` — to the plugin a nested quote — comes back as `> > text`. And a
+/// bare `[…]` ahead of an item's text is the name of a custom status; this
+/// "instance" has none configured, so the plugin drops it, which is what took
+/// the date off `- [03.11 18:00] Check the release` on a live one.
 fn plugin_text(text: &str) -> String {
     text.lines()
         .map(|line| match line.trim_start().strip_prefix('>') {
             Some(rest) => format!("> {}\n", rest.trim_start()),
-            None => format!("{line}\n"),
+            None => format!("{}\n", without_custom_status(line)),
         })
         .collect()
+}
+
+fn without_custom_status(line: &str) -> String {
+    let item = line
+        .split_at_checked(2)
+        .filter(|(marker, _)| matches!(marker.as_bytes(), [b'-' | b'+' | b'~' | b'x', b' ']));
+    let Some((marker, text)) = item else {
+        return line.to_string();
+    };
+    let status = text
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']'))
+        .filter(|(_, after)| after.starts_with(' ') && !after.trim().is_empty());
+    match status {
+        Some((_, after)) => format!("{marker}{}", after.trim_start()),
+        None => line.to_string(),
+    }
 }
 
 /// Every fixture failure points back at the directory that produced it.

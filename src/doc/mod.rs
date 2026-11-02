@@ -183,6 +183,28 @@ impl IssueDoc {
         Ok(doc)
     }
 
+    /// The body of `## Checklist`, as the file has it.
+    pub fn checklist_text(&self) -> String {
+        let mut out = String::new();
+        for (i, entry) in self.checklist.iter().enumerate() {
+            // A header opens a group, so it needs air above it — but not when
+            // it is the first thing in the section.
+            if i > 0 && matches!(entry, ChecklistEntry::Header(_)) {
+                out.push('\n');
+            }
+            out.push_str(&render_checklist_entry(entry));
+        }
+        out
+    }
+
+    /// The body of `## Children`, as the file has it.
+    pub fn children_text(&self) -> String {
+        self.children
+            .iter()
+            .map(|item| format!("{}\n", render_child_item(item)))
+            .collect()
+    }
+
     pub fn render(&self) -> Result<String> {
         let mut out = String::new();
         out.push_str("---\n");
@@ -202,23 +224,13 @@ impl IssueDoc {
         }
 
         out.push_str(&format!("## {SECTION_CHECKLIST}\n\n"));
-        for (i, entry) in self.checklist.iter().enumerate() {
-            // A header opens a group, so it needs air above it — but not when
-            // it is the first thing in the section.
-            if i > 0 && matches!(entry, ChecklistEntry::Header(_)) {
-                out.push('\n');
-            }
-            out.push_str(&render_checklist_entry(entry));
-        }
+        out.push_str(&self.checklist_text());
         if !self.checklist.is_empty() {
             out.push('\n');
         }
 
         out.push_str(&format!("## {SECTION_CHILDREN}\n\n"));
-        for item in &self.children {
-            out.push_str(&render_child_item(item));
-            out.push('\n');
-        }
+        out.push_str(&self.children_text());
         if !self.children.is_empty() {
             out.push('\n');
         }

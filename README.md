@@ -284,12 +284,15 @@ checkbox does not already say is written in backticks ahead of the title, `### `
 lines group items, and an indented line under an item is its note. Tick a box,
 add an item or write a note and `push` sends the list back in the plugin's own
 syntax — a whole issue can be created and finished from the CLI. Only what the
-section can show is writable: the four statuses its markers spell (`TO DO`,
-`IN PROGRESS`, `DONE`, `SKIPPED`), groups, and notes. If jired's rendering of a
-checklist does not reproduce the text the server holds — a mandatory item, a
-status the instance configured itself, a syntax this plugin version spells
-differently — the edit is refused out loud rather than sent with the rest of the
-field dropped. The plugin's fields are found by name; `checklist.field` names
+section can show is writable: the four built-in statuses (`TO DO`,
+`IN PROGRESS`, `DONE`, `SKIPPED`), a status the instance configured itself —
+sent in the plugin's spelling, `- [IN QA] Title`, so it has to exist there —
+groups, and notes. Item text that starts in brackets, `- [ ] [03.11 18:00] Check
+the release`, is escaped as `\[03.11 18:00\]` on the way out, because the plugin
+reads a bare leading `[…]` as a status name and drops one it does not have. If
+jired's rendering of a checklist does not reproduce the text the server holds —
+a mandatory item, a syntax this plugin version spells differently — the edit is
+refused out loud rather than sent with the rest of the field dropped. The plugin's fields are found by name; `checklist.field` names
 the writable one where they are called something jired does not recognise.
 On Data Center the list goes to Smart Checklist's own issue property rather than
 the field, so it does not matter whether an administrator put the field on the

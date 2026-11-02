@@ -9,8 +9,8 @@
 //! depends on the product and the plugin version:
 //!
 //! * The text field holds the plugin's own compact syntax — `# header`,
-//!   `- to do`, `~ in progress`, `+ done`, `x skipped`, and a note on the line
-//!   below its item. This is the only one that can be written back, so it is
+//!   `- to do`, `~ in progress`, `+ done`, `x skipped`, `- [IN QA] custom
+//!   status`, `- \[text\] in brackets`, and a note on the line below its item. This is the only one that can be written back, so it is
 //!   also the one read first: a checklist that was pushed then reads back as
 //!   what was sent rather than as a second rendering of it.
 //! * Data Center hands the plugin's Java object back as its `toString()`:
@@ -113,15 +113,18 @@ pub fn parse_text(text: &str) -> Vec<ChecklistEntry> {
             }
         }
         let (checked, status, title) = match split_marker(t) {
-            Some(parsed) => parsed,
+            Some((checked, status, title)) => match custom_status(title.trim()) {
+                Some((name, title)) => (checked, meaningful_status(name, checked), title),
+                None => (checked, status.map(str::to_string), title.trim()),
+            },
             // A line with no marker is still an item; dropping it would lose
             // content that a person can plainly see in Jira.
             None => (false, None, t),
         };
         out.push(ChecklistEntry::Item(ChecklistItem {
             checked,
-            status: status.map(str::to_string),
-            title: title.trim().to_string(),
+            status,
+            title: unescape(title),
             description: None,
         }));
     }
@@ -146,12 +149,49 @@ fn split_marker(line: &str) -> Option<(bool, Option<&'static str>, &str)> {
     Some((checked, status, rest))
 }
 
+/// `[IN QA] Test the API` — the name of a status the instance configured, in
+/// brackets ahead of the item's text, which is how the plugin's syntax spells
+/// one. A space after the bracket is part of it: `[docs](https://…)` is a link
+/// at the start of the text, not a status called `docs`.
+fn custom_status(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    let (name, after) = (rest[..end].trim(), &rest[end + 1..]);
+    let title = after.trim_start();
+    (!name.is_empty() && after.starts_with(char::is_whitespace) && !title.is_empty())
+        .then_some((name, title))
+}
+
+/// Item text as the file shows it: the plugin's escaped brackets, `\[` and
+/// `\]`, are only brackets.
+fn unescape(text: &str) -> String {
+    text.replace("\\[", "[").replace("\\]", "]")
+}
+
+/// Item text as the plugin's syntax has to carry it: a leading `[…]` escaped.
+///
+/// Unescaped, the plugin reads it as the name of a custom status, finds no such
+/// status and drops it — `- [03.11 18:00] Check the release` arrived as `Check
+/// the release`, the date gone. The escape is the vendor's own documented
+/// spelling for text in brackets. Only the leading pair: brackets later in the
+/// text cannot be a status, and a leading link keeps working as a link.
+fn escaped(title: &str) -> String {
+    if let Some(rest) = title.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            if !rest[end + 1..].starts_with('(') {
+                return format!("\\[{}\\]{}", &rest[..end], &rest[end + 1..]);
+            }
+        }
+    }
+    title.to_string()
+}
+
 /// The plugin's syntax, built back out of the `## Checklist` section.
 ///
-/// `Err` names why a checklist cannot be written: a status no marker spells, an
-/// item with no text. Refusing is the whole point — the field is read by a
-/// plugin, and an item silently demoted from a status jired does not model to
-/// one it does is a change nobody asked for, made to somebody else's data.
+/// `Err` names why a checklist cannot be written: a status the syntax cannot
+/// spell, an item with no text. Refusing is the whole point — the field is read
+/// by a plugin, and an item silently demoted from its status to another is a
+/// change nobody asked for, made to somebody else's data.
 pub fn to_text(entries: &[ChecklistEntry], note: &str) -> std::result::Result<String, String> {
     let mut out = String::new();
     for entry in entries {
@@ -171,7 +211,7 @@ pub fn to_text(entries: &[ChecklistEntry], note: &str) -> std::result::Result<St
                         item.status.as_deref().unwrap_or_default()
                     ));
                 };
-                out.push_str(&format!("{marker} {title}\n"));
+                out.push_str(&format!("{marker} {}\n", escaped(title)));
                 for line in item.description.iter().flat_map(|d| d.lines()) {
                     match line.trim() {
                         "" => continue,
@@ -184,24 +224,42 @@ pub fn to_text(entries: &[ChecklistEntry], note: &str) -> std::result::Result<St
     Ok(out)
 }
 
-/// The inverse of [`split_marker`]: the character that spells this item's state.
-fn marker_for(item: &ChecklistItem) -> Option<&'static str> {
+/// The inverse of [`split_marker`] and [`custom_status`]: what spells this
+/// item's state ahead of its text.
+fn marker_for(item: &ChecklistItem) -> Option<String> {
     let named = |want: &str| {
         item.status
             .as_deref()
             .is_some_and(|s| s.trim().eq_ignore_ascii_case(want))
     };
-    match (item.checked, item.status.is_none()) {
+    let builtin = match (item.checked, item.status.is_none()) {
         (false, true) => Some("-"),
         (true, true) => Some("+"),
         (false, _) if named("TO DO") => Some("-"),
         (false, _) if named("IN PROGRESS") => Some("~"),
         (true, _) if named("DONE") => Some("+"),
         (true, _) if named("SKIPPED") => Some("x"),
-        // A status the instance configured itself, or one of the four against
-        // the wrong checkbox.
         _ => None,
+    };
+    if let Some(marker) = builtin {
+        return Some(marker.to_string());
     }
+    // One of the four against the wrong checkbox is not something the plugin
+    // could have written, so it is not something jired guesses at.
+    if ["TO DO", "IN PROGRESS", "DONE", "SKIPPED"]
+        .iter()
+        .any(|s| named(s))
+    {
+        return None;
+    }
+    // A status the instance configured itself. A name the instance does not
+    // have is dropped by the plugin, and push's re-read reports that.
+    let name = item.status.as_deref()?.trim();
+    if name.is_empty() || name.contains(['[', ']']) {
+        return None;
+    }
+    let marker = if item.checked { "+" } else { "-" };
+    Some(format!("{marker} [{name}]"))
 }
 
 /// Which note spelling the text a server holds is written in.
@@ -224,12 +282,31 @@ pub fn note_marker(stored: &str) -> &'static str {
 /// `+ Hand over to @abercrombie.d \n` — and a blank line in the field is not an
 /// entry. Neither survives a render, so neither may decide whether jired's
 /// reading of a checklist reproduces the server's own text.
+///
+/// An escaped bracket past the start of an item's text means the same as a
+/// bare one: only a leading `[…]` can be read as a status, so only there does
+/// the escape say something.
 pub fn normalized(text: &str) -> String {
     text.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
+        .map(canonical_line)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn canonical_line(line: &str) -> String {
+    // Every marker is one ASCII character followed by a space.
+    let (marker, text) = match split_marker(line) {
+        Some(_) => line.split_at(2),
+        None => ("", line),
+    };
+    let lead = text
+        .strip_prefix("\\[")
+        .and_then(|r| r.find("\\]"))
+        .map_or(0, |end| end + 4);
+    let (lead, rest) = text.split_at(lead);
+    format!("{marker}{lead}{}", unescape(rest))
 }
 
 /// Data Center's `toString()` dump.
@@ -465,18 +542,31 @@ mod tests {
         assert!(to_text(&entries, ">").unwrap().contains("\n> ask first\n"));
     }
 
-    /// The four markers are all the syntax has. A status jired cannot spell is
-    /// refused, because the alternative is demoting somebody's item to one it
-    /// can — and the plugin, not jired, is what reads the field back.
+    /// A status the instance configured is spelled the plugin's way, in
+    /// brackets; one the syntax cannot spell is refused, because the
+    /// alternative is demoting somebody's item to one it can — and the plugin,
+    /// not jired, is what reads the field back.
     #[test]
-    fn a_status_no_marker_spells_refuses_to_be_written() {
-        let blocked = vec![ChecklistEntry::Item(ChecklistItem {
-            checked: false,
-            status: Some("BLOCKED".into()),
-            title: "Wait for review".into(),
-            description: None,
-        })];
-        assert!(to_text(&blocked, NOTE).unwrap_err().contains("BLOCKED"));
+    fn a_custom_status_is_written_in_brackets_and_an_unspellable_one_refused() {
+        let with = |checked, status: &str| {
+            vec![ChecklistEntry::Item(ChecklistItem {
+                checked,
+                status: Some(status.into()),
+                title: "Wait for review".into(),
+                description: None,
+            })]
+        };
+        assert_eq!(
+            to_text(&with(false, "BLOCKED"), NOTE).unwrap(),
+            "- [BLOCKED] Wait for review\n"
+        );
+        assert_eq!(
+            to_text(&with(true, "PASSED"), NOTE).unwrap(),
+            "+ [PASSED] Wait for review\n"
+        );
+        assert!(to_text(&with(false, "A]B"), NOTE)
+            .unwrap_err()
+            .contains("A]B"));
 
         let untitled = vec![ChecklistEntry::Item(ChecklistItem {
             checked: false,
@@ -515,6 +605,72 @@ mod tests {
         assert_eq!(
             normalized(&to_text(&entries, note_marker(stored)).unwrap()),
             normalized(stored)
+        );
+    }
+
+    /// Text that starts in brackets — a date, a tag — is the reported case.
+    /// Sent bare, the plugin took `[03.11 18:00]` for the name of a status,
+    /// found none, and dropped it: the item reached the server as `Check the
+    /// release`. Escaped, it is text, and reads back as the file had it.
+    #[test]
+    fn leading_brackets_in_an_item_are_escaped_and_read_back_bare() {
+        let file = vec![ChecklistEntry::Item(ChecklistItem {
+            checked: false,
+            status: None,
+            title: "[03.11 18:00] Check the release".into(),
+            description: None,
+        })];
+        let text = to_text(&file, NOTE).unwrap();
+        assert_eq!(text, "- \\[03.11 18:00\\] Check the release\n");
+        assert_eq!(parse_text(&text), file);
+        assert_eq!(
+            normalized(&to_text(&parse_text(&text), NOTE).unwrap()),
+            normalized(&text)
+        );
+
+        // Brackets later in the text are not a status, and a leading link
+        // stays a link.
+        for title in ["Check [this] first", "[docs](https://wiki/x) read"] {
+            let item = vec![ChecklistEntry::Item(ChecklistItem {
+                checked: false,
+                status: None,
+                title: title.into(),
+                description: None,
+            })];
+            assert_eq!(to_text(&item, NOTE).unwrap(), format!("- {title}\n"));
+            assert_eq!(parse_text(&format!("- {title}\n")), item);
+        }
+    }
+
+    /// Bare brackets ahead of the text are the plugin's own spelling of a
+    /// status the instance configured, so they are read as one — and written
+    /// back as one, rather than escaped into text the plugin no longer counts.
+    #[test]
+    fn a_bracketed_name_ahead_of_the_text_is_a_custom_status() {
+        let entries = parse_text("- [IN QA] Test the API\n+ [PASSED] Ship it\n");
+        assert_eq!(item(&entries[0]).status.as_deref(), Some("IN QA"));
+        assert_eq!(item(&entries[0]).title, "Test the API");
+        assert!(!item(&entries[0]).checked);
+        assert_eq!(item(&entries[1]).status.as_deref(), Some("PASSED"));
+        assert!(item(&entries[1]).checked);
+        assert_eq!(
+            to_text(&entries, NOTE).unwrap(),
+            "- [IN QA] Test the API\n+ [PASSED] Ship it\n"
+        );
+    }
+
+    /// An escape past the start of the text says nothing — only a leading
+    /// bracket can be a status — so a server that escapes every bracket still
+    /// reproduces. At the start it is the difference between text and status.
+    #[test]
+    fn only_a_leading_escape_decides_whether_two_texts_match() {
+        assert_eq!(
+            normalized("- Check \\[this\\] first"),
+            normalized("- Check [this] first")
+        );
+        assert_ne!(
+            normalized("- \\[IN QA\\] Test"),
+            normalized("- [IN QA] Test")
         );
     }
 

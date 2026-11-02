@@ -88,22 +88,40 @@ fn project(doc: &serde_json::Value, paths: &[String]) -> serde_json::Value {
         let Some(value) = doc.get(head) else { continue };
         let rest: Vec<&str> = parts.collect();
         let kept = narrow(value, &rest);
-        // Two paths under one head merge rather than replacing each other.
-        match (out.get_mut(head), kept) {
-            (Some(serde_json::Value::Object(a)), serde_json::Value::Object(b)) => a.extend(b),
-            (Some(serde_json::Value::Array(a)), serde_json::Value::Array(b)) => {
-                for (x, y) in a.iter_mut().zip(b) {
-                    if let (serde_json::Value::Object(x), serde_json::Value::Object(y)) = (x, y) {
-                        x.extend(y);
-                    }
-                }
-            }
-            (_, kept) => {
+        match out.get_mut(head) {
+            Some(existing) => merge(existing, kept),
+            None => {
                 out.insert(head.to_string(), kept);
             }
         }
     }
     serde_json::Value::Object(out)
+}
+
+/// Two paths under one head merge rather than replacing each other — at every
+/// depth. Merging one level down only, `results.ops.kind,results.ops.status`
+/// kept the `ops` of whichever path came last, so a list asking for an op's
+/// kind, status and error came back as the error alone, and `--json-compact`
+/// pruned that to `{}` for every op that had not failed.
+fn merge(into: &mut serde_json::Value, from: serde_json::Value) {
+    match (into, from) {
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
+            for (k, v) in b {
+                match a.get_mut(&k) {
+                    Some(existing) => merge(existing, v),
+                    None => {
+                        a.insert(k, v);
+                    }
+                }
+            }
+        }
+        (serde_json::Value::Array(a), serde_json::Value::Array(b)) => {
+            for (x, y) in a.iter_mut().zip(b) {
+                merge(x, y);
+            }
+        }
+        (into, from) => *into = from,
+    }
 }
 
 /// The part of `value` that `rest` names, mapping over arrays as it goes.
@@ -406,6 +424,36 @@ mod tests {
         assert_eq!(kept["results"][1]["ok"], false);
         // Two paths under one head merge rather than the second replacing it.
         assert!(kept["results"][0].get("error").is_none(), "{kept}");
+    }
+
+    /// Three paths into the ops of every result: each op keeps all three. The
+    /// merge went one level deep, so the last path's `ops` replaced the
+    /// others', and a push that had not failed showed `[{}, {}]` once
+    /// `--json-compact` dropped the null errors.
+    #[test]
+    fn paths_into_a_nested_array_merge_at_every_depth() {
+        let mut d = doc();
+        d["results"][0]["ops"] = serde_json::json!([
+            {"kind": "update_fields", "status": "done", "summary": "x", "error": null},
+            {"kind": "transition", "status": "done", "summary": "y", "error": null},
+        ]);
+        let mut kept = project(
+            &d,
+            &[
+                "results.key".to_string(),
+                "results.ops.kind".to_string(),
+                "results.ops.status".to_string(),
+                "results.ops.error".to_string(),
+            ],
+        );
+        prune(&mut kept);
+        assert_eq!(
+            kept["results"][0],
+            serde_json::json!({"key": "TSK-1", "ops": [
+                {"kind": "update_fields", "status": "done"},
+                {"kind": "transition", "status": "done"},
+            ]})
+        );
     }
 
     #[test]

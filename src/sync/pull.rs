@@ -224,7 +224,11 @@ impl PullReport {
 }
 
 pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
-    run_scoped(ctx, args, None)
+    // Issues named on the command line bound the merge as well as the fetch.
+    // Bounding only the fetch wrote every issue an earlier fetch or push had
+    // left behind: `jired pull PROJ-1` reported eighteen others as updated.
+    let named = args.scope.wanted_issues()?;
+    run_scoped(ctx, args, (!named.is_empty()).then_some(named.as_slice()))
 }
 
 /// Pull, optionally restricted to a set of issues.
@@ -265,6 +269,17 @@ pub fn run_scoped(
     // Plan everything before touching the filesystem so a conflict anywhere can
     // still abort the whole run.
     let mut planned: Vec<PlannedWrite> = Vec::new();
+    // A conflict is local edits meeting the server's, so an issue whose file
+    // holds none has nothing left to decide, whatever the record says. Records
+    // outlive their cause otherwise: a version before links merged as a set
+    // recorded links conflicts that nothing has cleared since, and `status`
+    // went on listing them, three nulls each, over files with no markers.
+    let conflicted: std::collections::BTreeSet<String> = engine
+        .state
+        .conflicts()?
+        .into_iter()
+        .map(|c| c.issue_key)
+        .collect();
 
     for row in engine.state.issues()? {
         if row.key.starts_with("NEW-") {
@@ -318,6 +333,9 @@ pub fn run_scoped(
                 let behind = row.is_behind();
 
                 if !dirty && !behind {
+                    if !args.dry_run && conflicted.contains(&row.key) {
+                        engine.state.clear_conflicts(&row.key)?;
+                    }
                     report.unchanged += 1;
                     continue;
                 }
@@ -503,9 +521,11 @@ pub fn run_scoped(
         // journal for this issue is spent: `--resume` would re-plan it from the
         // file and find nothing. The case it exists for is a checklist the
         // plugin applied after push stopped waiting — the op stayed `failed`
-        // in `status` after the pull had taken the change in.
+        // in `status` after the pull had taken the change in. Any conflict
+        // recorded against it is spent for the same reason.
         if base_hash == outcome.content_hash {
             engine.state.clear_ops(&write.key)?;
+            engine.state.clear_conflicts(&write.key)?;
         }
 
         if let Some(from) = &outcome.renamed_from {
@@ -694,28 +714,18 @@ fn field_changes(base: &IssueDoc, remote: &IssueDoc, names: &FieldMap) -> Vec<Fi
         out.push(change);
     }
 
-    if base.worklogs != remote.worklogs {
-        let booked = |d: &IssueDoc| d.worklogs.len();
-        out.push(FieldChange {
-            field: "worklogs".into(),
-            label: None,
-            from: Some(format!("{} entries", booked(base))),
-            to: Some(format!("{} entries", booked(remote))),
-            added: None,
-            removed: None,
-        });
+    if let Some(change) = worklog_changes(base, remote) {
+        out.push(change);
     }
 
     if base.children != remote.children {
         let done = |d: &IssueDoc| d.children.iter().filter(|i| i.checked).count();
-        out.push(FieldChange {
-            field: "children".into(),
-            label: None,
-            from: Some(format!("{}/{} done", done(base), base.children.len())),
-            to: Some(format!("{}/{} done", done(remote), remote.children.len())),
-            added: None,
-            removed: None,
-        });
+        out.push(tally_or_lines(
+            "children",
+            format!("{}/{} done", done(base), base.children.len()),
+            format!("{}/{} done", done(remote), remote.children.len()),
+            (&base.children_text(), &remote.children_text()),
+        ));
     }
 
     if base.checklist != remote.checklist {
@@ -731,17 +741,119 @@ fn field_changes(base: &IssueDoc, remote: &IssueDoc, names: &FieldMap) -> Vec<Fi
                 .filter(|e| matches!(e, ChecklistEntry::Item(_)))
                 .count()
         };
+        out.push(tally_or_lines(
+            "checklist",
+            format!("{}/{} done", done(base), total(base)),
+            format!("{}/{} done", done(remote), total(remote)),
+            (&base.checklist_text(), &remote.checklist_text()),
+        ));
+    }
+
+    if base.attachments != remote.attachments {
+        let names = |d: &IssueDoc| -> Vec<String> {
+            d.attachments.iter().map(|a| a.filename.clone()).collect()
+        };
+        let (before, after) = (names(base), names(remote));
+        let added = after.iter().filter(|n| !before.contains(n)).count();
+        let removed = before.iter().filter(|n| !after.contains(n)).count();
+        // The same names in a new place is the folder moving, not the server.
+        if added + removed > 0 {
+            out.push(FieldChange {
+                field: "attachments".into(),
+                label: None,
+                from: None,
+                to: None,
+                added: Some(added),
+                removed: Some(removed),
+            });
+        }
+    }
+
+    if base.frontmatter.reporter != remote.frontmatter.reporter {
         out.push(FieldChange {
-            field: "checklist".into(),
+            field: "reporter".into(),
             label: None,
-            from: Some(format!("{}/{} done", done(base), total(base))),
-            to: Some(format!("{}/{} done", done(remote), total(remote))),
+            from: base.frontmatter.reporter.clone(),
+            to: remote.frontmatter.reporter.clone(),
+            added: None,
+            removed: None,
+        });
+    }
+
+    // The server moved the issue on without changing anything a file shows —
+    // a watcher, a vote, a rank, a property a plugin keeps. The file is still
+    // rewritten, for its `updated:`, and saying so beats an empty `[]`.
+    if out.is_empty() && base.frontmatter.updated != remote.frontmatter.updated {
+        out.push(FieldChange {
+            field: "updated".into(),
+            label: None,
+            from: base.frontmatter.updated.clone(),
+            to: remote.frontmatter.updated.clone(),
             added: None,
             removed: None,
         });
     }
 
     out
+}
+
+/// A list's tally before and after, or — when the tally did not move, as it
+/// does not when an item is reworded — the lines that did, rather than
+/// `2/3 done → 2/3 done`.
+fn tally_or_lines(field: &str, from: String, to: String, text: (&str, &str)) -> FieldChange {
+    if from != to {
+        return FieldChange {
+            field: field.into(),
+            label: None,
+            from: Some(from),
+            to: Some(to),
+            added: None,
+            removed: None,
+        };
+    }
+    let (added, removed) = line_counts(text.0, text.1);
+    FieldChange {
+        field: field.into(),
+        label: None,
+        from: None,
+        to: None,
+        added: Some(added),
+        removed: Some(removed),
+    }
+}
+
+/// New, removed and edited worklogs as one line — counted like comments, so a
+/// corrected entry reads `1 edited` rather than `10 entries → 10 entries`.
+fn worklog_changes(base: &IssueDoc, remote: &IssueDoc) -> Option<FieldChange> {
+    fn ids(d: &IssueDoc) -> Vec<&str> {
+        d.worklogs
+            .iter()
+            .filter_map(|w| match &w.id {
+                WorklogId::Existing(id) => Some(id.as_str()),
+                WorklogId::New => None,
+            })
+            .collect()
+    }
+    let (before, after) = (ids(base), ids(remote));
+    let added = after.iter().filter(|id| !before.contains(id)).count();
+    let removed = before.iter().filter(|id| !after.contains(id)).count();
+    let edited = remote
+        .worklogs
+        .iter()
+        .filter(|w| match &w.id {
+            WorklogId::Existing(id) => base.worklog(id).is_some_and(|b| b != *w),
+            WorklogId::New => false,
+        })
+        .count();
+
+    (added + removed + edited > 0).then(|| FieldChange {
+        field: "worklogs".into(),
+        label: None,
+        from: None,
+        to: (edited > 0).then(|| format!("{edited} edited")),
+        added: Some(added),
+        removed: Some(removed),
+    })
 }
 
 /// New, removed and edited comments as one line.
@@ -945,8 +1057,11 @@ pub fn merge_docs(
 /// conflict record — so `resolve --list` shows what there is to decide between
 /// rather than a field name and three nulls.
 ///
-/// `None` for the parts kept whole rather than as one value — the checklist,
-/// the children, the sections — where the file itself is the clearer record.
+/// The parts kept whole rather than as one value — the checklist, the
+/// children, the sections — are recorded as the file spells them. They were
+/// left out once, on the view that the file was the clearer record, but no
+/// marker can stand in a checklist: a conflict on one left the file showing
+/// only its own side and the record showing nothing at all.
 fn conflict_values(
     field: &str,
     base: &IssueDoc,
@@ -964,6 +1079,21 @@ fn conflict_values(
             return doc
                 .worklog(id)
                 .map(|w| format!("{} {} {}", w.time_spent, w.started, w.body));
+        }
+        match field {
+            "checklist" => return Some(doc.checklist_text()),
+            "children" => return Some(doc.children_text()),
+            "preamble" => return Some(doc.preamble.clone()),
+            "extra_sections" => {
+                return Some(
+                    doc.extra_sections
+                        .iter()
+                        .map(|(name, body)| format!("## {name}\n\n{}\n", body.trim()))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            }
+            _ => {}
         }
         doc.frontmatter.field(field).map(|v| match v {
             serde_json::Value::String(s) => s,
@@ -1306,6 +1436,35 @@ mod tests {
         assert_eq!(out.conflicts, vec!["summary"]);
         // Abort leaves the local value in place; the caller discards the doc.
         assert_eq!(out.doc.frontmatter.summary, "Ours");
+    }
+
+    /// No marker can stand in a checklist, so the record is the only place a
+    /// conflict on one shows both sides. It used to hold three nulls, and
+    /// `resolve --list` had nothing to show.
+    #[test]
+    fn a_checklist_conflict_records_what_each_side_holds() {
+        use crate::doc::{ChecklistEntry, ChecklistItem};
+        let with = |title: &str| {
+            let mut d = doc("S", "body", &[]);
+            d.checklist = vec![ChecklistEntry::Item(ChecklistItem {
+                checked: false,
+                status: None,
+                title: title.into(),
+                description: None,
+            })];
+            d
+        };
+        let (base, ours, theirs) = (with("Check"), with("[03.11] Check"), with("Check it"));
+        let out = merge_docs(&base, &theirs, &ours, Strategy::Abort, "PROJ-1");
+        assert_eq!(out.conflicts, vec!["checklist"]);
+        assert_eq!(
+            conflict_values("checklist", &base, &ours, &theirs),
+            (
+                Some("- [ ] Check\n".into()),
+                Some("- [ ] [03.11] Check\n".into()),
+                Some("- [ ] Check it\n".into()),
+            )
+        );
     }
 
     #[test]

@@ -8,6 +8,49 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.25.0] — 2026-11-02
+
+### Breaking
+
+- **`jired pull ISSUES…` writes only the issues named.** The keys bounded the
+  fetch but not the merge, so every issue an earlier fetch or push had left
+  behind was written too: `pull TSK-793` reported eighteen others as updated.
+  A plain `jired pull` still writes everything that is behind.
+- **A worklog change in `pull`'s `changes` is counted like a comment change:**
+  `added`, `removed`, and `to: "N edited"`, in place of `from`/`to` entry
+  counts. A corrected entry used to read `10 entries → 10 entries`.
+- **A custom checklist status is written in the plugin's own spelling,
+  `- [IN QA] Title`, instead of refusing the section.** Read off the text field
+  it used to land in the item's title; now it is the item's status, in
+  backticks like `IN PROGRESS`. A name the instance does not have is dropped by
+  the plugin, and push's re-read reports that as a failed `update_checklist`.
+
+### Fixed
+
+- **Checklist text that starts in brackets keeps them.** Smart Checklist reads a
+  bare `[…]` ahead of an item's text as a custom status name, so `- [ ]
+  [03.11 18:00] Check the release` reached the server as `Check the release`,
+  push failed waiting for a checklist that never matched, and the next pull
+  met the plugin's copy as a conflict. A leading `[…]` is now sent escaped,
+  `\[03.11 18:00\]` — the vendor's documented spelling — and `\[`/`\]` read
+  back as plain brackets rather than with the backslashes showing.
+- **A checklist conflict records what each side holds.** No marker can stand in
+  a checklist, and the record held three nulls, so `resolve --list` had nothing
+  to show. The checklist, children, preamble and extra sections are now
+  recorded as the file spells them.
+- **Conflict records with no local edits behind them are cleared by the next
+  pull.** Versions before 0.21.0 conflicted on `links:` and recorded every
+  conflict without values; those records stood in `status` over files with no
+  markers, since nothing cleared them. An issue whose file equals its base has
+  nothing left to decide.
+- **`--fields` merges paths at every depth.** `results.ops.kind,
+  results.ops.status,results.ops.error` kept only the last path's `ops`, which
+  `--json-compact` pruned to `{}` on every op that had not failed.
+- **`pull` no longer reports `updated KEY []`.** Attachments and the reporter
+  are reported when they change, a reworded checklist item or child shows as
+  lines changed rather than `2/3 done → 2/3 done`, and an issue the server moved
+  without changing anything the file shows lists `updated` with its two stamps.
+
 ## [0.24.0] — 2026-10-27
 
 ### Added

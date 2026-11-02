@@ -168,7 +168,7 @@
               "properties": {
                 "field": {
                   "type": "string",
-                  "description": "status, summary, description, comments, children, checklist, or custom.<id>"
+                  "description": "An editable frontmatter field, custom.<id>, description, comments, worklogs, children, checklist, attachments or reporter — or updated, alone, when the server moved the issue without changing anything the file shows"
                 },
                 "label": {
                   "type": "string",
@@ -185,12 +185,12 @@
                 "added": {
                   "type": "integer",
                   "minimum": 0,
-                  "description": "Lines or comments added"
+                  "description": "Lines, comments, worklogs or attachments added"
                 },
                 "removed": {
                   "type": "integer",
                   "minimum": 0,
-                  "description": "Lines or comments removed"
+                  "description": "Lines, comments, worklogs or attachments removed"
                 }
               }
             }

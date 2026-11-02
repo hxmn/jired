@@ -8,7 +8,7 @@ use clap::Args;
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct FetchArgs {
-    /// Fetch only these issues: keys or file paths
+    /// Only these issues: keys or file paths
     ///
     /// The same positional form `push`, `diff` and `resolve` take, so
     /// `jired pull PROJ-1` works like `jired push PROJ-1`.
@@ -27,7 +27,7 @@ pub struct FetchArgs {
     #[arg(long, value_name = "BOARD")]
     pub board: Option<String>,
 
-    /// Fetch only these issues (same as the positional form)
+    /// Only these issues (same as the positional form)
     #[arg(long, value_name = "KEYS", value_delimiter = ',')]
     pub issues: Vec<String>,
 
