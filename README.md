@@ -49,6 +49,12 @@ jired push --dry-run    # exact API calls, nothing sent
 jired push              # apply
 ```
 
+Another project on the same Jira is one call from beside the first workspace:
+`jired init --dir ../DELTA --project DELTA --no-input` makes the directory and
+takes the server, the account and the stored token from the workspaces next to
+it. With workspaces for more than one server there, it lists them and asks for
+`--url`.
+
 ## For agents
 
 `jired init` writes `CLAUDE.md` and `AGENTS.md` into the workspace documenting

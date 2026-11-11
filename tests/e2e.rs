@@ -648,6 +648,89 @@ fn the_generated_docs_carry_the_flags_an_agent_scripts_with() {
     assert_eq!(doc, ws.read("AGENTS.md"), "both files carry the same block");
 }
 
+/// Adding a project beside the ones already set up is one call: the server
+/// and the account come from the workspaces next to it, the directory is
+/// made, and the output ends on the state rather than on "run status".
+#[test]
+fn init_beside_a_workspace_needs_only_the_project() {
+    let ws = Ws::new();
+    let first = ws
+        .cmd(&["init", "--dir", "ALPHA", "--no-pull"])
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let out = ws
+        .cmd(&["init", "--dir", "DELTA", "--json"])
+        .env_remove("JIRED_URL")
+        .env_remove("JIRED_EMAIL")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["account"]["base_url"], "https://fixture.invalid");
+    assert_eq!(report["account"]["identity"], "ilya@example.com");
+    assert_eq!(report["state"]["clean"], true, "{report}");
+    assert!(report["state"]["staged_transitions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let text = ws
+        .cmd(&["status", "--dir", "DELTA"])
+        .env_remove("JIRED_URL")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("nothing to push, no conflicts"), "{text}");
+}
+
+#[test]
+fn init_lists_the_servers_it_cannot_choose_between() {
+    let ws = Ws::new();
+    let first = ws
+        .cmd(&["init", "--dir", "ALPHA", "--no-pull"])
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    std::fs::create_dir_all(ws.path().join("OTHER/.jired")).unwrap();
+    std::fs::write(
+        ws.path().join("OTHER/.jired/config.toml"),
+        "[server]\nurl = \"https://other.example/\"\n",
+    )
+    .unwrap();
+
+    let out = ws
+        .cmd(&["init", "--dir", "DELTA", "--json"])
+        .env_remove("JIRED_URL")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(7));
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    let servers: Vec<&str> = err["details"]["servers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["url"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        servers,
+        ["https://fixture.invalid", "https://other.example"]
+    );
+    assert!(
+        !ws.path().join("DELTA").exists(),
+        "nothing is made for a refused init"
+    );
+}
+
 /// A failed init used to leave `.jired/logs` and `.jired/templates`, which
 /// every later command then took for a workspace.
 #[test]
@@ -762,7 +845,9 @@ fn a_missing_required_value_exits_7_and_names_it() {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("JIRED_FIXTURES", &ws.fixtures)
-        .args(["init", "--no-input", "--json"])
+        // A directory of its own: beside the other tests' workspaces in the
+        // temp directory, init would take their server and ask for a token.
+        .args(["init", "--dir", "fresh", "--no-input", "--json"])
         .output()
         .unwrap();
 

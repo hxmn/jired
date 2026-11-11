@@ -118,6 +118,15 @@ Interactively a three-question wizard — URL, identity, project — and nothing
 * the project picker lists keys, filters on typing, and accepts an empty answer as
   "every project I can see".
 
+* with no `--url`, `server.url` comes from the workspaces in the directories
+  beside `--dir` — the place someone adding a project keeps the others — when
+  they all name one server; their `server.deployment`, `auth.kind` and
+  `auth.email` come along where they all agree, and never over a flag, the
+  environment or a config file. Several servers there is exit 7 with each one
+  and the workspaces using it under `details.servers`, before anything is
+  written; interactively they are offered as a list with "Another Jira" last.
+  The machine itself keeps no list of servers to read instead: a keychain
+  cannot be enumerated.
 * `creds.storage` decides where the credential goes — `keychain`, `local_db`
   (`.jired/session.db`), or `user_config` (`credentials.toml` in the user config
   directory, shared by every workspace). Unset means keychain-if-available. An
@@ -140,7 +149,8 @@ be stored where `creds.storage` says, say — removes what it made: `.jired/`, a
 else it held.
 JSON: `{"schema":"jired/init/1","account":{…,"tls":{…}},"workspace":{…},"pulled":{…},"state":{"clean":true,…}}`.
 Agent example:
-`jired init --url https://x.atlassian.net --email a@b.c --token "$JIRED_TOKEN" --project PROJ --no-input --json`
+`jired init --url https://x.atlassian.net --email a@b.c --token "$JIRED_TOKEN" --project PROJ --no-input --json`;
+beside an existing workspace, `jired init --dir ../DELTA --project DELTA --no-input`.
 
 ### `jired fetch`
 `jired fetch [ISSUES…] [--jql Q] [--sprint S] [--board B] [--issues K1,K2] [--updated-since TS] [--full] [--slim]`

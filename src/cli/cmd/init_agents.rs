@@ -537,6 +537,10 @@ fn recipes(s: &mut String) {
     s.push_str("jired push TSK-740 TSK-741 TSK-742 --verify\n");
     s.push_str("# Put issues in a sprint and send it now\n");
     s.push_str("jired sprint add TSK-740 TSK-741 --sprint 17 --push\n");
+    s.push_str(
+        "# Another project beside this workspace: server, account and token come from this one\n",
+    );
+    s.push_str("jired init --dir ../DELTA --project DELTA --no-input\n");
     s.push_str("```\n\n");
     s.push_str(
         "`push --verify` re-reads every issue it pushed and names any field the \

@@ -165,6 +165,7 @@ fn set_up(g: &GlobalArgs, args: &InitArgs, out: Out, ctx: &mut Context) -> Resul
     // workspace exists, so that a missing URL or a rejected token leaves the
     // directory as it was. `--force` means "authenticate again", so it never
     // reuses a stored token.
+    default_server(ctx, &ui)?;
     let conn = connect(ctx, &ui, wanted_store, !args.force)?;
 
     ctx.workspace.create()?;
@@ -386,6 +387,161 @@ fn set_up(g: &GlobalArgs, args: &InitArgs, out: Out, ctx: &mut Context) -> Resul
     };
     out.emit("init", &report);
     Ok(ExitCode::Success)
+}
+
+/// A Jira server the workspaces next to this one already use.
+#[derive(Debug, Clone, PartialEq)]
+struct Neighbour {
+    url: String,
+    /// The deployment, sign-in method and identity those workspaces record,
+    /// where they all record the same one; `None` where they differ.
+    deployment: Option<String>,
+    auth_kind: Option<String>,
+    email: Option<String>,
+    /// Directory names, for a message that says where the answer came from.
+    workspaces: Vec<String>,
+}
+
+/// The servers configured in the directories beside `root`, one entry each.
+///
+/// The machine has no list of the Jiras it knows — a keychain cannot be
+/// enumerated — but the workspaces next to a new one are where somebody
+/// adding a project keeps the others, and their `config.toml` holds exactly
+/// what `init` would otherwise have to be told. Reading them is what the
+/// person (or agent) did by hand before this existed: `ls ..`, then `cat` each
+/// config to copy its URL.
+fn neighbours(root: &std::path::Path) -> Vec<Neighbour> {
+    let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+    let Some(parent) = root.parent() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut found: Vec<Neighbour> = Vec::new();
+    let mut dirs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| *p != root)
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        let config = crate::workspace::Workspace::at(&dir).config_path();
+        if !config.is_file() {
+            continue;
+        }
+        let Ok(cfg) = crate::config::file::ConfigFile::load(&config) else {
+            continue;
+        };
+        let Some(url) = cfg.get("server.url").map(|u| normalize_url(&u)) else {
+            continue;
+        };
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let (deployment, auth_kind, email) = (
+            cfg.get("server.deployment"),
+            cfg.get("auth.kind"),
+            cfg.get("auth.email"),
+        );
+        match found.iter_mut().find(|n| n.url == url) {
+            Some(n) => {
+                agree(&mut n.deployment, deployment);
+                agree(&mut n.auth_kind, auth_kind);
+                agree(&mut n.email, email);
+                n.workspaces.push(name);
+            }
+            None => found.push(Neighbour {
+                url,
+                deployment,
+                auth_kind,
+                email,
+                workspaces: vec![name],
+            }),
+        }
+    }
+    found
+}
+
+/// Keep a value only while every workspace gives the same one.
+fn agree(kept: &mut Option<String>, next: Option<String>) {
+    if *kept != next {
+        *kept = None;
+    }
+}
+
+/// Fill in the server from the workspaces next to this one when nobody named
+/// it, or say which ones there are to choose from.
+///
+/// Called before anything is written, so the error for "which server?" comes
+/// from a directory that is still as it was.
+fn default_server(ctx: &mut Context, ui: &Ui) -> Result<()> {
+    if ctx.resolver.get_quiet("server.url")?.is_some() {
+        return Ok(());
+    }
+    let known = neighbours(ctx.workspace.root());
+    let chosen = match known.as_slice() {
+        // Nothing to go on: `connect` asks, or fails on the missing URL.
+        [] => return Ok(()),
+        [only] if !ui.interactive() => only.clone(),
+        _ if !ui.interactive() => {
+            let listed: Vec<serde_json::Value> = known
+                .iter()
+                .map(|n| serde_json::json!({ "url": n.url, "workspaces": n.workspaces }))
+                .collect();
+            return Err(JiredError::missing_value(format!(
+                "missing required value `server.url`, and the workspaces next to this one \
+                 use {} servers: {}",
+                known.len(),
+                known
+                    .iter()
+                    .map(|n| format!("{} ({})", n.url, n.workspaces.join(", ")))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ))
+            .with_detail("key", "server.url")
+            .with_detail("flag", "--url")
+            .with_detail("servers", listed)
+            .with_hint("pass --url with one of them"));
+        }
+        // Interactively the neighbours are offered rather than taken: the
+        // wizard is where someone may be setting up a second Jira.
+        _ => {
+            let mut options: Vec<String> = known
+                .iter()
+                .map(|n| format!("{}  ({})", n.url, n.workspaces.join(", ")))
+                .collect();
+            options.push("Another Jira".to_string());
+            let picked = ui.choose("Which Jira is this workspace for?", &options, 0)?;
+            match known.get(picked) {
+                Some(n) => n.clone(),
+                None => return Ok(()),
+            }
+        }
+    };
+
+    ui.good(format!(
+        "using {}, the server of {}",
+        chosen.url,
+        chosen.workspaces.join(", ")
+    ));
+    ctx.resolver.set_resolved("server.url", &chosen.url);
+    // The rest of what those workspaces agree on comes along, but never over
+    // anything this run was told: a flag, the environment or a config file is
+    // an instruction, and a neighbour is only a guess.
+    for (key, value) in [
+        ("server.deployment", &chosen.deployment),
+        ("auth.kind", &chosen.auth_kind),
+        ("auth.email", &chosen.email),
+    ] {
+        if let Some(v) = value {
+            if ctx.resolver.get_quiet(key)?.is_none() {
+                ctx.resolver.set_resolved(key, v);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A server that answered, and the credentials it accepted.
@@ -1024,6 +1180,40 @@ mod tests {
             assert!(!auth_label(d.default_auth_kind()).is_empty());
             assert_ne!(other_deployment(d), d);
         }
+    }
+
+    #[test]
+    fn neighbours_are_grouped_by_server_and_keep_only_what_they_agree_on() {
+        let parent = tempfile::tempdir().unwrap();
+        let config = |dir: &str, body: &str| {
+            let state = parent.path().join(dir).join(".jired");
+            std::fs::create_dir_all(&state).unwrap();
+            std::fs::write(state.join("config.toml"), body).unwrap();
+        };
+        config(
+            "ALPHA",
+            "[server]\nurl = \"https://jira.corp/\"\ndeployment = \"datacenter\"\n\
+             [auth]\nkind = \"basic\"\nemail = \"ilya\"\n",
+        );
+        config(
+            "BETA",
+            "[server]\nurl = \"https://jira.corp\"\ndeployment = \"datacenter\"\n\
+             [auth]\nkind = \"basic\"\nemail = \"robot\"\n",
+        );
+        config("CLOUD", "[server]\nurl = \"acme.atlassian.net\"\n");
+        // Not a workspace, and the new directory itself: neither counts.
+        std::fs::create_dir_all(parent.path().join("notes")).unwrap();
+        config("DELTA", "[server]\nurl = \"https://elsewhere.example\"\n");
+
+        let found = neighbours(&parent.path().join("DELTA"));
+        assert_eq!(found.len(), 2, "{found:?}");
+        let corp = &found[0];
+        assert_eq!(corp.url, "https://jira.corp");
+        assert_eq!(corp.workspaces, ["ALPHA", "BETA"]);
+        assert_eq!(corp.deployment.as_deref(), Some("datacenter"));
+        assert_eq!(corp.auth_kind.as_deref(), Some("basic"));
+        assert_eq!(corp.email, None, "two accounts are no answer");
+        assert_eq!(found[1].url, "https://acme.atlassian.net");
     }
 
     #[test]
