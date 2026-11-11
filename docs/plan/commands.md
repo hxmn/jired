@@ -130,7 +130,11 @@ setting, including the ones at their default), `.gitignore` entry,
 optional initial pull. A
 failed initial pull is a warning, not a failed init: the account is stored and the
 "next:" block still prints.
-Errors: 3 bad creds; 7 missing url/token with `--no-input`.
+Errors: 3 bad creds; 7 missing url/token with `--no-input`. The sign-in happens
+before anything is written, and a run that fails anyway — a credential that cannot
+be stored where `creds.storage` says, say — removes what it made: `.jired/`, and
+`--dir` itself when the run created it. A directory that existed keeps everything
+else it held.
 JSON: `{"schema":"jired/init/1","account":{…,"tls":{…}},"workspace":{…},"pulled":{…}}`.
 Agent example:
 `jired init --url https://x.atlassian.net --email a@b.c --token "$JIRED_TOKEN" --project PROJ --no-input --json`

@@ -646,6 +646,49 @@ fn the_generated_docs_carry_the_flags_an_agent_scripts_with() {
     assert_eq!(doc, ws.read("AGENTS.md"), "both files carry the same block");
 }
 
+/// A failed init used to leave `.jired/logs` and `.jired/templates`, which
+/// every later command then took for a workspace.
+#[test]
+fn a_failed_init_leaves_the_directory_as_it_was() {
+    let ws = Ws::new();
+    // Refused before anything is written: no server to sign in to.
+    let out = ws
+        .cmd(&["init", "--dir", "NEW/DELTA"])
+        .env_remove("JIRED_URL")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(7));
+    assert!(!ws.path().join("NEW").exists());
+
+    // Refused after the workspace was made: the token cannot be stored
+    // where it was asked to go. An existing directory stays, `.jired/` goes.
+    std::fs::create_dir_all(ws.path().join("KEEP")).unwrap();
+    let out = ws
+        .cmd(&["init", "--dir", "KEEP"])
+        .env("JIRED_CREDS_STORAGE", "local_db")
+        .env_remove("JIRED_SECRET_KEY")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(ws.path().join("KEEP").is_dir());
+    assert!(
+        !ws.path().join("KEEP/.jired").exists(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // And the same directory then initializes cleanly.
+    let out = ws
+        .cmd(&["init", "--dir", "KEEP", "--no-pull"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn init_agents_is_idempotent_and_leaves_other_permissions_alone() {
     let ws = Ws::new();

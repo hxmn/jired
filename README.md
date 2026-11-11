@@ -1008,7 +1008,9 @@ command fails, which is `--quiet` plus the warnings and the HTTP retry log that
 `--quiet` leaves on stderr. The error and the exit code survive it, so a cron job
 that mails stderr mails you only when there is something to read.
 
-`--no-input` never prompts and exits 7 naming whatever is missing. Set
+`--no-input` never prompts and exits 7 naming whatever is missing. A failed `init`
+leaves the directory as it found it — no half-made `.jired/` for the retry to trip
+over — and `--dir` may name a directory that does not exist yet. Set
 `JIRED_NO_KEYRING=1` to ignore a keychain that exists but is locked, and
 `creds.storage` to choose between `local_db` (this workspace) and `user_config`
 (shared by every workspace on the machine). `JIRED_SECRET_KEY` must be the same

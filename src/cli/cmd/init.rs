@@ -80,6 +80,61 @@ pub struct WorkspaceReport {
 
 pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open_uninitialized_with(g, &args.conn, out)?;
+    // Noted before anything is written, so a failed run can take back exactly
+    // what it made: an exit-7 init used to leave `.jired/logs` and
+    // `.jired/templates` behind, and a directory that looks like a workspace
+    // to every later command without being one.
+    let made = Created::before(&ctx.workspace);
+    let result = set_up(g, args, out, &mut ctx);
+    if result.is_err() {
+        // The run lock is a file in `.jired/`, and Windows will not delete a
+        // file that is still open.
+        drop(ctx);
+        made.undo();
+    }
+    result
+}
+
+/// What a run of `init` is about to create, so that a failure can remove it.
+struct Created {
+    /// The outermost directory of `--dir` that did not exist yet.
+    root: Option<PathBuf>,
+    /// `.jired/`, when the directory existed but had none.
+    state: Option<PathBuf>,
+}
+
+impl Created {
+    fn before(workspace: &crate::workspace::Workspace) -> Self {
+        let root =
+            std::path::absolute(workspace.root()).unwrap_or_else(|_| workspace.root().into());
+        let mut outermost = None;
+        let mut dir = root.as_path();
+        while !dir.exists() {
+            outermost = Some(dir.to_path_buf());
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+        let state = workspace.state_dir();
+        Self {
+            state: (outermost.is_none() && !state.exists()).then_some(state),
+            root: outermost,
+        }
+    }
+
+    /// Best-effort: the error being reported is the one that matters, and a
+    /// leftover that cannot be removed is no reason to replace it.
+    fn undo(self) {
+        if let Some(dir) = self.root.or(self.state) {
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                tracing::debug!("cannot remove {}: {e}", dir.display());
+            }
+        }
+    }
+}
+
+fn set_up(g: &GlobalArgs, args: &InitArgs, out: Out, ctx: &mut Context) -> Result<ExitCode> {
     let ui = Ui::new(ctx.resolver.interactive(), !out.json && !out.quiet).assume_yes(g.yes);
 
     if ctx.workspace.is_initialized() && !args.force {
@@ -96,9 +151,6 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
         }
     }
 
-    ctx.workspace.create()?;
-    ctx.lock()?;
-
     ui.title("jired init");
     ui.detail(ctx.workspace.root().display().to_string());
 
@@ -107,9 +159,14 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
         None => None,
     };
 
-    // 1. Find a server that answers, with credentials it accepts.
-    // `--force` means "authenticate again", so it never reuses a stored token.
-    let conn = connect(&mut ctx, &ui, wanted_store, !args.force)?;
+    // 1. Find a server that answers, with credentials it accepts — before the
+    // workspace exists, so that a missing URL or a rejected token leaves the
+    // directory as it was. `--force` means "authenticate again", so it never
+    // reuses a stored token.
+    let conn = connect(ctx, &ui, wanted_store, !args.force)?;
+
+    ctx.workspace.create()?;
+    ctx.lock()?;
 
     // 2. Persist the account and its secret.
     let session = SessionStore::open(&ctx.workspace)?;
@@ -152,7 +209,7 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
     }
 
     // 3. Choose what this workspace tracks.
-    let project = choose_project(&mut ctx, &ui, &account)?;
+    let project = choose_project(ctx, &ui, &account)?;
 
     // 4. Write a config file that answers every later question.
     let mut cfg = ctx.local_config()?;
@@ -264,9 +321,10 @@ pub fn run(g: &GlobalArgs, args: &InitArgs, out: Out) -> Result<ExitCode> {
         out.say("");
         let pull_args = crate::cli::cmd::pull::PullArgs::default();
         // Setup succeeded whatever the network did next. Propagating this error
-        // would report a failed `init` for a workspace that is fully configured,
-        // and would swallow the "next:" block that says how to retry.
-        match crate::sync::pull::run(&mut ctx, &pull_args) {
+        // would report a failed `init` for a workspace that is fully configured
+        // — and remove it again, which is what a failed `init` now does — and
+        // would swallow the "next:" block that says how to retry.
+        match crate::sync::pull::run(ctx, &pull_args) {
             Ok(report) => {
                 report.render(out);
                 Some(report)
@@ -680,6 +738,9 @@ fn offer_certificate(ctx: &Context, ui: &Ui, base_url: &str) -> Result<Option<(P
         return Ok(None);
     }
 
+    // The one thing connecting writes, and the reason the workspace is made
+    // here rather than waited for: the pinned bundle lives in `.jired/`.
+    ctx.workspace.create()?;
     let path = ctx.workspace.trusted_ca_path();
     std::fs::write(&path, cert.pem())
         .map_err(|e| JiredError::generic(format!("cannot write {}: {e}", path.display())))?;
