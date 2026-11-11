@@ -731,6 +731,31 @@ fn init_lists_the_servers_it_cannot_choose_between() {
     );
 }
 
+/// What init fills in by itself is said where somebody looks before passing
+/// six flags to be safe, in the short help as well as the long one.
+#[test]
+fn init_help_says_what_it_works_out_and_shows_a_call_without_prompts() {
+    for flag in ["-h", "--help"] {
+        let out = Command::cargo_bin("jired")
+            .unwrap()
+            .args(["init", flag])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        for needle in [
+            "--dir is created if it does not exist",
+            "--deployment  from those workspaces, or else the URL",
+            "--auth        from those workspaces, or else the deployment",
+            "jired init --dir ~/jira/DELTA --project DELTA --no-input",
+        ] {
+            assert!(
+                text.contains(needle),
+                "`init {flag}` lacks {needle:?}:\n{text}"
+            );
+        }
+    }
+}
+
 /// A failed init used to leave `.jired/logs` and `.jired/templates`, which
 /// every later command then took for a workspace.
 #[test]

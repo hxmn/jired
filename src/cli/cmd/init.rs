@@ -20,6 +20,26 @@ use clap::Args;
 use secrecy::SecretString;
 use std::path::PathBuf;
 
+/// What `init` works out for itself, said where somebody looks before
+/// passing six flags to be safe: every one of these used to be learned by
+/// trying it.
+pub const AFTER_HELP: &str = "\
+--dir is created if it does not exist, and removed again if init fails.
+
+Worked out when left out:
+  --url         from the workspaces next to --dir, when they all use one server;
+                with several, the error lists them
+  --deployment  from those workspaces, or else the URL; the server corrects a wrong guess
+  --auth        from those workspaces, or else the deployment: an API token on Cloud,
+                a personal access token on Data Center
+  --email       from those workspaces, when they all sign in as one account
+  --token       the credential this machine already stores for that server and account
+
+Without prompts, beside existing workspaces:
+  jired init --dir ~/jira/DELTA --project DELTA --no-input
+For the first workspace on a machine:
+  jired init --dir ~/jira/DELTA --project DELTA --url https://jira.example.com --no-input";
+
 #[derive(Args, Debug, Clone, Default)]
 pub struct InitArgs {
     /// Skip the initial pull

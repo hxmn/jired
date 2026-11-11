@@ -151,6 +151,9 @@ JSON: `{"schema":"jired/init/1","account":{…,"tls":{…}},"workspace":{…},"p
 Agent example:
 `jired init --url https://x.atlassian.net --email a@b.c --token "$JIRED_TOKEN" --project PROJ --no-input --json`;
 beside an existing workspace, `jired init --dir ../DELTA --project DELTA --no-input`.
+`init -h` ends with what is filled in when left out — `--dir` created, `--url`,
+`--deployment`, `--auth`, `--email` and `--token` worked out — and a call without
+prompts, because each of those used to be learned by trying it.
 
 ### `jired fetch`
 `jired fetch [ISSUES…] [--jql Q] [--sprint S] [--board B] [--issues K1,K2] [--updated-since TS] [--full] [--slim]`

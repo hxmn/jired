@@ -244,6 +244,7 @@ pub enum Command {
     /// List saved filters you own or have starred
     Filters(cmd::filter::FiltersArgs),
     /// Authenticate, pick a project, and set up the workspace
+    #[command(after_help = cmd::init::AFTER_HELP)]
     Init(cmd::init::InitArgs),
     /// Write the agent instructions and the read-only command permissions
     InitAgents(cmd::init_agents::InitAgentsArgs),
