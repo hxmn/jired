@@ -844,9 +844,14 @@ or `symlink`/`hardlink`/`stub` to insist on one.
 
 They are views with one exception: moving an issue's entry from one
 `boards/<board>/<column>/` folder to another stages a transition to that column's
-status, which is what dragging the card would have done. An explicit `status:` edit
-in the file wins if the two disagree. Everything else about a grouping folder is
-regenerated, so edits there are lost.
+status, which is what dragging the card would have done. `status` lists it, `diff`
+shows it as a `status` row marked `(board-move)`, and moving the link back — or
+`jired doctor --regroup` — drops it. An explicit `status:` edit in the file wins if
+the two disagree. A link left in the column named after the status the issue
+already has stages nothing. Two boards with the same name — Jira calls a project's
+Scrum and Kanban boards both `DELTA board` — get a folder each, `DELTA board (12)`
+and `DELTA board (13)`. Everything else about a grouping folder is regenerated, so
+edits there are lost.
 
 ### Templates
 

@@ -9422,6 +9422,19 @@ fn dragging_a_card_between_columns_stages_a_transition() {
     assert_eq!(staged["to"], "Done");
     assert_eq!(staged["origin"], "board-move");
 
+    // `diff` reports the same change, so the two never disagree about
+    // whether there is anything to push.
+    let diff = ws.json(&["diff"]);
+    let row = &diff["issues"][0]["fields"][0];
+    assert_eq!(diff["issues"][0]["key"], "PROJ-142", "{diff}");
+    assert_eq!(row["field"], "status");
+    assert_eq!(row["from"], "In Progress");
+    assert_eq!(row["to"], "Done");
+    assert_eq!(row["origin"], "board-move");
+    let text = ws.cmd(&["status"]).output().unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("move the link back"), "{text}");
+
     // `push --dry-run` accounts for it, so nothing happens unannounced.
     let dry = ws.json(&["push", "--dry-run"]);
     let op = dry["results"][0]["ops"]
@@ -9453,6 +9466,96 @@ fn a_card_left_where_it_belongs_stages_nothing() {
     let ws = Ws::new();
     ws.init();
     ws.json(&["pull"]);
+    let status = ws.json(&["status"]);
+    assert!(
+        status["staged_transitions"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+}
+
+/// Jira names every board of a project after it — `DELTA board` for the Scrum
+/// one and the Kanban one — and the two shared a folder, so each judged the
+/// other's cards: a fresh pull reported `To Do → To Do` for every card the
+/// second board maps elsewhere.
+#[test]
+fn two_boards_with_one_name_stage_nothing_after_a_pull() {
+    let ws = Ws::new();
+    std::fs::write(
+        ws.fixtures.join("boards.json"),
+        r#"[
+          { "id": "12", "name": "Platform Board", "type": "scrum", "project_key": "PROJ" },
+          { "id": "13", "name": "Platform Board", "type": "kanban", "project_key": "PROJ" }
+        ]"#,
+    )
+    .unwrap();
+    // The second board's `To Do` holds a status none of the issues has.
+    std::fs::write(
+        ws.fixtures.join("board-13-columns.json"),
+        r#"[
+          { "name": "To Do", "status_ids": ["10000"] },
+          { "name": "In Progress", "status_ids": ["3"] },
+          { "name": "Done", "status_ids": ["5"] }
+        ]"#,
+    )
+    .unwrap();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let status = ws.json(&["status"]);
+    assert!(
+        status["staged_transitions"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+    assert!(
+        !ws.json(&["push", "--dry-run"])["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["ops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|o| o["kind"] == "transition")),
+        "push must not plan a transition nobody asked for"
+    );
+    // Each board has a folder of its own, and a card only on the board that
+    // maps its status.
+    let todo = "To Do/PROJ-0150. Rotate IdP certificate.md";
+    assert!(
+        std::fs::symlink_metadata(ws.path().join("boards/Platform Board (12)").join(todo)).is_ok()
+    );
+    assert!(
+        std::fs::symlink_metadata(ws.path().join("boards/Platform Board (13)").join(todo)).is_err()
+    );
+}
+
+/// A link in the column named after the issue's own status is where the user
+/// expects it, whatever the column's status mapping says: staging a transition
+/// from a status to itself only asks Jira for one the workflow does not offer.
+#[test]
+fn a_card_in_the_column_named_after_its_status_stages_nothing() {
+    let ws = Ws::new();
+    std::fs::write(
+        ws.fixtures.join("board-12-columns.json"),
+        r#"[
+          { "name": "To Do", "status_ids": ["10000"] },
+          { "name": "In Progress", "status_ids": ["1", "3"] },
+          { "name": "Done", "status_ids": ["5"] }
+        ]"#,
+    )
+    .unwrap();
+    ws.init();
+    ws.json(&["pull"]);
+
+    let name = "PROJ-0150. Rotate IdP certificate.md";
+    let from = ws
+        .path()
+        .join("boards/Platform Board/In Progress")
+        .join(name);
+    let to_dir = ws.path().join("boards/Platform Board/To Do");
+    std::fs::create_dir_all(&to_dir).unwrap();
+    std::fs::rename(&from, to_dir.join(name)).unwrap();
+
     let status = ws.json(&["status"]);
     assert!(
         status["staged_transitions"].as_array().unwrap().is_empty(),

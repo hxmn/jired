@@ -34,6 +34,10 @@
                 "sendable": {
                   "type": "boolean",
                   "description": "Whether a push could carry this change. Only `sprint` is ever false: the field is a history and only its last entry — the sprint the issue is in now — can be changed. A false row is shown for context, is left out of `stat.fields`, and never appears on an issue that has no other change."
+                },
+                "origin": {
+                  "const": "board-move",
+                  "description": "Present on a `status` row that comes from a card moved between `boards/<board>/<column>/` folders rather than from the file; the same change `status` lists under `staged_transitions` with this origin."
                 }
               }
             }

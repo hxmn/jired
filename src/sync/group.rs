@@ -169,7 +169,7 @@ fn regroup_boards(
     }
 
     let mut count = 0;
-    for board in &boards {
+    for (board, board_dir) in boards.iter().zip(board_dirs(&boards)) {
         if board.columns.is_empty() {
             report.warnings.push(format!(
                 "board {} has no column configuration, so it was skipped",
@@ -188,7 +188,7 @@ fn regroup_boards(
             }
             let dir = root
                 .join(naming::GROUP_BOARDS)
-                .join(naming::group_dir(&board.name, None))
+                .join(&board_dir)
                 .join(naming::group_dir(&column.name, None));
             link_all(files, &members, &dir, options.mode, report)?;
         }
@@ -230,6 +230,56 @@ mod tests {
         assert_eq!(naming::GROUP_SPRINTS, "sprints");
         assert_eq!(naming::GROUP_BOARDS, "boards");
     }
+
+    fn board(id: &str, name: &str) -> crate::store::state::BoardRow {
+        crate::store::state::BoardRow {
+            id: id.into(),
+            name: name.into(),
+            board_type: "kanban".into(),
+            columns: vec![],
+        }
+    }
+
+    #[test]
+    fn boards_sharing_a_name_get_a_folder_each() {
+        let boards = [
+            board("12", "DELTA board"),
+            board("13", "DELTA board"),
+            board("14", "Ops"),
+        ];
+        assert_eq!(
+            board_dirs(&boards),
+            ["DELTA board (12)", "DELTA board (13)", "Ops"]
+        );
+    }
+}
+
+/// The folder each board gets under `boards/`, in the order of `boards`.
+///
+/// Jira names a project's boards after the project — `DELTA board` for the
+/// Scrum one and the Kanban one alike — so two boards with one name are
+/// ordinary. Sharing a folder made each board judge the other's cards: a card
+/// in the right column of one sat in the same-named column of the other, which
+/// did not hold its status, and read as a staged `Backlog → Backlog`. A name
+/// two boards share takes the board's id, spelled the way `jired boards` and
+/// `jired sprints` already spell it; a name no other board has keeps its plain
+/// folder, so nothing moves for the common case.
+fn board_dirs(boards: &[crate::store::state::BoardRow]) -> Vec<String> {
+    let plain: Vec<String> = boards
+        .iter()
+        .map(|b| naming::group_dir(&b.name, None))
+        .collect();
+    boards
+        .iter()
+        .zip(&plain)
+        .map(|(board, dir)| {
+            if plain.iter().filter(|d| *d == dir).count() > 1 {
+                naming::group_dir(&board.name, Some(&board.id))
+            } else {
+                dir.clone()
+            }
+        })
+        .collect()
 }
 
 /// An issue whose board link was dragged into a different column.
@@ -276,8 +326,8 @@ pub fn detect_moves(engine: &Engine, root: &Path) -> Result<(Vec<BoardMove>, Vec
     let mut moves = Vec::new();
     let mut warnings = Vec::new();
 
-    for board in &boards {
-        let board_dir = boards_root.join(naming::group_dir(&board.name, None));
+    for (board, board_dir) in boards.iter().zip(board_dirs(&boards)) {
+        let board_dir = boards_root.join(board_dir);
         let Ok(columns_on_disk) = std::fs::read_dir(&board_dir) else {
             continue;
         };
@@ -286,10 +336,15 @@ pub fn detect_moves(engine: &Engine, root: &Path) -> Result<(Vec<BoardMove>, Vec
                 continue;
             }
             let column_name = column_entry.file_name().to_string_lossy().into_owned();
-            let column = board
+            // Every column this folder stands for, not the first: two columns
+            // whose names sanitize alike share a folder in `regroup`, and a
+            // card there belongs to whichever of them holds its status.
+            let same_folder: Vec<&crate::api::BoardColumn> = board
                 .columns
                 .iter()
-                .find(|c| naming::group_dir(&c.name, None) == column_name);
+                .filter(|c| naming::group_dir(&c.name, None) == column_name)
+                .collect();
+            let column = same_folder.first().copied();
 
             let Ok(links) = std::fs::read_dir(column_entry.path()) else {
                 continue;
@@ -312,7 +367,14 @@ pub fn detect_moves(engine: &Engine, root: &Path) -> Result<(Vec<BoardMove>, Vec
                     continue;
                 };
                 // Still where it belongs.
-                if column.status_ids.contains(status_id) {
+                if same_folder.iter().any(|c| c.status_ids.contains(status_id)) {
+                    continue;
+                }
+                // A transition to the status the issue already has is no
+                // change at all, and pushing one asks Jira for a transition
+                // the workflow does not offer. Whatever made the folder and
+                // the mapping disagree, it is not something the user did.
+                if status_name.eq_ignore_ascii_case(&column.name) {
                     continue;
                 }
                 moves.push(BoardMove {

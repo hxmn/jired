@@ -498,6 +498,10 @@ listed, and on an issue with real changes the row rides along marked
 `"sendable": false` — shown, not counted in `--stat`, never on its own. Between
 two server snapshots (`--remote`) every difference is sendable: nothing is being
 pushed, and the history is exactly what a pull would bring in.
+A card dragged between `boards/<board>/<column>/` folders is listed too, in the
+default mode only: a `status` row with `"origin": "board-move"`, the same change
+`status` lists under `staged_transitions` and `push` sends. An explicit `status:`
+edit on the same issue wins, as it does in `push`.
 In the default mode a file whose bytes are exactly what the last pull wrote is
 skipped outright, whatever base re-rendered under today's rules would say: the
 rendering changes between versions (a field the renderer has since learned) and
@@ -511,7 +515,11 @@ today's rendering.
 ### `jired status [--all]`
 One-screen overview: dirty files, new local issues, staged transitions (incl. board
 moves), conflicts, last fetch age, pending push journal, and a git-style trailer
-saying what to run next. `--all` additionally lists the unchanged issues. JSON
+saying what to run next. Staged transitions say how to send them and how to drop
+one: set `status:` back, or move the link back (`doctor --regroup` puts every card
+back). A board move is never staged to the status the issue already has, and two
+boards sharing a name get a folder each, `<name> (<id>)`, so neither judges the
+other's cards. `--all` additionally lists the unchanged issues. JSON
 mirrors it. Offline. Visible alias `st`.
 
 `stale_agent_docs` names any `CLAUDE.md`/`AGENTS.md` whose generated block was

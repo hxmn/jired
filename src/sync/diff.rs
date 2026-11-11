@@ -47,6 +47,10 @@ pub struct FieldDiff {
     /// [`crate::doc::frontmatter::sprint_history_only`] — and a row marked
     /// `false` is shown for context, not counted, and never on its own.
     pub sendable: bool,
+    /// `board-move` when the change is a card dragged between board columns
+    /// rather than an edit to the file; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,10 +123,12 @@ impl DiffReport {
             for f in &issue.fields {
                 // A row a push cannot carry is worth seeing next to the ones it
                 // can, as long as it says so rather than looking like work.
-                let note = if f.sendable {
-                    String::new()
-                } else {
+                let note = if !f.sendable {
                     style::out(DIM, "  (history, not sendable)")
+                } else if let Some(origin) = f.origin {
+                    style::out(DIM, format!("  ({origin})"))
+                } else {
+                    String::new()
                 };
                 out.say(format!(
                     "   {:<field_width$} {} → {}{note}",
@@ -240,6 +246,42 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
         issues.push(IssueDiff { file, ..diff });
     }
 
+    // A card dragged between board columns is a transition `status` lists and
+    // `push` sends, with the `.md` file untouched — so the loop above, which
+    // reads only files, would call the workspace clean while `status` called it
+    // staged. The three are meant to answer one question.
+    if args.mode() == DiffMode::WorkingBase {
+        let (moves, _) = crate::sync::group::detect_moves(&engine, engine.projector.root())?;
+        for m in moves {
+            if !wanted.is_empty() && !wanted.contains(&m.key) {
+                continue;
+            }
+            let row = FieldDiff {
+                field: "status".into(),
+                from: serde_json::Value::String(m.from_status),
+                to: serde_json::Value::String(m.to_status),
+                sendable: true,
+                origin: Some("board-move"),
+            };
+            match issues.iter_mut().find(|i| i.key == m.key) {
+                // An explicit `status:` edit wins over the board, as in `push`.
+                Some(issue) if issue.fields.iter().any(|f| f.field == "status") => continue,
+                Some(issue) => issue.fields.push(row),
+                None => {
+                    stat.issues += 1;
+                    issues.push(IssueDiff {
+                        file: files.get(&m.key).map(|f| f.relative.clone()),
+                        key: m.key,
+                        status: "modified",
+                        fields: vec![row],
+                        sections: Vec::new(),
+                    });
+                }
+            }
+            stat.fields += 1;
+        }
+    }
+
     issues.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(DiffReport {
         mode: args.mode(),
@@ -318,6 +360,7 @@ fn compare(
                         from: from.unwrap_or(serde_json::Value::Null),
                         to: to.unwrap_or(serde_json::Value::Null),
                         sendable,
+                        origin: None,
                     });
                 }
             }

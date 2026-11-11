@@ -191,6 +191,27 @@ impl StatusReport {
                     t.origin
                 ));
             }
+            // How to take one back, not only how to send it: a move nobody
+            // meant is the case where somebody reads this list most closely.
+            let moved = self
+                .staged_transitions
+                .iter()
+                .any(|t| t.origin == "board-move");
+            let edited = self
+                .staged_transitions
+                .iter()
+                .any(|t| t.origin == "frontmatter");
+            out.hint("use \"jired push\" to send them");
+            match (edited, moved) {
+                (true, true) => out.hint(
+                    "to drop one, set `status:` back in the file or move the link back; \
+                     \"jired doctor --regroup\" puts every card back",
+                ),
+                (true, false) => out.hint("to drop one, set `status:` back in the file"),
+                (false, _) => out.hint(
+                    "to drop one, move the link back; \"jired doctor --regroup\" puts every card back",
+                ),
+            }
         }
         if !self.behind.is_empty() {
             out.say(format!(

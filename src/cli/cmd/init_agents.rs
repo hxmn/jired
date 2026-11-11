@@ -630,7 +630,7 @@ pub fn render() -> String {
     s.push_str("| Path | Meaning |\n|---|---|\n");
     s.push_str("| `PROJ-0142. Summary.md` | One issue. The key prefix is its identity; the summary part is cosmetic. The number is zero-padded so files sort numerically — the key itself is `PROJ-142`, which is what the frontmatter and every command use. |\n");
     s.push_str("| `.PROJ-0142. Summary/` | Attachments for that issue. New files here are uploaded on push. |\n");
-    s.push_str("| `by-parent/`, `sprints/`, `boards/` | Grouping links onto the same issue files, regenerated from the database on every pull. Edits are lost, with one exception: moving an entry between `boards/<board>/<column>/` folders stages a transition to that column's status, the way dragging the card would. An explicit `status:` edit in the file wins if the two disagree. |\n");
+    s.push_str("| `by-parent/`, `sprints/`, `boards/` | Grouping links onto the same issue files, regenerated from the database on every pull. Edits are lost, with one exception: moving an entry between `boards/<board>/<column>/` folders stages a transition to that column's status, the way dragging the card would. An explicit `status:` edit in the file wins if the two disagree. `diff` shows the move as a `status` row with `\"origin\": \"board-move\"`; moving the link back drops it. Two boards sharing a name get a folder each, `<name> (<id>)`. |\n");
     s.push_str("| `.jired/` | Machine state: credentials, sync database, templates, logs. Never edit or commit, except `.jired/templates/<name>.md` for `jired create --template <name>`. |\n\n");
 
     s.push_str("## File structure\n\n");
