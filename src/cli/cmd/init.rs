@@ -43,6 +43,8 @@ pub struct InitReport {
     pub account: AccountReport,
     pub workspace: WorkspaceReport,
     pub pulled: Option<crate::sync::pull::PullReport>,
+    /// What is left to push or resolve, as `status` would report it.
+    pub state: Option<crate::sync::status::WorkspaceState>,
 }
 
 #[derive(serde::Serialize)]
@@ -323,7 +325,7 @@ fn set_up(g: &GlobalArgs, args: &InitArgs, out: Out, ctx: &mut Context) -> Resul
         // Setup succeeded whatever the network did next. Propagating this error
         // would report a failed `init` for a workspace that is fully configured
         // — and remove it again, which is what a failed `init` now does — and
-        // would swallow the "next:" block that says how to retry.
+        // would swallow the closing hint that says how to retry.
         match crate::sync::pull::run(ctx, &pull_args) {
             Ok(report) => {
                 report.render(out);
@@ -341,13 +343,20 @@ fn set_up(g: &GlobalArgs, args: &InitArgs, out: Out, ctx: &mut Context) -> Resul
         }
     };
 
-    out.say("");
-    out.say("next:");
-    if pulled.is_none() {
-        out.say("  jired pull     write issue files into this directory");
+    // End on what `status` would say rather than on an instruction to go and
+    // run it: "next: jired status" was followed, every time, by exactly that.
+    let state = match &pulled {
+        Some(report) => crate::cli::cmd::pull::closing_state(ctx, report),
+        None => crate::sync::status::WorkspaceState::now(ctx)
+            .map_err(|e| tracing::debug!("cannot read the workspace state: {}", e.message))
+            .ok(),
+    };
+    if let Some(state) = &state {
+        state.render(out);
     }
-    out.say("  jired status   what is dirty, behind, or conflicted");
-    out.say("  jired diff     review changes before sending them");
+    if pulled.is_none() {
+        out.hint("use \"jired pull\" to write issue files into this directory");
+    }
 
     let report = InitReport {
         account: AccountReport {
@@ -373,6 +382,7 @@ fn set_up(g: &GlobalArgs, args: &InitArgs, out: Out, ctx: &mut Context) -> Resul
             agent_files,
         },
         pulled,
+        state,
     };
     out.emit("init", &report);
     Ok(ExitCode::Success)

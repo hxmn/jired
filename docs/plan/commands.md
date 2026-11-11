@@ -129,13 +129,16 @@ setting, including the ones at their default), `.gitignore` entry,
 `CLAUDE.md`/`AGENTS.md` and the agent permission files (unless `--no-agents`) →
 optional initial pull. A
 failed initial pull is a warning, not a failed init: the account is stored and the
-"next:" block still prints.
+closing hint says to run `jired pull`. The output ends on the workspace's state the
+way `status` reports it — `nothing to push, no conflicts`, or the staged, dirty and
+conflicted lists — rather than on "next: jired status"; JSON carries the same lists
+under `state`, with `clean` for the one-word answer.
 Errors: 3 bad creds; 7 missing url/token with `--no-input`. The sign-in happens
 before anything is written, and a run that fails anyway — a credential that cannot
 be stored where `creds.storage` says, say — removes what it made: `.jired/`, and
 `--dir` itself when the run created it. A directory that existed keeps everything
 else it held.
-JSON: `{"schema":"jired/init/1","account":{…,"tls":{…}},"workspace":{…},"pulled":{…}}`.
+JSON: `{"schema":"jired/init/1","account":{…,"tls":{…}},"workspace":{…},"pulled":{…},"state":{"clean":true,…}}`.
 Agent example:
 `jired init --url https://x.atlassian.net --email a@b.c --token "$JIRED_TOKEN" --project PROJ --no-input --json`
 
@@ -192,6 +195,11 @@ JSON: `{"schema":"jired/pull/1","updated":[{"key":"PROJ-1","fields":["status"],
 "changes":[{"field":"status","from":"In Progress","to":"In Review"}]}],…}`.
 `fields` stays at merge granularity (`custom` covers every custom field);
 `changes` is the per-field detail.
+A pull that wrote without conflicts ends on the workspace's state, the same
+sections and closing line as `status` (`nothing to push, no conflicts` when there
+is nothing), and its JSON carries them as `state`. Not after `--dry-run`, which
+wrote nothing, and not after a pull that reported conflicts of its own: under
+`abort` those are not recorded, and a closing all-clear would contradict them.
 Agent example: `jired pull --no-input --json || test $? -eq 5`
 
 Custom fields are written into the file in their editable form — a select list

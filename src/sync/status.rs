@@ -99,7 +99,7 @@ pub struct StagedTransition {
 
 impl StatusReport {
     pub fn render(&self, out: Out) {
-        use crate::style::{self, BOLD, CYAN, DIM, RED, YELLOW};
+        use crate::style::{self, BOLD, DIM};
 
         out.say(format!(
             "workspace {} ({} issues){}",
@@ -133,86 +133,9 @@ impl StatusReport {
         // wraps as soon as a project key is long.
         let width = self.key_width();
 
-        if !self.new_issues.is_empty() {
-            out.say(format!(
-                "\n{}",
-                style::out(
-                    BOLD,
-                    format!("{} new local issue(s):", self.new_issues.len())
-                )
-            ));
-            for n in &self.new_issues {
-                // Padded before painting: escape codes count towards a format
-                // width and would knock every following column out of line.
-                out.say(format!(
-                    "  {}  {}",
-                    style::out(CYAN, format!("{:<width$}", n.key)),
-                    n.file
-                ));
-            }
-            out.hint("use \"jired push\" to create them in Jira");
-        }
-        if !self.dirty.is_empty() {
-            out.say(format!(
-                "\n{}",
-                style::out(
-                    BOLD,
-                    format!("{} issue(s) with local edits:", self.dirty.len())
-                )
-            ));
-            for d in &self.dirty {
-                out.say(format!(
-                    "  {} [{}]{}",
-                    style::out(CYAN, format!("{:<width$}", d.key)),
-                    d.fields.join(", "),
-                    if d.lossy_touched {
-                        style::out(YELLOW, "  (read-only region edited)")
-                    } else {
-                        String::new()
-                    }
-                ));
-            }
-            out.hint("use \"jired diff\" to review, \"jired push\" to send");
-        }
-        if !self.staged_transitions.is_empty() {
-            out.say(format!(
-                "\n{}",
-                style::out(
-                    BOLD,
-                    format!("{} staged transition(s):", self.staged_transitions.len())
-                )
-            ));
-            for t in &self.staged_transitions {
-                out.say(format!(
-                    "  {} {} → {} ({})",
-                    style::out(CYAN, format!("{:<width$}", t.key)),
-                    t.from.as_deref().unwrap_or("?"),
-                    t.to,
-                    t.origin
-                ));
-            }
-            // How to take one back, not only how to send it: a move nobody
-            // meant is the case where somebody reads this list most closely.
-            let moved = self
-                .staged_transitions
-                .iter()
-                .any(|t| t.origin == "board-move");
-            let edited = self
-                .staged_transitions
-                .iter()
-                .any(|t| t.origin == "frontmatter");
-            out.hint("use \"jired push\" to send them");
-            match (edited, moved) {
-                (true, true) => out.hint(
-                    "to drop one, set `status:` back in the file or move the link back; \
-                     \"jired doctor --regroup\" puts every card back",
-                ),
-                (true, false) => out.hint("to drop one, set `status:` back in the file"),
-                (false, _) => out.hint(
-                    "to drop one, move the link back; \"jired doctor --regroup\" puts every card back",
-                ),
-            }
-        }
+        render_new_issues(out, &self.new_issues, width);
+        render_dirty(out, &self.dirty, width);
+        render_staged(out, &self.staged_transitions, width);
         if !self.behind.is_empty() {
             out.say(format!(
                 "\n{}",
@@ -227,49 +150,8 @@ impl StatusReport {
             out.say(format!("  {}", self.behind.join(", ")));
             out.hint("use \"jired pull\" to update them");
         }
-        if !self.conflicts.is_empty() {
-            out.say(format!(
-                "\n{}",
-                style::out(
-                    RED,
-                    format!("{} recorded conflict(s):", self.conflicts.len())
-                )
-            ));
-            for c in &self.conflicts {
-                out.say(format!(
-                    "  {:<width$} {}{}",
-                    c.issue_key,
-                    c.field,
-                    c.resolved
-                        .as_ref()
-                        .map(|r| format!("  (resolved: {r})"))
-                        .unwrap_or_default()
-                ));
-            }
-            out.hint("use \"jired resolve --ours|--theirs\", or edit and \"jired resolve --done\"");
-        }
-        if !self.pending_ops.is_empty() {
-            out.say(format!(
-                "\n{}",
-                style::out(
-                    YELLOW,
-                    format!("{} unfinished push operation(s):", self.pending_ops.len())
-                )
-            ));
-            for op in &self.pending_ops {
-                out.say(format!(
-                    "  {:<width$} {} ({}){}",
-                    op.issue_key,
-                    op.kind,
-                    op.status,
-                    op.error
-                        .as_ref()
-                        .map(|e| format!(": {e}"))
-                        .unwrap_or_default()
-                ));
-            }
-            out.hint("use \"jired push --resume\" to finish them");
-        }
+        render_conflicts(out, &self.conflicts, width);
+        render_pending(out, &self.pending_ops, width);
         if !self.unchanged.is_empty() {
             out.say(format!(
                 "\n{}",
@@ -303,7 +185,7 @@ impl StatusReport {
             out.hint("use \"jired init-agents\" to rewrite them, or \"jired doctor\"");
         }
         if self.is_clean() {
-            out.say("\nnothing to push, no conflicts");
+            out.say(format!("\n{CLEAN}"));
             if self.behind.is_empty() && self.workspace.last_fetch_at.is_some() {
                 out.hint("use \"jired pull\" to check the server for changes");
             }
@@ -331,6 +213,190 @@ impl StatusReport {
             && self.conflicts.is_empty()
             && self.pending_ops.is_empty()
             && self.staged_transitions.is_empty()
+    }
+}
+
+/// What in the workspace is waiting on the user: the part of `status` that
+/// says whether there is anything to push or resolve.
+///
+/// `init` and `pull` end with it. Without it a fresh workspace said "next:
+/// jired status", and the only way to learn it was clean was to run that —
+/// which is the first thing anyone, and every agent, then did.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceState {
+    /// True when nothing below is listed: nothing to push, no conflicts.
+    pub clean: bool,
+    pub new_issues: Vec<NewIssue>,
+    pub dirty: Vec<DirtyIssue>,
+    pub staged_transitions: Vec<StagedTransition>,
+    pub conflicts: Vec<crate::store::state::ConflictRow>,
+    pub pending_ops: Vec<crate::store::state::PendingOp>,
+}
+
+impl WorkspaceState {
+    /// The state as `status` would report it now.
+    pub fn now(ctx: &mut Context) -> Result<Self> {
+        let report = run(ctx, &StatusArgs::default())?;
+        Ok(Self {
+            clean: report.is_clean(),
+            new_issues: report.new_issues,
+            dirty: report.dirty,
+            staged_transitions: report.staged_transitions,
+            conflicts: report.conflicts,
+            pending_ops: report.pending_ops,
+        })
+    }
+
+    /// The same sections and closing line `status` prints, without its header.
+    pub fn render(&self, out: Out) {
+        let width = self
+            .new_issues
+            .iter()
+            .map(|n| n.key.len())
+            .chain(self.dirty.iter().map(|d| d.key.len()))
+            .chain(self.staged_transitions.iter().map(|t| t.key.len()))
+            .chain(self.conflicts.iter().map(|c| c.issue_key.len()))
+            .chain(self.pending_ops.iter().map(|o| o.issue_key.len()))
+            .max()
+            .unwrap_or(10)
+            .clamp(8, 30);
+        render_new_issues(out, &self.new_issues, width);
+        render_dirty(out, &self.dirty, width);
+        render_staged(out, &self.staged_transitions, width);
+        render_conflicts(out, &self.conflicts, width);
+        render_pending(out, &self.pending_ops, width);
+        if self.clean {
+            out.say(format!("\n{CLEAN}"));
+        }
+    }
+}
+
+/// The line a workspace with nothing outstanding ends on, in `status`, `init`
+/// and `pull` alike.
+pub const CLEAN: &str = "nothing to push, no conflicts";
+
+fn render_new_issues(out: Out, new_issues: &[NewIssue], width: usize) {
+    use crate::style::{self, BOLD, CYAN};
+    if !new_issues.is_empty() {
+        out.say(format!(
+            "\n{}",
+            style::out(BOLD, format!("{} new local issue(s):", new_issues.len()))
+        ));
+        for n in new_issues {
+            // Padded before painting: escape codes count towards a format
+            // width and would knock every following column out of line.
+            out.say(format!(
+                "  {}  {}",
+                style::out(CYAN, format!("{:<width$}", n.key)),
+                n.file
+            ));
+        }
+        out.hint("use \"jired push\" to create them in Jira");
+    }
+}
+
+fn render_dirty(out: Out, dirty: &[DirtyIssue], width: usize) {
+    use crate::style::{self, BOLD, CYAN, YELLOW};
+    if !dirty.is_empty() {
+        out.say(format!(
+            "\n{}",
+            style::out(BOLD, format!("{} issue(s) with local edits:", dirty.len()))
+        ));
+        for d in dirty {
+            out.say(format!(
+                "  {} [{}]{}",
+                style::out(CYAN, format!("{:<width$}", d.key)),
+                d.fields.join(", "),
+                if d.lossy_touched {
+                    style::out(YELLOW, "  (read-only region edited)")
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        out.hint("use \"jired diff\" to review, \"jired push\" to send");
+    }
+}
+
+fn render_staged(out: Out, staged: &[StagedTransition], width: usize) {
+    use crate::style::{self, BOLD, CYAN};
+    if !staged.is_empty() {
+        out.say(format!(
+            "\n{}",
+            style::out(BOLD, format!("{} staged transition(s):", staged.len()))
+        ));
+        for t in staged {
+            out.say(format!(
+                "  {} {} → {} ({})",
+                style::out(CYAN, format!("{:<width$}", t.key)),
+                t.from.as_deref().unwrap_or("?"),
+                t.to,
+                t.origin
+            ));
+        }
+        // How to take one back, not only how to send it: a move nobody
+        // meant is the case where somebody reads this list most closely.
+        let moved = staged.iter().any(|t| t.origin == "board-move");
+        let edited = staged.iter().any(|t| t.origin == "frontmatter");
+        out.hint("use \"jired push\" to send them");
+        match (edited, moved) {
+            (true, true) => out.hint(
+                "to drop one, set `status:` back in the file or move the link back; \
+                 \"jired doctor --regroup\" puts every card back",
+            ),
+            (true, false) => out.hint("to drop one, set `status:` back in the file"),
+            (false, _) => out.hint(
+                "to drop one, move the link back; \"jired doctor --regroup\" puts every card back",
+            ),
+        }
+    }
+}
+
+fn render_conflicts(out: Out, conflicts: &[crate::store::state::ConflictRow], width: usize) {
+    use crate::style::{self, RED};
+    if !conflicts.is_empty() {
+        out.say(format!(
+            "\n{}",
+            style::out(RED, format!("{} recorded conflict(s):", conflicts.len()))
+        ));
+        for c in conflicts {
+            out.say(format!(
+                "  {:<width$} {}{}",
+                c.issue_key,
+                c.field,
+                c.resolved
+                    .as_ref()
+                    .map(|r| format!("  (resolved: {r})"))
+                    .unwrap_or_default()
+            ));
+        }
+        out.hint("use \"jired resolve --ours|--theirs\", or edit and \"jired resolve --done\"");
+    }
+}
+
+fn render_pending(out: Out, pending_ops: &[crate::store::state::PendingOp], width: usize) {
+    use crate::style::{self, YELLOW};
+    if !pending_ops.is_empty() {
+        out.say(format!(
+            "\n{}",
+            style::out(
+                YELLOW,
+                format!("{} unfinished push operation(s):", pending_ops.len())
+            )
+        ));
+        for op in pending_ops {
+            out.say(format!(
+                "  {:<width$} {} ({}){}",
+                op.issue_key,
+                op.kind,
+                op.status,
+                op.error
+                    .as_ref()
+                    .map(|e| format!(": {e}"))
+                    .unwrap_or_default()
+            ));
+        }
+        out.hint("use \"jired push --resume\" to finish them");
     }
 }
 

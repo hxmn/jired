@@ -444,6 +444,8 @@ fn init_creates_the_workspace_and_agent_files() {
     assert_eq!(report["account"]["auth_kind"], "api_token");
     assert_eq!(report["account"]["display_name"], "Ilya A");
     assert_eq!(report["workspace"]["project"], "PROJ");
+    // It ends on the workspace's state, so nobody has to ask `status`.
+    assert_eq!(report["state"]["clean"], true, "{report}");
 
     // The config file is the whole picture, and explains itself.
     let config = ws.read(".jired/config.toml");
@@ -9364,6 +9366,14 @@ fn grouping_folders_are_never_mistaken_for_issues() {
     let again = ws.json(&["pull"]);
     assert_eq!(again["updated"].as_array().unwrap().len(), 0);
     assert_eq!(again["unchanged"], 3);
+    // And says so, the way `status` would, so nobody has to ask.
+    assert_eq!(again["state"]["clean"], true, "{again}");
+    let text = ws.cmd(&["pull"]).output().unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.trim_end().ends_with("nothing to push, no conflicts"),
+        "{text}"
+    );
 }
 
 #[test]

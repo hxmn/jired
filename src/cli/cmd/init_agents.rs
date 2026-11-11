@@ -609,6 +609,9 @@ pub fn render() -> String {
         "jired pull --json              # exit 5 means conflicts; see \"Conflicts\" below\n",
     );
     s.push_str("#   `updated[].changes` says what each issue's pull brought in\n");
+    s.push_str(
+        "#   `state` is what `status` would report next; `state.clean` needs no second call\n",
+    );
     s.push_str("#   ... edit the .md files ...\n");
     s.push_str("jired diff --json              # confirm only intended changes\n");
     s.push_str("jired diff --stat              # the same, as one printed line per issue\n");

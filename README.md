@@ -40,7 +40,7 @@ mkdir my-sprint && cd my-sprint
 jired init               # asks for the URL, who you are, and which project
 
 jired status            # what's dirty, behind, or conflicted
-jired pull              # write issue files, and say what changed
+jired pull              # write issue files, say what changed and what is left
 $EDITOR "PROJ-0142. Fix login flow.md"
 jired create            # fill in a new issue on a form, or pass --summary
 jired edit              # or search for it and change it in a form

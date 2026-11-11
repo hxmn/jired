@@ -44,6 +44,11 @@ pub struct PullReport {
     /// a grouping folder that could not be rebuilt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// What is left to push or resolve once the pull is written, filled in by
+    /// the command rather than the merge: `resolve` re-merges through here
+    /// and has its own report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<crate::sync::status::WorkspaceState>,
 }
 
 #[derive(Debug, Clone, Serialize)]

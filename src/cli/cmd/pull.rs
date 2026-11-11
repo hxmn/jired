@@ -76,8 +76,12 @@ pub fn run(g: &GlobalArgs, args: &PullArgs, out: Out) -> Result<ExitCode> {
         }
     }
 
-    let report = crate::sync::pull::run(&mut ctx, args)?;
+    let mut report = crate::sync::pull::run(&mut ctx, args)?;
     report.render(out);
+    report.state = closing_state(&mut ctx, &report);
+    if let Some(state) = &report.state {
+        state.render(out);
+    }
     out.emit("pull", &report);
     // Conflicts are a distinct, scriptable outcome rather than an error.
     Ok(if report.conflicts.is_empty() {
@@ -85,4 +89,23 @@ pub fn run(g: &GlobalArgs, args: &PullArgs, out: Out) -> Result<ExitCode> {
     } else {
         ExitCode::Conflict
     })
+}
+
+/// The workspace's state once a pull is written, for the line that ends it.
+///
+/// Not after a dry run, which wrote nothing, and not after a pull with
+/// conflicts of its own: under the default strategy those are not recorded,
+/// and a closing "nothing to push, no conflicts" under "2 conflicting issues"
+/// would contradict the line above it. Best-effort, because the pull itself
+/// succeeded and a state that cannot be read is no reason to say otherwise.
+pub fn closing_state(
+    ctx: &mut Context,
+    report: &crate::sync::pull::PullReport,
+) -> Option<crate::sync::status::WorkspaceState> {
+    if report.dry_run || !report.conflicts.is_empty() {
+        return None;
+    }
+    crate::sync::status::WorkspaceState::now(ctx)
+        .map_err(|e| tracing::debug!("cannot read the workspace state: {}", e.message))
+        .ok()
 }
