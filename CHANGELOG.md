@@ -8,6 +8,54 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.26.0] — 2026-11-11
+
+### Breaking
+
+- **Two boards with the same name get a folder each, `boards/<name> (<id>)/`.**
+  Jira names a project's boards after the project, so `DELTA board` is often
+  two boards, and they shared `boards/DELTA board/`. A board whose name is its
+  own keeps its plain folder.
+
+### Added
+
+- **`jired init` takes the server from the workspaces beside `--dir`.** With no
+  `--url`, the directories next to the new one are read: when they all name
+  one server it is used, with the deployment, sign-in method and account they
+  agree on, so the credential already stored for it is found too. Adding a
+  project is `jired init --dir ../DELTA --project DELTA --no-input`. Several
+  servers there is exit 7 listing each one, and the workspaces using it, under
+  `details.servers`; interactively they are offered as a list. A flag, the
+  environment or a config file still wins.
+- **`init` and `pull` end with the workspace state.** In place of "next: jired
+  status", the output ends the way `status` does: `nothing to push, no
+  conflicts`, or the staged, dirty and conflicted lists. `jired/init/1` and
+  `jired/pull/1` carry the same lists in a new `state` object, with `clean`
+  for the one-word answer. A pull leaves it out after `--dry-run` and when it
+  reported conflicts of its own.
+- **`init -h` says what is filled in when left out** (`--dir` created; `--url`,
+  `--deployment`, `--auth`, `--email`, `--token` worked out) and shows a call
+  that needs no prompts.
+- **`diff` lists a card moved between board columns** as a `status` row with
+  `"origin": "board-move"`, so it no longer says "no differences" while
+  `status` lists a staged transition. `diff --exit-code` counts it.
+- **`status` says how to drop a staged transition:** set `status:` back, or
+  move the link back (`jired doctor --regroup` puts every card back).
+
+### Fixed
+
+- **A fresh pull stages no board moves.** Two boards sharing a folder judged
+  each other's cards, so `status` reported `Backlog → Backlog (board-move)`
+  for every card one board maps to a status the other board's same-named
+  column does not hold, and `push` would have sent those transitions. A move
+  to the status the issue already has is never staged now, and columns whose
+  names come out as one folder are judged together.
+- **A failed `init` leaves the directory as it found it.** It used to make
+  `.jired/` first, so an exit-7 run for a missing URL left `.jired/logs` and
+  `.jired/templates`, and later commands took the directory for a workspace.
+  The sign-in comes first now, and a failure after it removes `.jired/`, or
+  `--dir` when the run created it.
+
 ## [0.25.0] — 2026-11-02
 
 ### Breaking
