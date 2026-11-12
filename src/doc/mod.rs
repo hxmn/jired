@@ -385,13 +385,25 @@ fn is_file_section(name: &str) -> bool {
 /// one a person is told to write, starts with the bracketed marker.
 ///
 /// A heading that opens with a link — `### [the spec](https://…)` — starts with
-/// a bracket too, and is body.
+/// a bracket too, and is body. The bracket that closes it is the first one not
+/// escaped: a link whose text holds a `]` is written `[a\]b](https://…)`, and
+/// stopping at the escaped one found no `(` after it, so the heading was read
+/// as an entry and the comment above it lost the rest of its body.
 fn is_entry_heading(text: &str) -> bool {
     let text = text.trim_start();
-    text.starts_with('[')
-        && text
-            .find(']')
-            .is_some_and(|end| !text[end + 1..].starts_with('('))
+    if !text.starts_with('[') {
+        return false;
+    }
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            ']' => return !text[at + 1..].starts_with('('),
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `[marker]` headings that sit outside the two sections that own them, and
@@ -1214,6 +1226,28 @@ mod tests {
         s.push_str("## Description\n\n### Background\n\ntext\n");
         let doc = IssueDoc::parse(&s).unwrap();
         assert!(doc.description.contains("### Background"));
+    }
+
+    /// A link heading is body even when its text holds a bracket, which
+    /// Markdown writes escaped. Found by the round-trip property test.
+    #[test]
+    fn a_link_heading_with_an_escaped_bracket_is_body_not_an_entry() {
+        assert!(is_entry_heading("[new] 45m"));
+        assert!(is_entry_heading("[c-10812] Jane Doe — t"));
+        assert!(!is_entry_heading("[the spec](https://wiki.example/x)"));
+        assert!(!is_entry_heading(r"[\]](https://wiki.example/x)"));
+        assert!(!is_entry_heading(r"[a\]b](https://wiki.example/x)"));
+        assert!(!is_entry_heading("[never closed"));
+
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Comments\n\n### [c-1] A — t\n\n");
+        s.push_str("### [\\]](https://wiki.example/x)\n\nrest\n");
+        let doc = IssueDoc::parse(&s).unwrap();
+        assert_eq!(doc.comments.len(), 1);
+        assert_eq!(
+            doc.comments[0].body,
+            "### [\\]](https://wiki.example/x)\n\nrest"
+        );
     }
 
     #[test]
