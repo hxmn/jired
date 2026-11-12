@@ -8,6 +8,24 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.26.1] — 2026-11-12
+
+### Fixed
+
+- **A link heading whose text holds a bracket stays in the comment it is in.**
+  A comment or worklog body with a heading such as `### [a\]b](https://…)` —
+  a link whose text contains a `]`, which Markdown writes escaped — was cut
+  off at that heading: it was read as the `### [c-1]` marker of a new entry,
+  and the comment above it kept an empty body that a push would have sent
+  back. The marker's closing bracket is now the first one that is not escaped.
+
+### Documentation
+
+- **The README opens with what jired does**: a terminal session of the whole
+  cycle, a diagram of where the snapshot and the files sit, the reasons to
+  use it, and a contents list. The reference below it is the same, less three
+  commands the table listed twice.
+
 ## [0.26.0] — 2026-11-11
 
 ### Breaking

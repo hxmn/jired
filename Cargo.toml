@@ -1,6 +1,6 @@
 [package]
 name = "jired"
-version = "0.26.0"
+version = "0.26.1"
 edition = "2021"
 # std file locking (`File::try_lock`) stabilized in 1.89.
 rust-version = "1.89"
