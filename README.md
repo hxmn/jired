@@ -1,6 +1,29 @@
-# jired
+<h1 align="center">jired</h1>
 
-Work with Jira issues as Markdown files, offline-first.
+<p align="center">
+  <strong>Jira issues as Markdown files.</strong><br>
+  Offline-first, with a sync you already know: <code>fetch</code>, <code>pull</code>, <code>diff</code>, <code>push</code>.
+</p>
+
+<p align="center">
+  <a href="https://github.com/hxmn/jired/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/hxmn/jired/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="#license"><img alt="License: MIT or Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg"></a>
+  <a href="#install"><img alt="Rust 1.89 or newer" src="https://img.shields.io/badge/rust-1.89%2B-orange.svg"></a>
+  <a href="#cloud-or-data-center"><img alt="Jira Cloud and Data Center" src="https://img.shields.io/badge/Jira-Cloud%20%C2%B7%20Data%20Center-0052CC.svg"></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#what-a-file-looks-like">The file</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="#for-agents">For agents</a> ·
+  <a href="#when-something-goes-wrong">Troubleshooting</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/cycle.svg" width="860" alt="A terminal session: jired pull writes three issues as Markdown files, one is edited offline, jired diff shows the changed summary and a new comment, and jired push sends both to Jira.">
+</p>
 
 `jired` fetches issues into the current directory as `.md` files and gives you a
 git-like cycle — `fetch`, `pull`, `diff`, `push` — to sync them back. All reads
@@ -8,6 +31,113 @@ and edits work without a network; only `fetch`, `pull`, and `push` need one.
 
 Supports **Jira Cloud** (REST v3, ADF) and **Jira Data Center** (REST v2, wiki
 markup) behind one interface.
+
+```mermaid
+flowchart LR
+    jira[("Jira<br>Cloud · Data Center")]
+    snap[".jired/<br>snapshot of the server"]
+    files["PROJ-0142. Fix login flow.md<br>one file per issue, edited offline"]
+    jira -- "fetch" --> snap
+    snap -- "pull: merge into the files" --> files
+    files -- "push: only what you changed" --> jira
+```
+
+## Why
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**An issue is a file.** YAML frontmatter for the fields, Markdown for the
+description, checklist, comments and worklogs. Edit it in anything, `grep` it,
+script it — see [what a file looks like](#what-a-file-looks-like).
+
+</td>
+<td width="50%" valign="top">
+
+**Offline is the default.** Reading, listing, editing, diffing and reporting
+all run off the working copy, and nothing reaches Jira until you `push`.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**You see what will be sent.** `jired diff` is the change; `jired push
+--dry-run` is the exact API calls. A push that the server moved under is
+refused, not merged over — [exit code 5](#exit-codes).
+
+</td>
+<td valign="top">
+
+**A 2xx is not taken on trust.** `push` reads each issue back and checks the
+change is in it. What Jira accepted and quietly ignored is reported as failed,
+and your edit stays in the file.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Nothing is lost in translation.** Panels, macros and media that Markdown
+cannot hold are kept as [read-only raw blocks](#lossy-regions-and-conflicts)
+and go back byte-identical.
+
+</td>
+<td valign="top">
+
+**Built for agents as much as people.** `--json` with a published schema on
+every command, `--no-input`, stable exit codes, and a generated `CLAUDE.md` /
+`AGENTS.md` — see [For agents](#for-agents).
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Cloud and Data Center, one interface.** ADF or wiki markup, account ids or
+usernames, two REST APIs: the files and the commands are the same.
+
+</td>
+<td valign="top">
+
+**More than issues.** [Sprints](#sprints), [versions](#versions),
+[saved filters](#saved-filters), [sub-tasks](#sub-tasks), attachments, time
+booking and [reports](#commands), and forms and pickers in the terminal.
+
+</td>
+</tr>
+</table>
+
+<details>
+<summary><strong>Contents</strong></summary>
+
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [For agents](#for-agents) — [Permissions](#permissions)
+- [What a file looks like](#what-a-file-looks-like)
+- [The file format](#the-file-format) — [Frontmatter](#frontmatter) ·
+  [Sections](#sections) · [Lossy regions and conflicts](#lossy-regions-and-conflicts) ·
+  [Colour](#colour) · [Times](#times)
+- [Commands](#commands) — [History](#history) · [Watching](#watching) ·
+  [The issue picker](#the-issue-picker) · [Sprints](#sprints) ·
+  [Versions](#versions) · [Saved filters](#saved-filters) ·
+  [Sub-tasks](#sub-tasks) · [Grouping folders](#grouping-folders) ·
+  [Templates](#templates) ·
+  [The server's own API reference](#the-servers-own-api-reference) ·
+  [Shell completions](#shell-completions)
+- [Exit codes](#exit-codes)
+- [When something goes wrong](#when-something-goes-wrong) — [TLS](#tls) ·
+  [Proxies](#proxies) · [Headless machines and CI](#headless-machines-and-ci) ·
+  [Cloud or Data Center](#cloud-or-data-center) · [The databases](#the-databases)
+- [Configuration](#configuration)
+- [Reporting a problem](#reporting-a-problem)
+- [Repairing a workspace](#repairing-a-workspace)
+- [Documentation](#documentation)
+- [Development](#development)
+- [License](#license)
+
+</details>
 
 ## Install
 
@@ -414,7 +544,6 @@ the filename you were just editing instead of retyping the key.
 | `diff [ISSUES…]` | `--against base` (default: what `push` would send) or `--against remote` (what `pull` would bring in); `--stat`, `--exit-code` |
 | `status` | dirty, behind, staged, conflicted; `--all` also lists unchanged issues |
 | `edit [ISSUE]` | change an issue on a form; without an issue, pick one from the list — see [The issue picker](#the-issue-picker) |
-| `logwork [ISSUE] [TIME]` | book time against an issue; fills in a form when either is missing |
 | `comment [ISSUE] [-m TEXT]` | stage a comment; without an issue, pick one from the list; without `-m` it opens `$VISUAL`/`$EDITOR`, or reads stdin when piped |
 | `create --summary S` | write a `NEW-<hex>. Summary.md`; push creates the issue and renames the file to the real key. `--assignee`, `--sprint`, `--labels`, `--priority`, `--component`, `--epic` and `--set field=value` fill it in; `--template NAME\|PATH` starts from a skeleton |
 | `transition ISSUES… --to STATUS` | stage a workflow change across several issues, each validated against its own workflow; `--list` shows what one issue can do, `--field k=v` fills a transition screen |
@@ -423,8 +552,6 @@ the filename you were just editing instead of retyping the key.
 | `link ISSUES DIRECTION OTHERS` / `link ISSUES --web URL [--title T]` | stage a `links:` line — `jired link TSK-740 is blocked by TSK-739`; `unlink ISSUES [DIRECTION] OTHERS` and `unlink ISSUES --web URL` take one out |
 | `parent ISSUES… --to ISSUE` | move sub-tasks under a different parent — see [Sub-tasks](#sub-tasks) |
 | `set --field F --value V ISSUES…` | stage any editable field across issues, including `customfield_*` ids |
-| `label add\|remove\|set LABEL ISSUES…` | stage a label change across issues |
-| `set --field F --value V ISSUES…` | stage any editable field across issues |
 | `attach ISSUE FILE…` | stage an upload into the issue's attachment folder |
 | `attachments pull [ISSUES…]` / `list` | download attachment content over the stubs, or show what is present |
 | `logwork [ISSUE] [TIME]` | book time — `jired logwork PROJ-142 "2h 30m"`; with either missing it opens a form, `--push` sends it straight away |
@@ -1132,6 +1259,19 @@ fixing. Run it after upgrading jired, and after changing what is ignored.
 - [docs/security.md](docs/security.md) — credential storage, threat model, TLS
 - [docs/plan/](docs/plan/README.md) — design and phased delivery plan
 - [CHANGELOG.md](CHANGELOG.md) — what changed between versions
+
+## Development
+
+```sh
+cargo test --all-targets            # unit, end-to-end against recorded fixtures, schema contract
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+```
+
+The end-to-end suite runs the real binary against a recorded fixture client, so
+it needs no Jira and no network. [CLAUDE.md](CLAUDE.md) says what a change has
+to touch besides the code — tests, schemas, the generated agent docs, this file
+— and how versions are cut: every push to `main` is a release.
 
 ## License
 
