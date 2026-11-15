@@ -1855,6 +1855,31 @@ fn human_mode_narrates_on_stdout() {
     assert!(stdout.contains("new"), "expected a summary: {stdout}");
 }
 
+/// A rewritten description is a change `diff --stat` has to name: "0
+/// field(s), +3 -1" read as nothing to send.
+#[test]
+fn diff_stat_names_what_changed() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = ws.issue_file();
+    let text = ws.read(file).replace(
+        "for the rollback plan.",
+        "for the rollback plan.\n\nA new paragraph.",
+    );
+    ws.write(file, &text);
+
+    let out = ws.cmd(&["diff", "--stat"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("DC-77"), "{stdout}");
+    assert!(stdout.contains("Description, +"), "{stdout}");
+    assert!(
+        stdout.contains("1 issue(s), 0 field(s) and 1 section(s) changed"),
+        "{stdout}"
+    );
+    assert_eq!(ws.json(&["diff"])["stat"]["sections"], 1);
+}
+
 #[test]
 fn every_json_output_validates_against_its_published_schema() {
     let ws = Ws::new();

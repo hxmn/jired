@@ -624,8 +624,9 @@ pub fn render() -> String {
     s.push_str("jired push --json              # apply\n");
     s.push_str("```\n\n");
     s.push_str(
-        "`--stat` shortens what is *printed* to one line per issue — how many \
-         fields changed, how many lines were added and removed — and a total. It \
+        "`--stat` shortens what is *printed* to one line per issue — the fields \
+         and sections that changed, by name, and how many lines were added and \
+         removed — and a total. It \
          does not change the `--json` document, which carries those same totals \
          in `stat` and is the same either way, so there is no reason to pass both. \
          `--exit-code` turns \"is there anything to send\" into a status code, \

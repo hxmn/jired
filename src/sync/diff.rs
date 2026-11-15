@@ -24,6 +24,9 @@ pub struct DiffReport {
 pub struct Stat {
     pub issues: usize,
     pub fields: usize,
+    /// Sections with a change in them — the description, a comment, the
+    /// checklist — counted apart from frontmatter fields.
+    pub sections: usize,
     pub added: usize,
     pub removed: usize,
 }
@@ -84,21 +87,33 @@ impl DiffReport {
             .clamp(8, 30);
 
         if stat_only {
+            // What changed is named, not counted: "0 field(s), +50 -7" for a
+            // rewritten description read as nothing to send.
             for issue in &self.issues {
                 let added: usize = issue.sections.iter().map(|s| s.added).sum();
                 let removed: usize = issue.sections.iter().map(|s| s.removed).sum();
-                out.say(format!(
-                    "{:<key_width$} {:>2} field(s), {} {}",
-                    issue.key,
-                    issue.fields.iter().filter(|f| f.sendable).count(),
-                    style::out(GREEN, format!("+{added}")),
-                    style::out(RED, format!("-{removed}"))
-                ));
+                let names: Vec<&str> = issue
+                    .fields
+                    .iter()
+                    .filter(|f| f.sendable)
+                    .map(|f| f.field.as_str())
+                    .chain(issue.sections.iter().map(|s| s.section.as_str()))
+                    .collect();
+                let mut line = format!("{:<key_width$} {}", issue.key, names.join(", "));
+                if added + removed > 0 {
+                    line.push_str(&format!(
+                        ", {} {}",
+                        style::out(GREEN, format!("+{added}")),
+                        style::out(RED, format!("-{removed}"))
+                    ));
+                }
+                out.say(line);
             }
             out.say(format!(
-                "{} issue(s), {} field(s) changed, {} {}",
+                "{} issue(s), {} field(s) and {} section(s) changed, {} {}",
                 self.stat.issues,
                 self.stat.fields,
+                self.stat.sections,
                 style::out(GREEN, format!("+{}", self.stat.added)),
                 style::out(RED, format!("-{}", self.stat.removed))
             ));
@@ -241,6 +256,7 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
 
         stat.issues += 1;
         stat.fields += diff.fields.iter().filter(|f| f.sendable).count();
+        stat.sections += diff.sections.len();
         stat.added += diff.sections.iter().map(|s| s.added).sum::<usize>();
         stat.removed += diff.sections.iter().map(|s| s.removed).sum::<usize>();
         issues.push(IssueDiff { file, ..diff });

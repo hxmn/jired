@@ -518,7 +518,10 @@ working↔remote (`--against remote`: what `pull` would bring in), base↔remote
 (`--remote`). `--all` was the old spelling of `--against remote` and is hidden and
 deprecated — on every other command `--all` widens the scope, and here it selected
 a comparison.
-Unified diff for bodies (`similar`), field-level table for metadata; `--stat` summary.
+Unified diff for bodies (`similar`), field-level table for metadata; `--stat`
+prints one line per issue naming the fields and sections that changed
+(`summary, Description, +50 -7`) and a total that counts both; `stat.sections`
+carries the section count.
 Exit 0 even with differences unless `--exit-code` (git-style). Fully offline.
 Against the working copy, `diff` shows what a push could send and nothing else:
 a `sprint:` difference confined to the earlier entries is history the board API

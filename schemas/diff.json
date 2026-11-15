@@ -64,6 +64,10 @@
       "properties": {
         "issues": { "type": "integer" },
         "fields": { "type": "integer" },
+        "sections": {
+          "type": "integer",
+          "description": "Sections with a change: the description, a comment, the checklist, the worklogs"
+        },
         "added": { "type": "integer" },
         "removed": { "type": "integer" }
       }
