@@ -27,6 +27,13 @@ impl Converted {
 
 /// Server rich text → Markdown, capturing anything Markdown cannot express.
 pub fn to_markdown(rich: &RichText) -> Converted {
+    to_markdown_in(rich, None)
+}
+
+/// [`to_markdown`] for a file whose attachments sit in `attachments`, the
+/// folder's path relative to the file: an embedded image or an attachment link
+/// points into it. See [`markdown::render_with`].
+pub fn to_markdown_in(rich: &RichText, attachments: Option<&str>) -> Converted {
     let mut store = RawStore::new();
     let doc = match rich {
         RichText::Adf(v) => adf::to_ast(v, &mut store),
@@ -40,7 +47,7 @@ pub fn to_markdown(rich: &RichText) -> Converted {
         // so a comment nobody had touched compared as edited and was planned as
         // one. Line endings are not content worth an edit to someone else's
         // comment; they are written the one way the file can keep.
-        markdown: markdown::render(&doc, &store).replace("\r\n", "\n"),
+        markdown: markdown::render_with(&doc, &store, attachments).replace("\r\n", "\n"),
         raw: store.into_blocks(),
     }
 }

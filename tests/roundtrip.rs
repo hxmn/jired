@@ -61,6 +61,7 @@ fn plain_inline() -> impl Strategy<Value = Inline> {
             }),
         1 => ("[A-Z][a-z]{2,6}", "[a-z0-9]{4,10}")
             .prop_map(|(display, id)| Inline::Mention { id, display }),
+        1 => "[a-z]{1,6}\\.png".prop_map(|src| Inline::Image { src }),
     ]
 }
 

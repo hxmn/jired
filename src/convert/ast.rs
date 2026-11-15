@@ -128,6 +128,11 @@ pub enum Inline {
         text: Vec<Inline>,
         href: String,
     },
+    /// An embedded image: `!name.png!` in wiki markup, `![](src)` in
+    /// Markdown. `src` is an attachment's file name or a URL.
+    Image {
+        src: String,
+    },
     /// `@[Display Name](accountId)` in Markdown.
     Mention {
         id: String,
@@ -231,6 +236,7 @@ pub fn inline_text(inlines: &[Inline]) -> String {
                 let t = inline_text(text);
                 out.push_str(if t.is_empty() { href } else { &t });
             }
+            Inline::Image { src } => out.push_str(src),
             Inline::Mention { display, .. } => {
                 out.push('@');
                 out.push_str(display);

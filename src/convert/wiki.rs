@@ -550,6 +550,17 @@ fn parse_inlines_in(text: &str, store: &mut RawStore, within: Option<u8>) -> Vec
                     i += 1;
                 }
             },
+            b'!' => match image_end(text, i) {
+                Some(close) => {
+                    flush(&mut buf, &mut out);
+                    out.push(parse_image(&text[i..=close], store));
+                    i = close + 1;
+                }
+                None => {
+                    buf.push('!');
+                    i += 1;
+                }
+            },
             b'[' => match bracket_end(text, i) {
                 Some(close) if close > i + 1 => {
                     flush(&mut buf, &mut out);
@@ -689,6 +700,45 @@ fn unescape(text: &str) -> String {
     out
 }
 
+/// Find the `!` that closes an embedded image opened at `open`.
+///
+/// Jira takes `!name!` for an image wherever it sees one, but text is only
+/// read back as one when it names a file — a dot in the name or a URL — so a
+/// sentence with two exclamation marks in it stays a sentence.
+fn image_end(text: &str, open: usize) -> Option<usize> {
+    let rest = &text[open + 1..];
+    let first = rest.chars().next()?;
+    if first.is_whitespace() || first == '!' {
+        return None;
+    }
+    let rel = rest.find(['!', '\n'])?;
+    if rest.as_bytes()[rel] != b'!' {
+        return None;
+    }
+    let content = &rest[..rel];
+    let src = content.split('|').next().unwrap_or(content);
+    if src.ends_with(char::is_whitespace) || !(src.contains('.') || src.contains("://")) {
+        return None;
+    }
+    Some(open + 1 + rel)
+}
+
+/// `!name!` is an image Markdown can show; `!name|thumbnail!` and other
+/// parameters have nowhere to go there, so that form is kept as it is.
+fn parse_image(source: &str, store: &mut RawStore) -> Inline {
+    let content = &source[1..source.len() - 1];
+    match content.split_once('|') {
+        None => Inline::Image {
+            src: content.to_string(),
+        },
+        Some((src, _)) => Inline::Raw(store.insert(
+            source.to_string(),
+            format!("**[jired: image {src} — read-only]**"),
+            "image".to_string(),
+        )),
+    }
+}
+
 /// `[~user]`, `[text|href]`, `[href]` — the three bracket forms we understand.
 fn parse_bracket(content: &str, store: &mut RawStore) -> Inline {
     if let Some(user) = content.strip_prefix('~') {
@@ -706,10 +756,21 @@ fn parse_bracket(content: &str, store: &mut RawStore) -> Inline {
             // for it, so it is dropped rather than pushed into the href.
             href: unescape(rest.split('|').next().unwrap_or(rest).trim()),
         },
-        None => Inline::Link {
-            text: Vec::new(),
-            href: unescape(content.trim()),
-        },
+        // A bare `[href]` shows its target, and `[^name]` the attachment's
+        // name, so that is the link's text too: left empty, the file had
+        // `[](href)`, which shows nothing.
+        None => {
+            let href = unescape(content.trim());
+            let shown = href.strip_prefix('^').unwrap_or(&href).to_string();
+            Inline::Link {
+                text: if shown.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Inline::Text(shown)]
+                },
+                href,
+            }
+        }
     }
 }
 
@@ -1292,7 +1353,10 @@ fn render_inlines(inlines: &[Inline], store: &RawStore, ctx: Ctx) -> String {
                     // markup; emitting them would re-parse as plain text and
                     // make the conversion churn.
                     out.push_str(&label);
-                } else if label.is_empty() || label == *href {
+                } else if label.is_empty()
+                    || label == *href
+                    || href.strip_prefix('^') == Some(label.as_str())
+                {
                     out.push_str(&format!("[{href}]"));
                 } else {
                     out.push_str(&format!("[{label}|{href}]"));
@@ -1312,6 +1376,20 @@ fn render_inlines(inlines: &[Inline], store: &RawStore, ctx: Ctx) -> String {
                 out.push_str(&format!("[~{user}]"));
             }
             Inline::IssueKey(k) => out.push_str(k),
+            Inline::Image { src } => {
+                let fits = !src.is_empty()
+                    && !src.contains(['!', '|', '\n'])
+                    && src.trim() == src
+                    && (src.contains('.') || src.contains("://"));
+                if fits {
+                    out.push('!');
+                    out.push_str(src);
+                    out.push('!');
+                } else {
+                    // Not a name Jira can embed; the target survives as a link.
+                    out.push_str(&format!("[{}]", escape_in_brackets(src)));
+                }
+            }
             Inline::LineBreak => out.push('\n'),
             Inline::Raw(r) => {
                 if let Some(b) = store.get(&r.id) {
@@ -1335,6 +1413,7 @@ fn first_char(inline: &Inline, store: &RawStore) -> Option<char> {
         Inline::Strong(_) => Some('*'),
         Inline::Emphasis(_) => Some('_'),
         Inline::Strike(_) => Some('-'),
+        Inline::Image { .. } => Some('!'),
         Inline::Raw(r) => store.get(&r.id)?.node_json.chars().next(),
         _ => None,
     }
@@ -1342,7 +1421,8 @@ fn first_char(inline: &Inline, store: &RawStore) -> Option<char> {
 
 /// Whether a node on the same line can put a bare phrase delimiter there.
 ///
-/// A mark writes its own, and a region writes the server's text verbatim.
+/// A mark writes its own, a region writes the server's text verbatim, and an
+/// image is a pair of `!`.
 /// Code, links and mentions cannot: the reader looks for no partner inside
 /// them, and a key is letters, digits and one hyphen between them. A line
 /// break starts a line, and marks do not cross one.
@@ -1354,6 +1434,7 @@ fn may_hold_delimiter(inline: &Inline) -> bool {
             | Inline::Strike(_)
             | Inline::Raw(_)
             | Inline::Text(_)
+            | Inline::Image { .. }
     )
 }
 
@@ -1534,6 +1615,35 @@ mod escaping_tests {
         }
     }
 
+    /// An embedded image and an attachment link come into the file pointing
+    /// at the issue's attachment folder, and go back as Jira wrote them.
+    #[test]
+    fn images_and_attachment_links_point_into_the_attachment_folder() {
+        use crate::convert::markdown;
+        let src = "see !shot.png! and [^logs.zip], [the log|^logs.zip], [https://git.example/a/-/b]\n\n!https://img.example/x.png!";
+        let mut store = RawStore::new();
+        let doc = to_ast(src, &mut store);
+        assert!(store.is_empty(), "nothing here is lossy: {doc:?}");
+        let md = markdown::render_with(&doc, &store, Some(".PROJ-7. A summary"));
+        assert_eq!(
+            md,
+            "see ![](<.PROJ-7. A summary/shot.png>) and [logs.zip](<.PROJ-7. A summary/logs.zip>), \
+             [the log](<.PROJ-7. A summary/logs.zip>), <https://git.example/a/-/b>\n\n\
+             ![](https://img.example/x.png)\n"
+        );
+        let back = markdown::parse(&md, &store);
+        assert_eq!(from_ast(&back, &store), src);
+
+        // An image with parameters has no Markdown form and is kept as it is.
+        let mut store = RawStore::new();
+        let doc = to_ast("!shot.png|thumbnail!", &mut store);
+        assert_eq!(store.blocks()[0].label, "image");
+        assert_eq!(from_ast(&doc, &store), "!shot.png|thumbnail!");
+
+        // Two exclamation marks in a sentence are not an image.
+        assert_eq!(ast_of("Wow!Great!"), para("Wow!Great!"));
+    }
+
     /// A `|` in a table cell is escaped, and an escaped one or one inside a
     /// link does not split the cell.
     #[test]
@@ -1691,8 +1801,21 @@ mod tests {
             (
                 "[https://x]",
                 Inline::Link {
-                    text: vec![],
+                    text: vec![text("https://x")],
                     href: "https://x".into(),
+                },
+            ),
+            (
+                "[^logs.zip]",
+                Inline::Link {
+                    text: vec![text("logs.zip")],
+                    href: "^logs.zip".into(),
+                },
+            ),
+            (
+                "!shot.png!",
+                Inline::Image {
+                    src: "shot.png".into(),
                 },
             ),
             (

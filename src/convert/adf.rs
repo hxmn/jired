@@ -355,7 +355,15 @@ fn push_inline(inline: &Inline, marks: &MarkSet, store: &RawStore, out: &mut Vec
         Inline::Strong(content) => push_all(content, &marks.clone().with_strong(), store, out),
         Inline::Emphasis(content) => push_all(content, &marks.clone().with_em(), store, out),
         Inline::Strike(content) => push_all(content, &marks.clone().with_strike(), store, out),
+        // `^name` is wiki markup's attachment link, which a link into the
+        // attachment folder reads back as; ADF has no such target, so the
+        // text goes without one rather than with a link that leads nowhere.
+        Inline::Link { text, href } if href.starts_with('^') => push_all(text, marks, store, out),
         Inline::Link { text, href } => push_all(text, &marks.clone().with_link(href), store, out),
+        // ADF media needs an id from Cloud's media store, which a file in the
+        // working copy does not have; the target is kept as a link rather
+        // than dropped, which is what an image written in the file used to be.
+        Inline::Image { src } => push_text(src, &marks.clone().with_link(src), out),
         Inline::Mention { id, display } => out.push(json!({
             "type": "mention",
             "attrs": { "id": id, "text": format!("@{display}") },

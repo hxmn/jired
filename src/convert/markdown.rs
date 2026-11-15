@@ -69,16 +69,18 @@ const BREAK_TAG: &str = "<br>";
 
 /// Where inline content is being rendered; each flag rules something out.
 #[derive(Debug, Clone, Copy, Default)]
-struct Ctx {
+struct Ctx<'a> {
     /// Inside a GFM table cell: pipes must be escaped even inside code spans.
     in_table: bool,
     /// Inside a construct that cannot span lines (heading, table cell).
     one_line: bool,
     /// Inside link text, where a nested link would not parse.
     in_link: bool,
+    /// The issue's attachment folder, relative to the file, when known.
+    attachments: Option<&'a str>,
 }
 
-impl Ctx {
+impl Ctx<'_> {
     /// Headings and task items: content must stay on a single line.
     fn one_line(self) -> Self {
         Self {
@@ -94,11 +96,12 @@ impl Ctx {
         }
     }
 
-    fn table() -> Self {
+    fn table(self) -> Self {
         Self {
             in_table: true,
             one_line: true,
             in_link: false,
+            ..self
         }
     }
 }
@@ -111,7 +114,24 @@ impl Ctx {
 /// is unresolvable, and emitting a bare marker pair would invite the user to
 /// edit content that cannot be pushed back.
 pub fn render(doc: &Document, store: &RawStore) -> String {
-    let body = render_blocks(&doc.blocks, store, Ctx::default());
+    render_with(doc, store, None)
+}
+
+/// [`render`], with attachments written as links into `attachments`, the
+/// issue's attachment folder relative to its file.
+///
+/// Jira names an attachment by its file name alone — `!shot.png!`,
+/// `[^logs.zip]` — and a bare name in the file resolves next to the file, not
+/// in the folder the file sits beside. With the folder known, the image shows
+/// in a Markdown viewer and the link opens the file. Reading the file back
+/// needs no folder: [`parse`] takes any path into an attachment folder for an
+/// attachment.
+pub fn render_with(doc: &Document, store: &RawStore, attachments: Option<&str>) -> String {
+    let ctx = Ctx {
+        attachments,
+        ..Ctx::default()
+    };
+    let body = render_blocks(&doc.blocks, store, ctx);
     if body.is_empty() {
         String::new()
     } else {
@@ -324,7 +344,7 @@ fn strip_container_prefix<'a>(line: &'a str, prefix: &str) -> &'a str {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_blocks(blocks: &[Block], store: &RawStore, ctx: Ctx) -> String {
+fn render_blocks(blocks: &[Block], store: &RawStore, ctx: Ctx<'_>) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(blocks.len());
     let mut prev_kind: Option<u8> = None;
     for block in blocks {
@@ -351,7 +371,7 @@ fn list_kind(block: &Block) -> Option<u8> {
     }
 }
 
-fn render_block(block: &Block, store: &RawStore, ctx: Ctx) -> Option<String> {
+fn render_block(block: &Block, store: &RawStore, ctx: Ctx<'_>) -> Option<String> {
     let text = match block {
         Block::Paragraph(inlines) => render_inlines(inlines, store, ctx),
         Block::Heading { level, content } => {
@@ -425,7 +445,7 @@ fn render_block(block: &Block, store: &RawStore, ctx: Ctx) -> Option<String> {
                 .collect();
             rendered.join("\n")
         }
-        Block::Table(table) => render_table(table, store),
+        Block::Table(table) => render_table(table, store, ctx),
         Block::Rule => "---".to_string(),
         Block::Raw(r) => match store.get(&r.id) {
             Some(raw) => format!(
@@ -443,7 +463,7 @@ fn render_block(block: &Block, store: &RawStore, ctx: Ctx) -> Option<String> {
     }
 }
 
-fn render_table(table: &Table, store: &RawStore) -> String {
+fn render_table(table: &Table, store: &RawStore, ctx: Ctx<'_>) -> String {
     let width = table
         .header
         .as_ref()
@@ -457,7 +477,7 @@ fn render_table(table: &Table, store: &RawStore) -> String {
             .map(|i| {
                 cells
                     .get(i)
-                    .map(|c| render_cell(c, store))
+                    .map(|c| render_cell(c, store, ctx))
                     .unwrap_or_default()
             })
             .collect(),
@@ -474,7 +494,7 @@ fn render_table(table: &Table, store: &RawStore) -> String {
         let cells: Vec<String> = (0..width)
             .map(|i| {
                 row.get(i)
-                    .map(|c| render_cell(c, store))
+                    .map(|c| render_cell(c, store, ctx))
                     .unwrap_or_default()
             })
             .collect();
@@ -494,14 +514,14 @@ fn render_row(cells: &[String]) -> String {
     out
 }
 
-fn render_cell(cell: &[Block], store: &RawStore) -> String {
+fn render_cell(cell: &[Block], store: &RawStore, ctx: Ctx<'_>) -> String {
     match cell {
-        [Block::Paragraph(inlines)] => render_inlines(inlines, store, Ctx::table()),
-        _ => render_blocks(cell, store, Ctx::table()).replace('\n', " "),
+        [Block::Paragraph(inlines)] => render_inlines(inlines, store, ctx.table()),
+        _ => render_blocks(cell, store, ctx.table()).replace('\n', " "),
     }
 }
 
-fn render_inlines(inlines: &[Inline], store: &RawStore, ctx: Ctx) -> String {
+fn render_inlines(inlines: &[Inline], store: &RawStore, ctx: Ctx<'_>) -> String {
     let mut out = String::new();
     // What the *next* thing written has to start with for the thing just
     // written to keep its meaning.
@@ -553,10 +573,39 @@ fn render_inlines(inlines: &[Inline], store: &RawStore, ctx: Ctx) -> String {
                 // Markdown forbids a link inside a link, so nested targets are
                 // dropped down to their text rather than corrupting the file.
                 let inner = render_inlines(text, store, ctx.inside_link());
+                let attachment = href.strip_prefix('^').filter(|n| !n.is_empty());
                 let fragment = if ctx.in_link {
                     inner
+                } else if let (Some(name), Some(dir)) = (attachment, ctx.attachments) {
+                    let label = if text.is_empty() {
+                        let mut l = String::new();
+                        escape_text(&mut l, name, false);
+                        l
+                    } else {
+                        inner
+                    };
+                    format!("[{label}]({})", render_href(&format!("{dir}/{name}"), ctx))
+                } else if (text.is_empty() || inline_text(text) == *href) && is_autolink(href, ctx)
+                {
+                    // `[href]` in Jira is a link that shows its target; `[](href)`
+                    // shows nothing at all.
+                    format!("<{href}>")
                 } else {
                     format!("[{inner}]({})", render_href(href, ctx))
+                };
+                push_fragment(&mut out, &mut pending, &fragment, Need::None, Need::None);
+            }
+            Inline::Image { src } => {
+                let target = match ctx.attachments {
+                    Some(dir) if is_bare_name(src) => format!("{dir}/{src}"),
+                    _ => src.clone(),
+                };
+                let fragment = if ctx.in_link {
+                    let mut t = String::new();
+                    escape_text(&mut t, src, false);
+                    t
+                } else {
+                    format!("![]({})", render_href(&target, ctx))
                 };
                 push_fragment(&mut out, &mut pending, &fragment, Need::None, Need::None);
             }
@@ -613,7 +662,7 @@ fn push_mark(
     alternate: Option<&str>,
     content: &[Inline],
     store: &RawStore,
-    ctx: Ctx,
+    ctx: Ctx<'_>,
 ) {
     let inner = render_inlines(content, store, ctx);
     if inner.is_empty() {
@@ -789,7 +838,7 @@ fn separate(out: &mut String, next: &str) {
     }
 }
 
-fn render_code_span(code: &str, ctx: Ctx) -> String {
+fn render_code_span(code: &str, ctx: Ctx<'_>) -> String {
     if code.is_empty() {
         return String::new();
     }
@@ -814,7 +863,7 @@ fn render_code_span(code: &str, ctx: Ctx) -> String {
     }
 }
 
-fn render_href(href: &str, ctx: Ctx) -> String {
+fn render_href(href: &str, ctx: Ctx<'_>) -> String {
     let pointy = href.is_empty()
         || href
             .chars()
@@ -838,6 +887,51 @@ fn render_href(href: &str, ctx: Ctx) -> String {
         out.push('>');
     }
     out
+}
+
+/// Whether `href` can be written as `<href>` and read back unchanged.
+///
+/// An autolink takes no escapes and no entities, so only a URL with a scheme
+/// and none of the characters that would need one qualifies.
+fn is_autolink(href: &str, ctx: Ctx<'_>) -> bool {
+    let Some((scheme, rest)) = href.split_once(':') else {
+        return false;
+    };
+    let scheme_ok = (2..=32).contains(&scheme.len())
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'));
+    scheme_ok
+        && !rest.is_empty()
+        && !href.chars().any(|c| {
+            c.is_whitespace()
+                || c.is_control()
+                || matches!(c, '<' | '>' | '&' | '\\')
+                || (c == '|' && ctx.in_table)
+        })
+}
+
+/// A file name with no directory and no scheme: an attachment's name.
+fn is_bare_name(src: &str) -> bool {
+    !src.is_empty() && !src.contains(['/', '\\', ':'])
+}
+
+/// The attachment a link or image target names, when it points into an
+/// issue's attachment folder — `.PROJ-7. Summary/shot.png` — from the file.
+///
+/// The folder is recognised by its shape rather than compared with the issue
+/// the file is for: a summary renamed since the pull, or a link copied from a
+/// neighbouring issue, still names an attachment by its file name, which is
+/// all Jira takes.
+fn attachment_name(url: &str) -> Option<&str> {
+    if url.contains("://") || url.starts_with(['/', '#']) {
+        return None;
+    }
+    let (dir, name) = url.rsplit_once('/')?;
+    let folder = dir.rsplit('/').next().unwrap_or(dir).strip_prefix('.')?;
+    crate::project::naming::key_from_file_name(folder)?;
+    (!name.is_empty()).then_some(name)
 }
 
 /// Escape everything in literal text that Markdown would otherwise read as
@@ -1216,9 +1310,12 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline>
             NodeValue::HtmlInline(_) => done.extend(split_issue_keys(normalize_inlines(
                 std::mem::take(&mut out),
             ))),
-            // An image keeps its target as a plain link rather than vanishing;
-            // real Jira media arrives as a raw region, not as Markdown.
-            NodeValue::Link(link) | NodeValue::Image(link) => {
+            NodeValue::Image(link) => out.push(Inline::Image {
+                src: attachment_name(&link.url)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| link.url.clone()),
+            }),
+            NodeValue::Link(link) => {
                 let text = convert_inlines(child, regions);
                 let adjacent_at = i > 0
                     && matches!(&kids[i - 1].data.borrow().value,
@@ -1243,7 +1340,9 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline>
                 } else {
                     out.push(Inline::Link {
                         text,
-                        href: link.url.clone(),
+                        href: attachment_name(&link.url)
+                            .map(|name| format!("^{name}"))
+                            .unwrap_or_else(|| link.url.clone()),
                     });
                 }
             }

@@ -48,12 +48,14 @@ impl RenderContext<'_> {
 /// the same file back. Without that symmetry a trailing newline alone would make
 /// every issue register as locally edited.
 pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rendered> {
-    let description = convert::to_markdown(&issue.description);
+    let attachment_folder = naming::attachment_dir(&issue.key, &issue.fields.summary);
+    let to_markdown = |rich| convert::to_markdown_in(rich, Some(&attachment_folder));
+    let description = to_markdown(&issue.description);
 
     let mut body_raw = BTreeMap::new();
     let mut comments = Vec::with_capacity(issue.comments.len());
     for c in &issue.comments {
-        let converted = convert::to_markdown(&c.body);
+        let converted = to_markdown(&c.body);
         if !converted.raw.is_empty() {
             body_raw.insert(format!("comment:{}", c.id), converted.raw.clone());
         }
@@ -77,7 +79,7 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
 
     let worklogs = worklog_entries(issue);
     for w in &issue.worklogs {
-        let raw = convert::to_markdown(&w.comment).raw;
+        let raw = to_markdown(&w.comment).raw;
         if !raw.is_empty() {
             body_raw.insert(format!("worklog:{}", w.id), raw);
         }
@@ -101,7 +103,6 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
         })
         .collect();
 
-    let attachment_folder = naming::attachment_dir(&issue.key, &issue.fields.summary);
     let attachments = issue
         .attachments
         .iter()
@@ -142,6 +143,7 @@ pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rend
 /// paged the entries in, is what makes the section read as a log; ties break on
 /// the id so the file does not reshuffle between pulls.
 pub fn worklog_entries(issue: &RemoteIssue) -> Vec<WorklogEntry> {
+    let attachments = naming::attachment_dir(&issue.key, &issue.fields.summary);
     let mut sorted: Vec<&crate::api::RemoteWorklog> = issue.worklogs.iter().collect();
     sorted.sort_by(|a, b| (a.started, &a.id).cmp(&(b.started, &b.id)));
     sorted
@@ -160,7 +162,10 @@ pub fn worklog_entries(issue: &RemoteIssue) -> Vec<WorklogEntry> {
                 .as_ref()
                 .map(crate::api::model::format_timestamp)
                 .unwrap_or_default(),
-            body: convert::to_markdown(&w.comment).markdown.trim().to_string(),
+            body: convert::to_markdown_in(&w.comment, Some(&attachments))
+                .markdown
+                .trim()
+                .to_string(),
         })
         .collect()
 }
