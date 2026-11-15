@@ -463,12 +463,24 @@ fn parse_inlines(text: &str, store: &mut RawStore) -> Vec<Inline> {
 
     while i < b.len() {
         match b[i] {
-            // Jira wiki markup escapes with a backslash; the next character is
-            // literal text whatever it would otherwise mean.
-            b'\\' if i + 1 < b.len() => {
-                let ch = text[i + 1..].chars().next().unwrap_or('\\');
-                buf.push(ch);
-                i += 1 + ch.len_utf8();
+            // A backslash makes the punctuation after it literal. Before
+            // anything else it is a backslash: Jira renders `\n` pasted from
+            // JSON as those two characters, and reading it as an escape lost
+            // the backslash from the file, so the next edit of the description
+            // pushed the text without it.
+            b'\\' if b.get(i + 1).is_some_and(u8::is_ascii_punctuation) => {
+                buf.push(b[i + 1] as char);
+                i += 2;
+            }
+            // `\h2.` and `\bq.` are how a line of prose that begins like a
+            // heading or a quote is written, by this renderer among others, so
+            // there the backslash is the guard and not text.
+            b'\\'
+                if (i == 0 || b[i - 1] == b'\n')
+                    && (heading_at(&text[i + 1..]).is_some()
+                        || text[i + 1..].starts_with("bq.")) =>
+            {
+                i += 1;
             }
             b'\n' => {
                 flush(&mut buf, &mut out);
@@ -592,10 +604,10 @@ fn split_unescaped(content: &str) -> Option<(&str, &str)> {
 /// Remove backslash escapes from a value that is not parsed as inline markup.
 fn unescape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars();
+    let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' {
-            if let Some(next) = chars.next() {
+            if let Some(next) = chars.next_if(char::is_ascii_punctuation) {
                 out.push(next);
                 continue;
             }
@@ -828,13 +840,24 @@ fn render_cell(cell: &[Block], store: &RawStore) -> String {
 /// otherwise consume.
 ///
 /// Only the openers need escaping: `[` starts a link or mention, `{` starts a
-/// macro or a code span, and `\` has to escape itself. Mark delimiters
+/// macro or a code span, and `\` has to escape itself where it would escape
+/// what follows it. Mark delimiters
 /// (`*`, `_`, `-`) are left alone — they only bind between word boundaries, and
 /// escaping every one of them would make ordinary prose unreadable in Jira.
 fn escape_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        if matches!(ch, '[' | '{' | '\\') {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let escape = match ch {
+            '[' | '{' => true,
+            // A backslash only escapes punctuation, so one before a letter is
+            // written as it is and the server's text stays byte-identical. At
+            // the end of the text the next character is not known — a mark or
+            // a link may follow — so it is escaped there.
+            '\\' => chars.peek().is_none_or(char::is_ascii_punctuation),
+            _ => false,
+        };
+        if escape {
             out.push('\\');
         }
         out.push(ch);
@@ -977,6 +1000,58 @@ mod escaping_tests {
             ast_of("a \\[b\\] c"),
             Document::new(vec![Block::Paragraph(vec![Inline::Text("a [b] c".into())])])
         );
+    }
+
+    /// A description holding `\n` pasted from JSON came back as `n`, reported
+    /// clean and not lossy, so the next edit pushed it without the backslash.
+    /// A backslash before a letter is not an escape.
+    #[test]
+    fn a_backslash_before_a_letter_is_kept() {
+        let server = "accepts:\\n- from clients C:\\temp\\x";
+        assert_eq!(
+            ast_of(server),
+            Document::new(vec![Block::Paragraph(vec![Inline::Text(
+                "accepts:\\n- from clients C:\\temp\\x".into()
+            )])])
+        );
+        assert_eq!(trip(server), server, "the server's bytes must come back");
+
+        // And through the file: what a push sends is what the server held.
+        let mut store = RawStore::new();
+        let md = crate::convert::markdown::render(&to_ast(server, &mut store), &store);
+        assert!(md.contains("accepts:\\\\n"), "{md}");
+        let pushed = from_ast(&crate::convert::markdown::parse(&md, &store), &store);
+        assert_eq!(pushed, server);
+    }
+
+    /// The guard written before prose that starts like a heading or a quote
+    /// is a backslash before a letter, and it is still a guard.
+    #[test]
+    fn a_guarded_heading_or_quote_line_stays_prose() {
+        for line in ["h2. not a heading", "bq. not a quote"] {
+            let doc = Document::new(vec![Block::Paragraph(vec![Inline::Text(line.into())])]);
+            let text = from_ast(&doc, &RawStore::new());
+            assert_eq!(text, format!("\\{line}"));
+            assert_eq!(ast_of(&text), doc, "{text:?}");
+        }
+    }
+
+    /// Before punctuation a backslash still escapes, and a literal one there
+    /// is still written doubled.
+    #[test]
+    fn a_backslash_before_punctuation_still_escapes() {
+        assert_eq!(
+            ast_of("a \\*b\\* \\\\ c"),
+            Document::new(vec![Block::Paragraph(vec![Inline::Text(
+                "a *b* \\ c".into()
+            )])])
+        );
+        let doc = Document::new(vec![Block::Paragraph(vec![Inline::Text(
+            "x\\[y] z\\".into(),
+        )])]);
+        let text = from_ast(&doc, &RawStore::new());
+        assert_eq!(text, "x\\\\\\[y] z\\\\");
+        assert_eq!(ast_of(&text), doc);
     }
 
     #[test]
