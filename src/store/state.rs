@@ -190,7 +190,10 @@ impl IssueRow {
     /// The links are compared too. A stamp is kept to the second, and a push
     /// that creates an issue and links another to it in the same second moved
     /// the other's `updated` by less than that: the refresh that followed found
-    /// it level, and the inverse link never reached its file.
+    /// it level, and the inverse link never reached its file. Any other write
+    /// inside the second was missed the same way — an upload and an edit just
+    /// after it left the edit out of the file — so the payloads' own stamps,
+    /// which keep Jira's milliseconds, are compared as well.
     pub fn is_behind(&self) -> bool {
         use crate::api::normalize::{subtasks_of, REMOTE_LINKS};
         let links = |raw: &serde_json::Value| {
@@ -201,7 +204,9 @@ impl IssueRow {
         };
         match (&self.base, &self.remote) {
             (Some(b), Some(r)) => {
+                let exact = |raw| exact_updated(raw);
                 r.updated > b.updated
+                    || matches!((exact(&b.raw), exact(&r.raw)), (Some(x), Some(y)) if x != y)
                     || subtasks_of(&r.raw) != subtasks_of(&b.raw)
                     || links(&r.raw) != links(&b.raw)
             }
@@ -323,15 +328,19 @@ impl StateStore {
     /// counts and what lets `pull` skip untouched issues entirely.
     pub fn upsert_remote(&self, issue: &RemoteIssue) -> Result<bool> {
         let updated = crate::api::model::format_timestamp(&issue.updated);
-        let previous: Option<String> = self
+        let previous: Option<(Option<String>, Option<String>)> = self
             .conn
             .query_row(
-                "SELECT remote_updated FROM issue WHERE key = ?1",
+                "SELECT remote_updated, remote_raw FROM issue WHERE key = ?1",
                 [&issue.key],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .optional()?
-            .flatten();
+            .optional()?;
+        let (previous, previous_raw) = previous.unwrap_or_default();
+        let exact_before = previous_raw
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|raw| exact_updated(&raw));
 
         self.conn.execute(
             "INSERT INTO issue (key, id, remote_raw, remote_updated, remote_fetched_at,
@@ -356,7 +365,15 @@ impl StateStore {
 
         self.replace_comments(issue)?;
         self.replace_attachments(issue)?;
-        Ok(previous.as_deref() != Some(updated.as_str()))
+        // The stored stamp is to the second, and two writes inside one second
+        // — an upload and an edit straight after it — read as one: the pull
+        // reported nothing changed and left the file behind the server. The
+        // payload keeps Jira's own milliseconds, so it settles a tie.
+        let moved_within_the_second = match (exact_before, exact_updated(&issue.raw)) {
+            (Some(before), Some(now)) => before != now,
+            _ => false,
+        };
+        Ok(previous.as_deref() != Some(updated.as_str()) || moved_within_the_second)
     }
 
     /// Advance base to the current remote snapshot after a successful write.
@@ -1437,6 +1454,13 @@ fn parse_schema(stored: Option<String>) -> (Option<String>, Option<String>, Opti
         }
         _ => (Some(text), None, None),
     }
+}
+
+/// An issue payload's `updated`, exactly as the server wrote it.
+pub fn exact_updated(raw: &serde_json::Value) -> Option<String> {
+    raw.pointer("/fields/updated")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 pub fn content_hash(text: &str) -> String {

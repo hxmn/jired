@@ -124,12 +124,14 @@ pub fn run_with(
         // read that fails is the same: carried, and said, but no reason to fail
         // a fetch whose issues all arrived.
         let previous = engine.state.issue(&issue.key)?.and_then(|row| row.remote);
-        // Compared as stored, to the second, the way `upsert_remote` decides
-        // what changed: the server's milliseconds would make every issue new.
+        // Decided the way `upsert_remote` decides what changed: the stored
+        // second, and the payload's own milliseconds when the seconds tie.
         let stamp = crate::api::model::format_timestamp;
-        let moved = previous
-            .as_ref()
-            .is_none_or(|p| stamp(&p.updated) != stamp(&issue.updated));
+        let exact = crate::store::state::exact_updated;
+        let moved = previous.as_ref().is_none_or(|p| {
+            stamp(&p.updated) != stamp(&issue.updated)
+                || matches!((exact(&p.raw), exact(&issue.raw)), (Some(a), Some(b)) if a != b)
+        });
         if moved && !args.slim {
             match crate::api::block_on(client.remote_links(&issue.key)) {
                 Ok(links) => crate::api::normalize::set_remote_links(&mut issue, links),

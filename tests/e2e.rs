@@ -2271,6 +2271,53 @@ fn computed_custom_fields_stay_out_of_the_file() {
     );
 }
 
+/// Two writes inside one second — an upload, then an edit straight after it
+/// — share the stored stamp, which is to the second. The pull read the second
+/// one as no change and left the file behind the server.
+#[test]
+fn an_edit_in_the_same_second_as_the_last_sync_is_pulled() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let second = jired::store::now_rfc3339();
+    let set = |millis: &str, description: Option<&str>| {
+        let path = ws.fixtures.join("issues.json");
+        let mut issues: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for issue in issues.as_array_mut().unwrap() {
+            if issue["key"] == "DC-77" {
+                issue["fields"]["updated"] = second.replace('Z', &format!(".{millis}Z")).into();
+                if let Some(d) = description {
+                    issue["fields"]["description"] = d.into();
+                }
+            }
+        }
+        std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
+    };
+    // A write early in the second, which the workspace syncs…
+    set("100", None);
+    ws.json(&["pull"]);
+    // …and another later in the same second.
+    set("480", Some("Edited in the same second."));
+
+    let report = ws.json(&["pull"]);
+    let updated: Vec<&str> = report["updated"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|i| i["key"].as_str())
+        .collect();
+    assert_eq!(updated, ["DC-77"], "{report}");
+    assert!(ws
+        .read(ws.issue_file())
+        .contains("Edited in the same second."));
+
+    // And a pull with nothing new stays quiet.
+    let again = ws.json(&["pull"]);
+    assert!(again["updated"].as_array().unwrap().is_empty(), "{again}");
+}
+
 #[test]
 fn data_center_custom_fields_are_mapped_by_name() {
     let ws = Ws::of(Deployment::DataCenter);
