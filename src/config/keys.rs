@@ -246,8 +246,8 @@ pub const KEYS: &[KeyDef] = &[
               list in a config file, comma-separated in the environment; edit \
               it with `jired config add`/`remove`. The values are still \
               fetched and still in the database, so un-ignoring a field brings \
-              it back; `jired doctor` removes an ignored field from files that \
-              already carry it. Fields Jira computes — the development panel, \
+              it back. `config add`/`remove` bring the issue files into line; \
+              after any other change to the list, `jired doctor` does. Fields Jira computes — the development panel, \
               Rank, time in status, SLAs — are left out without being listed",
     },
     KeyDef {

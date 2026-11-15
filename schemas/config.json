@@ -40,6 +40,18 @@
     "changed": {
       "type": "boolean",
       "description": "Whether `config add`/`remove` actually altered the list"
+    },
+    "rewritten": {
+      "type": "array",
+      "description": "Issue files `config add`/`remove ignored_custom_fields` brought into line with the new list, in a workspace",
+      "items": {
+        "type": "object",
+        "required": ["file", "change"],
+        "properties": {
+          "file": { "type": "string" },
+          "change": { "type": "string" }
+        }
+      }
     }
   }
 }

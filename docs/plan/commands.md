@@ -228,7 +228,8 @@ gives it — is left out of the file altogether rather than written empty, which
 would read as a clearing edit. Nothing is discarded: the value stays in the
 payload and in `state.db`, so the setting is reversible. `push` skips (and reports)
 an ignored field a file still carries, and `jired doctor` is what brings the files
-into line in either direction. Fields of a computed type (`schema.custom` of
+into line in either direction — `config add`/`remove` run that repair themselves,
+so it is only needed after the list changed some other way. Fields of a computed type (`schema.custom` of
 `devsummary`/`devsummarycf`, `gh-lexo-rank`, `gh-global-rank`, `timeinstatus`,
 `firstresponsedate`, `sd-sla-field`) are ignored the same way without being
 listed: their value changes on its own and would show as a change on every pull.
@@ -1097,7 +1098,11 @@ over `keys::KEYS`. `add`/`remove` edit one value of a setting that holds a list
 (only `ignored_custom_fields` today), written as a TOML array and read back — and
 given in an environment variable — comma-separated; they build the new list from
 the file being edited, never from the resolved value, so a workspace list never
-silently absorbs the global one. `unset` drops the key, and the table it leaves
+silently absorbs the global one. A changed `ignored_custom_fields` in a workspace
+also brings the issue files into line, the repair `doctor` does, and lists them
+under `rewritten` in `jired/config/1`: a file that disagrees with the list is one
+push misreads, so the step is not optional. With `--global`, or outside a
+workspace, it says to run `doctor` instead. `unset` drops the key, and the table it leaves
 empty with it. `list` names the file each value came from and `--all` includes
 unset settings with their documentation. `path` prints the file a write would go
 to and `edit` opens it in `$VISUAL`/`$EDITOR`. None of them requires an

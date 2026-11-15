@@ -1197,13 +1197,17 @@ A custom field nobody here works with can be kept out of the files entirely:
 
 ```sh
 jired config add ignored_custom_fields customfield_10000   # an id, or the field's name
-jired doctor                                               # take it out of the files that have it
 ```
 
-Ignoring hides a field; it never clears one. The value stays on the server and
-in the database, `push` refuses to send a copy left in a file, and
-`jired config remove ignored_custom_fields customfield_10000` followed by another
-`jired doctor` brings it back.
+The command takes the field out of the files that already carry it, and lists
+them. Ignoring hides a field; it never clears one. The value stays on the server
+and in the database, `push` refuses to send a copy left in a file, and
+`jired config remove ignored_custom_fields customfield_10000` brings it back.
+After a `--global` change, or an edit to the config file by hand, `jired doctor`
+does the same repair in each workspace.
+
+When one custom field changes in every issue a pull updates, the pull warns and
+names the `config add` that would keep it out.
 
 Fields Jira computes for itself — the development panel, Rank, time in status,
 SLAs — change without anyone editing the issue, so they are left out without

@@ -785,6 +785,22 @@ fn check_custom_fields(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     Ok(check)
 }
 
+/// Bring every issue file's custom fields into line with the ignore list now.
+///
+/// `config add`/`remove ignored_custom_fields` calls this: the setting does
+/// nothing to the files on its own, and the files that disagree with it are
+/// the ones a push then misreads, so changing it took a second command that
+/// is never optional. Each rewritten file comes back with what was done to it.
+pub(crate) fn apply_custom_fields(ctx: &mut Context) -> Result<Vec<(String, String)>> {
+    let args = DoctorArgs {
+        dry_run: false,
+        regroup: false,
+        conn: Default::default(),
+    };
+    let check = check_custom_fields(ctx, &args)?;
+    Ok(check.changes.into_iter().map(|c| (c.from, c.to)).collect())
+}
+
 fn join(ids: &[&String]) -> String {
     ids.iter()
         .map(|id| id.as_str())

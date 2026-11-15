@@ -605,6 +605,8 @@ pub fn run_scoped(
         }
     }
 
+    report.warnings.extend(noisy_custom_fields(&report.updated));
+
     report.created.sort_by(|a, b| a.key.cmp(&b.key));
     report.updated.sort_by(|a, b| a.key.cmp(&b.key));
     report.conflicts.sort_by(|a, b| a.key.cmp(&b.key));
@@ -947,6 +949,45 @@ fn show_pair(
         )
     };
     (Some(from_there(fb)), Some(from_there(fr)))
+}
+
+/// The fewest updated issues a field has to change in before a pull says it
+/// may be noise: in one or two issues a field changing everywhere is just a
+/// field changing.
+const NOISY_AFTER: usize = 3;
+
+/// A custom field that changed in every issue the pull updated.
+///
+/// That is what a field Jira or a plugin maintains looks like — a counter, a
+/// cached summary — and one jired does not know is computed makes every pull
+/// report a change nobody made. The way out is one command, so the warning
+/// names it.
+fn noisy_custom_fields(updated: &[IssueChange]) -> Vec<String> {
+    if updated.len() < NOISY_AFTER {
+        return Vec::new();
+    }
+    let mut counts: std::collections::BTreeMap<&str, (usize, Option<&str>)> =
+        std::collections::BTreeMap::new();
+    for issue in updated {
+        for change in &issue.changes {
+            if let Some(id) = change.field.strip_prefix("custom.") {
+                let entry = counts.entry(id).or_insert((0, None));
+                entry.0 += 1;
+                entry.1 = entry.1.or(change.label.as_deref());
+            }
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, (n, _))| *n == updated.len())
+        .map(|(id, (n, label))| {
+            let name = label.map(|l| format!(" ({l})")).unwrap_or_default();
+            format!(
+                "`{id}`{name} changed in all {n} updated issues; if nobody edits it, \
+                 `jired config add ignored_custom_fields {id}` keeps it out of the files"
+            )
+        })
+        .collect()
 }
 
 /// A value as one line of text, untruncated; `None` when there is nothing to
@@ -1356,6 +1397,43 @@ fn merge_worklogs(
 mod tests {
     use super::*;
     use crate::doc::{Frontmatter, SyncMeta};
+
+    fn custom_change(id: &str) -> FieldChange {
+        FieldChange {
+            field: format!("custom.{id}"),
+            label: Some("Counter".into()),
+            from: Some("1".into()),
+            to: Some("2".into()),
+            added: None,
+            removed: None,
+        }
+    }
+
+    /// A field that changes in every updated issue gets a warning naming the
+    /// command that keeps it out; one that changes in some does not.
+    #[test]
+    fn a_field_changing_in_every_updated_issue_is_named() {
+        let issue = |key: &str, ids: &[&str]| IssueChange {
+            key: key.into(),
+            file: None,
+            fields: vec!["custom".into()],
+            changes: ids.iter().map(|id| custom_change(id)).collect(),
+        };
+        let updated = vec![
+            issue("P-1", &["customfield_1", "customfield_2"]),
+            issue("P-2", &["customfield_1"]),
+            issue("P-3", &["customfield_1", "customfield_2"]),
+        ];
+        let warnings = noisy_custom_fields(&updated);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("`customfield_1` (Counter) changed in all 3"));
+        assert!(warnings[0].contains("jired config add ignored_custom_fields customfield_1"));
+
+        assert!(
+            noisy_custom_fields(&updated[..2]).is_empty(),
+            "two issues are too few"
+        );
+    }
 
     /// Two values alike for a summary line's width are shown from where they
     /// part, not as the same text twice.

@@ -9239,7 +9239,10 @@ fn an_ignored_custom_field_leaves_the_files_and_stays_out() {
         "{config}"
     );
 
-    // Doctor takes it out of the file that already carries it.
+    // The same command takes it out of the file that already carries it, so
+    // there is no second step to forget; doctor then finds nothing to do.
+    assert_eq!(added["rewritten"][0]["file"], file, "{added}");
+    assert!(!ws.read(file).contains("customfield_10300"));
     let report = ws.json(&["doctor"]);
     let check = report["checks"]
         .as_array()
@@ -9247,9 +9250,7 @@ fn an_ignored_custom_field_leaves_the_files_and_stays_out() {
         .iter()
         .find(|c| c["name"] == "custom-fields")
         .expect("doctor checks the ignored fields");
-    assert_eq!(check["status"], "fixed", "{report}");
-    assert_eq!(check["changes"][0]["from"], file);
-    assert!(!ws.read(file).contains("customfield_10300"));
+    assert_eq!(check["status"], "ok", "{report}");
 
     // Removing it from the file is not an edit anyone has to push, and the
     // field does not come back on the next pull either.
@@ -9259,7 +9260,7 @@ fn an_ignored_custom_field_leaves_the_files_and_stays_out() {
     assert!(!ws.read(file).contains("customfield_10300"));
 
     // Un-ignoring brings it back, because nothing was thrown away: the value
-    // was in the database the whole time. Doctor has to be the one to do it —
+    // was in the database the whole time. It has to come back into the file —
     // otherwise the file would read as having deleted the field, and push
     // would clear it on the server.
     let removed = ws.json(&[
@@ -9269,7 +9270,7 @@ fn an_ignored_custom_field_leaves_the_files_and_stays_out() {
         "customfield_10300",
     ]);
     assert_eq!(removed["values"].as_array().unwrap().len(), 0);
-    ws.json(&["doctor"]);
+    assert_eq!(removed["rewritten"][0]["file"], file, "{removed}");
     assert!(
         ws.read(file).contains("customfield_10300"),
         "{}",
@@ -9277,6 +9278,18 @@ fn an_ignored_custom_field_leaves_the_files_and_stays_out() {
     );
     let status = ws.json(&["status"]);
     assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");
+}
+
+/// Ignore a field the way a hand edit of the config does, which reaches no
+/// issue file: the drift `config add` puts right, left standing.
+fn ignore_by_hand(ws: &Ws, id: &str) {
+    let path = ws.path().join(".jired").join("config.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!("ignored_custom_fields = [\"{id}\"]\n{config}"),
+    )
+    .unwrap();
 }
 
 /// Between ignoring a field and running doctor, the file still holds a copy
@@ -9288,12 +9301,7 @@ fn an_ignored_field_left_in_a_file_is_reported_rather_than_pushed() {
     ws.json(&["pull"]);
     let file = Deployment::DataCenter.issue_file();
 
-    ws.json(&[
-        "config",
-        "add",
-        "ignored_custom_fields",
-        "customfield_10300",
-    ]);
+    ignore_by_hand(&ws, "customfield_10300");
 
     // Push only looks at a file it has a reason to look at, so the leftover
     // field only matters alongside a real edit — which is exactly when it would
@@ -9335,12 +9343,7 @@ fn an_untouched_file_diffs_clean_however_base_renders_today() {
     // The drift, without running `doctor` to reconcile the file: base now
     // renders without the field, the file still carries it, the hash is the
     // one the pull recorded.
-    ws.json(&[
-        "config",
-        "add",
-        "ignored_custom_fields",
-        "customfield_10300",
-    ]);
+    ignore_by_hand(&ws, "customfield_10300");
 
     let status = ws.json(&["status"]);
     assert!(status["dirty"].as_array().unwrap().is_empty(), "{status}");

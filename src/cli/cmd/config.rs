@@ -341,19 +341,44 @@ fn edit_list(g: &GlobalArgs, out: Out, a: &AddArgs, add: bool) -> Result<()> {
         } else {
             format!("`{value}` was not there")
         });
-    } else if a.key == "ignored_custom_fields" {
-        out.say("run `jired doctor` to bring the issue files into line");
     }
-    out.emit(
-        "config",
-        &serde_json::json!({
-            "key": a.key,
-            "value": values.join(","),
-            "values": values,
-            "changed": changed,
-            "scope": if a.global {"global"} else {"local"},
-        }),
-    );
+
+    // The ignore list decides what a file is written with, and a file that
+    // disagrees with it is one a push misreads, so the files are brought into
+    // line here rather than left for a `jired doctor` nobody may run. A global
+    // edit reaches workspaces this command is not in, so those are told.
+    let mut rewritten = Vec::new();
+    if changed && a.key == "ignored_custom_fields" {
+        let workspace = ctx.workspace.is_initialized();
+        drop(ctx);
+        if a.global || !workspace {
+            out.say("run `jired doctor` in each workspace to bring its issue files into line");
+        } else {
+            let mut ctx = Context::open(g, out)?;
+            rewritten = crate::cli::cmd::doctor::apply_custom_fields(&mut ctx)?;
+            match rewritten.len() {
+                0 => out.say("the issue files already agree"),
+                n => out.say(format!("rewrote {n} issue file(s) to match")),
+            }
+            for (file, what) in &rewritten {
+                out.say(format!("  {file}: {what}"));
+            }
+        }
+    }
+    let mut report = serde_json::json!({
+        "key": a.key,
+        "value": values.join(","),
+        "values": values,
+        "changed": changed,
+        "scope": if a.global {"global"} else {"local"},
+    });
+    if a.key == "ignored_custom_fields" && changed && !a.global {
+        report["rewritten"] = rewritten
+            .iter()
+            .map(|(file, change)| serde_json::json!({ "file": file, "change": change }))
+            .collect();
+    }
+    out.emit("config", &report);
     Ok(())
 }
 

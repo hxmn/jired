@@ -696,10 +696,11 @@ pub fn render() -> String {
     s.push_str(
         "A field nobody here works with can be left out of the files entirely: \
          `jired config add ignored_custom_fields customfield_10000` (an id or the \
-         field's name), then `jired doctor` to take it out of the files that already \
-         carry it. Ignoring hides a field, it does not clear it — the value stays on \
-         the server and in the database, `push` refuses to send one, and removing the \
-         entry plus another `jired doctor` brings it back. Fields Jira computes — the \
+         field's name) takes it out of the files that already carry it, and a pull \
+         warns, naming that command, when one field changes in every issue it \
+         updates. Ignoring hides a field, it does not clear it — the value stays on \
+         the server and in the database, `push` refuses to send one, and \
+         `jired config remove` brings it back. Fields Jira computes — the \
          development panel, Rank, time in status, SLAs — are left out already, \
          by their type, so they need no entry.\n\n",
     );
