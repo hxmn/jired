@@ -287,7 +287,7 @@ pub enum Command {
     Search(cmd::search::SearchArgs),
     /// Write any editable field on any number of issues
     Set(cmd::set::SetArgs),
-    /// Everything the workspace knows about one issue
+    /// Everything the workspace knows about issues, or the parts of them asked for
     Show(cmd::show::ShowArgs),
     /// Work with sprints
     #[command(subcommand)]
