@@ -621,6 +621,7 @@ pub fn render() -> String {
     s.push_str("jired diff --stat              # the same, as one printed line per issue\n");
     s.push_str("jired diff --exit-code         # exit 1 when there is anything to send\n");
     s.push_str("jired push --dry-run --json    # exact API calls, nothing sent\n");
+    s.push_str("jired push -n --show-body      # the text each body goes out as\n");
     s.push_str("jired push --json              # apply\n");
     s.push_str("```\n\n");
     s.push_str(

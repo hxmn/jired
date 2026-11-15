@@ -540,7 +540,7 @@ the filename you were just editing instead of retyping the key.
 |---|---|
 | `fetch [ISSUES…]` | update the local snapshot from the server without touching files; `--jql/--sprint/--board/--updated-since` widen the scope, `--full` ignores the incremental watermark, `--slim` skips changelogs to keep `state.db` small |
 | `pull [ISSUES…]` | fetch and merge into the files; `-n/--dry-run` shows what would be written |
-| `push [ISSUES…]` | send staged changes; shows the plan and asks first when interactive (`-y` skips), `-n/--dry-run` (alias `preview`) prints the exact API calls, `--refresh-stale` re-fetches and retries the issues the server moved on from, `--verify` reads every pushed issue back and names any field the server does not hold as the file asked (exit 10) |
+| `push [ISSUES…]` | send staged changes; shows the plan and asks first when interactive (`-y` skips), `-n/--dry-run` (alias `preview`) prints the exact API calls, `--show-body` the description, comment and worklog text as it will be sent, `--refresh-stale` re-fetches and retries the issues the server moved on from, `--verify` reads every pushed issue back and names any field the server does not hold as the file asked (exit 10) |
 | `diff [ISSUES…]` | `--against base` (default: what `push` would send) or `--against remote` (what `pull` would bring in); `--stat`, `--exit-code` |
 | `status` | dirty, behind, staged, conflicted; `--all` also lists unchanged issues |
 | `edit [ISSUE]` | change an issue on a form; without an issue, pick one from the list — see [The issue picker](#the-issue-picker) |

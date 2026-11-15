@@ -16,6 +16,15 @@ pub struct PushArgs {
     #[arg(long, short = 'n', visible_alias = "preview")]
     pub dry_run: bool,
 
+    /// Print each planned description, comment and worklog note as it will be
+    /// sent: wiki markup on Data Center, ADF on Cloud
+    ///
+    /// The `--json` request body holds the same text escaped into a string;
+    /// this is the readable form, the one that shows what Jira will make of
+    /// the file's Markdown.
+    #[arg(long)]
+    pub show_body: bool,
+
     /// Push even when the server changed since the last sync
     #[arg(long)]
     pub force: bool,
@@ -78,6 +87,11 @@ pub fn run(g: &GlobalArgs, args: &PushArgs, out: Out) -> Result<ExitCode> {
         for line in plan.plan_lines(false) {
             out.say(line);
         }
+        if args.show_body {
+            for line in plan.body_lines() {
+                out.say(line);
+            }
+        }
         let question = format!(
             "send {} operation(s) across {} issue(s)?",
             plan.op_count(),
@@ -94,7 +108,7 @@ pub fn run(g: &GlobalArgs, args: &PushArgs, out: Out) -> Result<ExitCode> {
     }
 
     let report = crate::sync::push::run(&mut ctx, args)?;
-    report.render(out);
+    report.render_with(out, args.show_body && report.dry_run);
     out.emit("push", &report);
     Ok(report.exit_code())
 }

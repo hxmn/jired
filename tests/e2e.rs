@@ -1855,6 +1855,37 @@ fn human_mode_narrates_on_stdout() {
     assert!(stdout.contains("new"), "expected a summary: {stdout}");
 }
 
+/// `push --dry-run --show-body` prints the wire text a push would send, so
+/// what Jira will make of the file's Markdown can be read without a JSON
+/// filter.
+#[test]
+fn show_body_prints_the_wire_text() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = ws.issue_file();
+    let text = ws
+        .read(file)
+        .replace(
+            "for the rollback plan.",
+            "for the rollback plan.\n\nKeep +this+ literal.",
+        )
+        .replace("## Comments", "## Comments\n\n### [new]\n\nOn **it**.\n");
+    ws.write(file, &text);
+
+    let out = ws
+        .cmd(&["push", "--dry-run", "--show-body"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("DC-77 description"), "{stdout}");
+    assert!(stdout.contains("│ Keep \\+this\\+ literal."), "{stdout}");
+    assert!(stdout.contains("│ h3. Steps"), "{stdout}");
+    assert!(stdout.contains("DC-77 comment"), "{stdout}");
+    assert!(stdout.contains("│ On *it*."), "{stdout}");
+    assert!(stdout.contains("nothing was sent"), "{stdout}");
+}
+
 /// A rewritten description is a change `diff --stat` has to name: "0
 /// field(s), +3 -1" read as nothing to send.
 #[test]

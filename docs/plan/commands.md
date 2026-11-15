@@ -235,8 +235,11 @@ so it is only needed after the list changed some other way. Fields of a computed
 listed: their value changes on its own and would show as a change on every pull.
 
 ### `jired push`
-`jired push [ISSUE…] [-n/--dry-run|preview] [--force] [--allow-lossy] [--allow-comment-delete] [--allow-worklog-delete] [--resume] [--refresh-stale] [--verify]`
+`jired push [ISSUE…] [-n/--dry-run|preview] [--show-body] [--force] [--allow-lossy] [--allow-comment-delete] [--allow-worklog-delete] [--resume] [--refresh-stale] [--verify]`
 Plans ops (D23 order), `--dry-run` prints exact API calls + diffs (human and JSON).
+`--show-body` prints each planned description, comment and worklog note as it
+goes over the wire — wiki markup on Data Center, ADF on Cloud — under the plan,
+in place of the one-line request; the `--json` document is the same either way.
 Interactively it always plans first: the plan lines are printed and the run asks
 `send N operation(s) across M issue(s)?` before anything is sent. `-y` and
 `--no-input` skip the question; a dry run never asks.

@@ -200,7 +200,50 @@ impl PushReport {
         self.results.iter().map(|r| r.ops.len()).sum()
     }
 
+    /// The rich-text fields of every planned request, as the server will
+    /// receive them, for `--show-body`.
+    ///
+    /// The request body in `--json` holds the same text, but escaped into a
+    /// JSON string, and the wire form is exactly what a reader needs to see:
+    /// it is where a literal `+x+` turning into an underline shows.
+    pub fn body_lines(&self) -> Vec<String> {
+        use crate::style::{self, CYAN, DIM};
+        let mut lines = Vec::new();
+        for r in &self.results {
+            for op in &r.ops {
+                let Some(body) = op.request.as_ref().and_then(|q| q.get("body")) else {
+                    continue;
+                };
+                for (name, value) in rich_text_fields(body) {
+                    lines.push(format!(
+                        "── {} {} {}",
+                        style::out(CYAN, &r.key),
+                        name,
+                        style::out(DIM, format!("({}, as sent)", op.kind))
+                    ));
+                    let text = match value {
+                        Value::String(s) => s.clone(),
+                        Value::Null => "(cleared)".to_string(),
+                        other => serde_json::to_string_pretty(other).unwrap_or_default(),
+                    };
+                    lines.extend(text.lines().map(|l| {
+                        format!("{} {l}", style::out(DIM, "│"))
+                            .trim_end()
+                            .to_string()
+                    }));
+                }
+            }
+        }
+        lines
+    }
+
     pub fn render(&self, out: Out) {
+        self.render_with(out, false);
+    }
+
+    /// [`PushReport::render`], with the text of every planned body under
+    /// `show_body` in place of the one-line request.
+    pub fn render_with(&self, out: Out, show_body: bool) {
         if self.results.is_empty() {
             out.say("nothing to push");
             out.hint("use \"jired status\" to see what jired thinks has changed");
@@ -209,8 +252,14 @@ impl PushReport {
             }
             return;
         }
-        for line in self.plan_lines(self.dry_run) {
+        for line in self.plan_lines(self.dry_run && !show_body) {
             out.say(line);
+        }
+        if show_body {
+            out.say("");
+            for line in self.body_lines() {
+                out.say(line);
+            }
         }
         if !self.stale.is_empty() {
             out.say(format!(
@@ -267,6 +316,22 @@ impl PushReport {
             }
         }
     }
+}
+
+/// The rich-text values in one request body, by name: the description of an
+/// edit, the body of a comment, the note of a worklog.
+fn rich_text_fields(body: &Value) -> Vec<(&'static str, &Value)> {
+    let mut found = Vec::new();
+    if let Some(d) = body.get("fields").and_then(|f| f.get("description")) {
+        found.push(("description", d));
+    }
+    if let Some(b) = body.get("body") {
+        found.push(("comment", b));
+    }
+    if let Some(c) = body.get("comment") {
+        found.push(("worklog comment", c));
+    }
+    found
 }
 
 /// Truncate a request body for display.
