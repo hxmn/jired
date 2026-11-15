@@ -261,7 +261,7 @@ impl IssueDoc {
             }
             SECTION_ATTACHMENTS => {
                 for a in &self.attachments {
-                    out.push_str(&format!("- [{}]({})", a.filename, a.path));
+                    out.push_str(&format!("- [{}]({})", a.filename, link_target(&a.path)));
                     if !a.note.is_empty() {
                         out.push_str(&format!(" ({})", a.note));
                     }
@@ -946,6 +946,20 @@ pub fn parse_duration(text: &str) -> Option<u64> {
     (any && digits.is_empty() && total > 0).then_some(total)
 }
 
+/// A link target as Markdown needs it written.
+///
+/// The attachment folder is named after the summary, so its path holds
+/// spaces as a rule and parentheses often enough — `(safe to delete)` — and
+/// bare, the link ended at the first space and read as text with a stray
+/// parenthesis. Inside `<…>` a target may hold both.
+fn link_target(path: &str) -> String {
+    if path.contains(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '<' | '>')) {
+        format!("<{}>", path.replace('<', "%3C").replace('>', "%3E"))
+    } else {
+        path.to_string()
+    }
+}
+
 fn parse_attachments(content: &str) -> Vec<AttachmentLine> {
     content
         .lines()
@@ -954,9 +968,22 @@ fn parse_attachments(content: &str) -> Vec<AttachmentLine> {
             let name_end = t.find("](")?;
             let filename = t[1..name_end].to_string();
             let rest = &t[name_end + 2..];
-            let path_end = rest.find(')')?;
-            let path = rest[..path_end].to_string();
-            let note = rest[path_end + 1..]
+            // `<…>` is how a target with spaces is written now; a bare one is
+            // how every file before that has it.
+            let (path, after) = match rest.strip_prefix('<') {
+                Some(inner) => {
+                    let end = inner.find(">)")?;
+                    (
+                        inner[..end].replace("%3C", "<").replace("%3E", ">"),
+                        &inner[end + 2..],
+                    )
+                }
+                None => {
+                    let end = rest.find(')')?;
+                    (rest[..end].to_string(), &rest[end + 1..])
+                }
+            };
+            let note = after
                 .trim()
                 .trim_start_matches('(')
                 .trim_end_matches(')')
@@ -973,6 +1000,32 @@ fn parse_attachments(content: &str) -> Vec<AttachmentLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An attachment folder named after a summary with spaces and brackets in
+    /// it is still one link, and reads back as the same line; a line in the
+    /// bare form older files have still reads.
+    #[test]
+    fn an_attachment_path_with_spaces_and_parentheses_is_one_link() {
+        let line = AttachmentLine {
+            filename: "pic.png".into(),
+            path: ".PROJ-0001. Scratch (safe to delete)/pic.png".into(),
+            note: "6 B".into(),
+        };
+        let doc = IssueDoc {
+            attachments: vec![line.clone()],
+            ..IssueDoc::parse(&sample()).unwrap()
+        };
+        let body = doc.section_body(SECTION_ATTACHMENTS).unwrap();
+        assert_eq!(
+            body,
+            "- [pic.png](<.PROJ-0001. Scratch (safe to delete)/pic.png>) (6 B)\n\n"
+        );
+        assert_eq!(parse_attachments(&body), vec![line]);
+
+        let old = parse_attachments("- [a.txt](.PROJ-0001. Plain/a.txt) (1 B)\n");
+        assert_eq!(old[0].path, ".PROJ-0001. Plain/a.txt");
+        assert_eq!(old[0].note, "1 B");
+    }
 
     /// What jired writes, jired has to read back as the same thing. A checkbox
     /// line cannot carry whitespace at its edges through a parse, so a title
