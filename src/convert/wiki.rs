@@ -827,7 +827,9 @@ fn mark_close(text: &str, open: usize, delim: &str) -> Option<usize> {
             prev = text[..to].chars().next_back().unwrap_or(c);
             continue;
         }
-        if rel > 0 && text[i..limit].starts_with(delim) && !prev.is_whitespace() {
+        // A delimiter straight after its own character is the end of a run,
+        // `--` or `**`, not a closing mark: Jira draws `--` as a dash.
+        if rel > 0 && text[i..limit].starts_with(delim) && !prev.is_whitespace() && prev != d {
             let after = text[i + delim.len()..].chars().next();
             if after.is_none_or(|a| !(a.is_alphanumeric() || a == d)) {
                 return Some(i);
@@ -1208,8 +1210,10 @@ impl Line<'_> {
                     Some(c) => !c.is_whitespace() && c != delim[0],
                     None => self.open_after && last,
                 };
+            // Nor does one close straight after its own character, so the
+            // second hyphen of `--` is left for Jira to draw as a dash.
             let can_close = match prev {
-                Some(c) => !c.is_whitespace(),
+                Some(c) => !c.is_whitespace() && (c != delim[n - 1] || escape[i - 1]),
                 None => self.open_before && first,
             } && next.is_none_or(|c| !c.is_alphanumeric());
             if can_open {
@@ -1554,6 +1558,7 @@ mod escaping_tests {
             ("an !image.png! here", "an \\!image.png! here"),
             ("signs «+» (none), «++»", "signs «\\+» (none), «\\+\\+»"),
             ("«[22]»", "«\\[22]»"),
+            ("a -minus- b and -- dash", "a \\-minus\\- b and -- dash"),
         ] {
             let rendered = from_ast(&para(literal), &RawStore::new());
             assert_eq!(rendered, wire, "for {literal:?}");
