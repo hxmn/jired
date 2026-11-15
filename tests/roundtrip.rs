@@ -36,6 +36,13 @@ fn text() -> impl Strategy<Value = String> {
             2 => Just("~".to_string()),
             2 => Just("<".to_string()),
             2 => Just(">".to_string()),
+            2 => Just("-".to_string()),
+            2 => Just("+".to_string()),
+            2 => Just("^".to_string()),
+            1 => Just("??".to_string()),
+            1 => Just("!".to_string()),
+            1 => Just("«".to_string()),
+            1 => Just("\\n".to_string()),
             1 => Just("PROJ-1".to_string()),
         ],
         1..6,
@@ -203,6 +210,29 @@ proptest! {
         let text = wiki::from_ast(&once, &store);
         assert_idempotent(once, wiki::to_ast(&text, &mut store), &text)?;
         prop_assert_eq!(wiki::from_ast(&wiki::to_ast(&text, &mut store), &store), text);
+    }
+
+    /// Idempotence would let a literal `+x+` become an underline once and stay
+    /// one. Text that is literal in the file has to reach Jira as text, so a
+    /// paragraph of it comes back from wiki markup exactly as it went in.
+    #[test]
+    fn literal_text_stays_literal_on_data_center(
+        lines in prop::collection::vec(text(), 1..4),
+    ) {
+        let mut inlines = Vec::new();
+        for (i, line) in lines.into_iter().enumerate() {
+            if i > 0 {
+                inlines.push(Inline::LineBreak);
+            }
+            inlines.push(Inline::Text(line));
+        }
+        // Bare issue keys are linked by Jira and read back as keys.
+        let doc = Document::new(vec![Block::Paragraph(inlines)]);
+        let doc = markdown::parse(&markdown::render(&doc, &RawStore::new()), &RawStore::new());
+        let mut store = RawStore::new();
+        let text = wiki::from_ast(&doc, &store);
+        prop_assert_eq!(wiki::to_ast(&text, &mut store), doc, "\n--- wiki ---\n{}", text);
+        prop_assert!(store.is_empty(), "literal text became a region: {}", text);
     }
 
     /// The whole read/write path: ADF on the server, Markdown in the working

@@ -11,3 +11,13 @@ cc 67b3daa3fa97e495af0533dd13a72c45fa780a0cca9e15754d09e229ae6c700a # shrinks to
 cc dbac10c380ad126ecb12f9abc611a07b81a4727290d850c627b41902176a4515 # shrinks to doc = Document { blocks: [Paragraph([Text("|")])] }
 cc 014ce04cd8e9a19d790f54a163cf7a55c659a43eec50509fa7662f5f9105f1ce # shrinks to doc = Document { blocks: [OrderedList { start: 1, items: [ListItem { content: [Paragraph([Strong([Link { text: [Text("~ *")], href: "https://aa.example/" }])])] }] }] }
 cc 881b49f9acb21181e13d87c469b9248c8144e66f8e09b11763d6f7f134d1e2c6 # shrinks to doc = Document { blocks: [Heading { level: 3, content: [Link { text: [Text("]")], href: "https://aa.example/" }] }] }
+cc 41a171aabe6518c2b8d6bca3bd215e8898680369f55f112e236f0ac42bdd31ee # shrinks to doc = Document { blocks: [Heading { level: 1, content: [Strong([Text("0")]), Strong([Text("0")]), Text("*")] }] }
+cc ef5d61186b3aa237464967fdd6079bca66f201d7bfbbe9fe50ba119b222dc06d # shrinks to doc = Document { blocks: [Heading { level: 1, content: [Text("!"), Link { text: [Text("A")], href: "https://aa.example/" }] }] }
+cc b9a065209f8eb72737cd27dad214f4ec89e6deba04796c2964268d184ddb83c5 # shrinks to doc = Document { blocks: [Heading { level: 1, content: [Code("a"), Text("A"), Strike([Text("0 PROJ-1")])] }] }
+cc d836c343277543330596ff5171de966f676d9c293bb04c49f68b4b079bb02c6b # shrinks to doc = Document { blocks: [OrderedList { start: 1, items: [ListItem { content: [Paragraph([Strong([Code("a")]), Strong([Text("A")])])] }] }] }
+cc 88279119ba3ed7854fa4313affda7c66c7b8baacd8899b8097fd5593e850f696 # shrinks to doc = Document { blocks: [Paragraph([Emphasis([Text("` A")]), Text("PROJ-1 a")])] }
+cc 29bcad4633d08d35f867bd1e9ee95f0fed9de4ab7de19f68bcb99d995603d424 # shrinks to doc = Document { blocks: [Heading { level: 1, content: [Text("-"), Strike([Text("a")]), Strong([Text("A")]), Strike([Text("0")])] }] }
+cc 5f4960f6101c5c50574eacb4dabc5321fb63271d555fc1feda6a88aa2f00c541 # shrinks to doc = Document { blocks: [Paragraph([Text("a A"), Strike([Text("0+")])])] }
+cc 619e00788a4f84943544b9fac8b042eff77f085503c0b71b6e62c48c85c3f9ef # shrinks to doc = Document { blocks: [BlockQuote([Heading { level: 1, content: [Strike([Text("A")]), Text("a #"), Strike([Text("A")]), Strike([Code("a")])] }])] }
+cc 96f3fb7e71b82e76ebe823a974f147623705fad1b9dad2fe9428c9fb8c04ed1c # shrinks to doc = Document { blocks: [Heading { level: 1, content: [Strike([Text("0 A_")]), Text("0")] }] }
+cc d8059eaf5f3f311451b6f6d269a3f88748ce6d9ae20692efc6433b6c7175bec6 # shrinks to doc = Document { blocks: [BulletList([ListItem { content: [Paragraph([Strong([Text("a")]), Text("*a"), Strike([Text("A")])])] }])] }

@@ -14,9 +14,16 @@
 //! Anything that is not `{code}`, `{noformat}` or `{quote}` — every panel,
 //! color, expand or unknown macro — is captured verbatim into the [`RawStore`]
 //! and referenced by a [`Block::Raw`] or [`Inline::Raw`], so an untouched region
-//! pushes back byte-identical by construction.
+//! pushes back byte-identical by construction. So is every phrase mark Markdown
+//! has no spelling for: underline, superscript, subscript, citation.
+//!
+//! The other direction has the opposite duty: what is literal text in the file
+//! has to reach Jira as text, so the writer escapes any delimiter Jira would
+//! pair up, and the reader agrees with the writer on what pairs.
 
-use crate::convert::ast::{normalize_inlines, Block, Document, Inline, ListItem, RawStore, Table};
+use crate::convert::ast::{
+    inline_text, normalize_inlines, Block, Document, Inline, ListItem, RawRef, RawStore, Table,
+};
 
 /// Parse Jira wiki markup into the internal AST, capturing macros and other
 /// unrepresentable constructs into `store`.
@@ -27,7 +34,7 @@ pub fn to_ast(text: &str, store: &mut RawStore) -> Document {
 /// Render the AST back to wiki markup. Raw regions are reproduced verbatim
 /// from `store`, never re-converted.
 pub fn from_ast(doc: &Document, store: &RawStore) -> String {
-    render_blocks(&doc.blocks, store)
+    render_blocks(&doc.blocks, store, Ctx::default())
 }
 
 // ---------------------------------------------------------------------------
@@ -258,14 +265,37 @@ fn parse_table(text: &str, start: usize, store: &mut RawStore) -> (Block, usize)
     (Block::Table(table), pos)
 }
 
+/// Cut a table row into its cells.
+///
+/// A `|` that is escaped, or that sits inside a link or a `{{code}}` span,
+/// belongs to the cell: `[label|href]` in a cell is one link, not two cells.
 fn split_row(line: &str, header: bool) -> Vec<&str> {
     let sep = if header { "||" } else { "|" };
-    let inner = line
-        .strip_prefix(sep)
-        .unwrap_or(line)
-        .strip_suffix(sep)
-        .unwrap_or_else(|| line.strip_prefix(sep).unwrap_or(line));
-    inner.split(sep).collect()
+    let inner = line.strip_prefix(sep).unwrap_or(line);
+    let inner = inner.strip_suffix(sep).unwrap_or(inner);
+    let b = inner.as_bytes();
+    let mut cells = Vec::new();
+    let mut cell_start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 1 + inner[i + 1..].chars().next().map_or(0, char::len_utf8),
+            b'[' => i = bracket_end(inner, i).map_or(i + 1, |close| close + 1),
+            b'{' if inner[i..].starts_with("{{") => {
+                i = inner[i + 2..]
+                    .find("}}")
+                    .map_or(i + 2, |rel| i + 2 + rel + 2)
+            }
+            _ if inner[i..].starts_with(sep) => {
+                cells.push(&inner[cell_start..i]);
+                i += sep.len();
+                cell_start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    cells.push(&inner[cell_start.min(inner.len())..]);
+    cells
 }
 
 fn starts_block(text: &str, pos: usize, line: &str) -> bool {
@@ -456,6 +486,14 @@ fn macro_approx(name: &str, params: &str, body: &str) -> String {
 // ---------------------------------------------------------------------------
 
 fn parse_inlines(text: &str, store: &mut RawStore) -> Vec<Inline> {
+    parse_inlines_in(text, store, None)
+}
+
+/// `within` is the delimiter of the mark whose content this is. A mark does
+/// not open inside one of its own kind: `-a #-b--` is one strikethrough with
+/// hyphens in it, not one inside another, which Markdown has no way to write
+/// and would flatten, changing the text an untouched push sends.
+fn parse_inlines_in(text: &str, store: &mut RawStore, within: Option<u8>) -> Vec<Inline> {
     let b = text.as_bytes();
     let mut out: Vec<Inline> = Vec::new();
     let mut buf = String::new();
@@ -523,22 +561,56 @@ fn parse_inlines(text: &str, store: &mut RawStore) -> Vec<Inline> {
                     i += 1;
                 }
             },
-            d @ (b'*' | b'_' | b'-') => match mark_close(text, i, d) {
-                Some(close) => {
-                    flush(&mut buf, &mut out);
-                    let inner = parse_inlines(&text[i + 1..close], store);
-                    out.push(match d {
-                        b'*' => Inline::Strong(inner),
-                        b'_' => Inline::Emphasis(inner),
-                        _ => Inline::Strike(inner),
-                    });
-                    i = close + 1;
+            d @ (b'*' | b'_' | b'-') => {
+                match mark_close(text, i, &text[i..i + 1]).filter(|_| within != Some(d)) {
+                    Some(close) => {
+                        flush(&mut buf, &mut out);
+                        let inner = parse_inlines_in(&text[i + 1..close], store, Some(d));
+                        out.push(match d {
+                            b'*' => Inline::Strong(inner),
+                            b'_' => Inline::Emphasis(inner),
+                            _ => Inline::Strike(inner),
+                        });
+                        i = close + 1;
+                    }
+                    None => {
+                        buf.push(d as char);
+                        i += 1;
+                    }
                 }
-                None => {
-                    buf.push(d as char);
+            }
+            // Underline, superscript, subscript and citation have no Markdown
+            // form. Read as text they came back escaped on the next push and
+            // stopped being marks, so they are kept as regions instead, the
+            // way the ADF reader keeps the same marks.
+            b'+' | b'^' | b'~' | b'?' => {
+                let delim = if text[i..].starts_with("??") {
+                    "??"
+                } else if b[i] == b'?' {
+                    buf.push('?');
                     i += 1;
+                    continue;
+                } else {
+                    &text[i..i + 1]
+                };
+                match mark_close(text, i, delim) {
+                    Some(close) => {
+                        flush(&mut buf, &mut out);
+                        let end = close + delim.len();
+                        out.push(Inline::Raw(phrase_region(
+                            &text[i..end],
+                            &text[i + delim.len()..close],
+                            delim,
+                            store,
+                        )));
+                        i = end;
+                    }
+                    None => {
+                        buf.push(b[i] as char);
+                        i += 1;
+                    }
                 }
-            },
+            }
             c if c.is_ascii_uppercase() => match issue_key_end(text, i) {
                 Some(end) => {
                     flush(&mut buf, &mut out);
@@ -642,42 +714,95 @@ fn parse_bracket(content: &str, store: &mut RawStore) -> Inline {
 }
 
 /// Find the closing delimiter of a `*bold*`-style span on the same line.
-fn mark_close(text: &str, open: usize, delim: u8) -> Option<usize> {
-    let b = text.as_bytes();
-    if open > 0 {
-        let prev = b[open - 1];
-        let opens = prev.is_ascii_whitespace()
-            || matches!(prev, b'(' | b'[' | b'{' | b'"' | b'\'' | b',' | b';' | b':');
-        if !opens {
+///
+/// A delimiter opens where no word runs into it and closes where none runs on
+/// from it, so `well-known` and `C++` are text. Jira's rule is that much and
+/// no stricter, which is why a quote mark counts as a boundary: `«+»` and
+/// `«++»` pair up into an underline there.
+fn mark_close(text: &str, open: usize, delim: &str) -> Option<usize> {
+    let d = delim.chars().next()?;
+    if let Some(prev) = text[..open].chars().next_back() {
+        // An escaped character is text, not a run of delimiters: `\**b*` is a
+        // literal star and then bold.
+        let escaped = text[..open - prev.len_utf8()].ends_with('\\');
+        if !opens_after(prev, d) && !(escaped && !prev.is_alphanumeric()) {
             return None;
         }
     }
-    let next = *b.get(open + 1)?;
-    if next == delim || next.is_ascii_whitespace() {
+    let body = open + delim.len();
+    let next = text[body..].chars().next()?;
+    if next == d || next.is_whitespace() {
         return None;
     }
-    let limit = text[open..]
+    let limit = text[body..]
         .find('\n')
-        .map(|rel| open + rel)
-        .unwrap_or(b.len());
+        .map(|rel| body + rel)
+        .unwrap_or(text.len());
 
-    let mut i = open + 1;
-    while i < limit {
-        if b[i] == delim && !b[i - 1].is_ascii_whitespace() {
-            let closes = match b.get(i + 1) {
-                None => true,
-                Some(after) => !(after.is_ascii_alphanumeric() || *after == delim),
-            };
-            if closes {
+    // An escaped delimiter is text, so the scan steps over it: the writer
+    // escapes a literal `*` inside a mark as `\*`, and closing the mark there
+    // cut it short.
+    let mut prev = next;
+    let mut chars = text[body..limit].char_indices().peekable();
+    while let Some((rel, c)) = chars.next() {
+        let i = body + rel;
+        if c == '\\' {
+            if let Some((_, escaped)) = chars.next_if(|(_, n)| n.is_ascii_punctuation()) {
+                prev = escaped;
+                continue;
+            }
+        }
+        // Nor does a delimiter inside a code span or a link close the mark:
+        // those are written as they are, and their text is not prose.
+        let skip_to = match c {
+            '{' if text[i..limit].starts_with("{{") => {
+                text[i + 2..limit].find("}}").map(|r| i + 2 + r + 2)
+            }
+            '[' => bracket_end(&text[..limit], i).map(|close| close + 1),
+            _ => None,
+        };
+        if let Some(to) = skip_to {
+            while chars.next_if(|(r, _)| body + r < to).is_some() {}
+            prev = text[..to].chars().next_back().unwrap_or(c);
+            continue;
+        }
+        if rel > 0 && text[i..limit].starts_with(delim) && !prev.is_whitespace() {
+            let after = text[i + delim.len()..].chars().next();
+            if after.is_none_or(|a| !(a.is_alphanumeric() || a == d)) {
                 return Some(i);
             }
         }
-        i += 1;
+        prev = c;
     }
     None
 }
 
-/// End offset of a bare `[A-Z][A-Z0-9]+-\d+` issue key starting at `pos`.
+/// Whether a phrase delimiter right after `prev` can open a span.
+///
+/// A path or a dotted name is not a word boundary even though its separators
+/// are punctuation: `a/-b-/c` is a path, not a strikethrough.
+fn opens_after(prev: char, delim: char) -> bool {
+    prev.is_whitespace()
+        || !(prev.is_alphanumeric() || prev == delim || matches!(prev, '/' | '\\' | '.'))
+}
+
+/// A Jira phrase mark with no Markdown form, kept verbatim.
+fn phrase_region(source: &str, inner: &str, delim: &str, store: &mut RawStore) -> RawRef {
+    let text = inline_text(&parse_inlines(inner, &mut RawStore::new()));
+    let (tag, label) = match delim {
+        "+" => ("u", "underline"),
+        "^" => ("sup", "superscript"),
+        "~" => ("sub", "subscript"),
+        _ => ("cite", "citation"),
+    };
+    store.insert(
+        source.to_string(),
+        format!("<{tag}>{text}</{tag}>"),
+        label.to_string(),
+    )
+}
+
+/// End offset of a bare `[A-Z][A-Z0-9_]+-\d+` issue key starting at `pos`.
 fn issue_key_end(text: &str, pos: usize) -> Option<usize> {
     let b = text.as_bytes();
     if pos > 0 {
@@ -686,11 +811,14 @@ fn issue_key_end(text: &str, pos: usize) -> Option<usize> {
             return None;
         }
     }
+    // A project key may hold an underscore, `A_PROJ-1`; the Markdown reader
+    // already says so, and the two have to agree on what is a key.
     let mut i = pos + 1;
-    while i < b.len() && (b[i].is_ascii_uppercase() || b[i].is_ascii_digit()) {
+    while i < b.len() && (b[i].is_ascii_uppercase() || b[i].is_ascii_digit() || b[i] == b'_') {
         i += 1;
     }
-    if i - pos < 2 || b.get(i) != Some(&b'-') {
+    // `A_-1` is not a key: a project key ends in a letter or a digit.
+    if i - pos < 2 || b[i - 1] == b'_' || b.get(i) != Some(&b'-') {
         return None;
     }
     let digits = i + 1;
@@ -703,6 +831,10 @@ fn issue_key_end(text: &str, pos: usize) -> Option<usize> {
     }
     if let Some(after) = b.get(j) {
         if after.is_ascii_alphanumeric() || matches!(after, b'-' | b'_') {
+            return None;
+        }
+        // `PROJ-1\-` is `PROJ-1-` with its hyphen escaped, and no more a key.
+        if *after == b'\\' && matches!(b.get(j + 1), Some(b'-' | b'_')) {
             return None;
         }
     }
@@ -737,10 +869,10 @@ fn guard_block_starts(text: &str) -> String {
         .join("\n")
 }
 
-fn render_blocks(blocks: &[Block], store: &RawStore) -> String {
+fn render_blocks(blocks: &[Block], store: &RawStore, ctx: Ctx) -> String {
     let mut chunks: Vec<String> = Vec::new();
     for b in blocks {
-        if let Some(s) = render_block(b, store) {
+        if let Some(s) = render_block(b, store, ctx) {
             if !s.is_empty() {
                 chunks.push(s);
             }
@@ -749,19 +881,22 @@ fn render_blocks(blocks: &[Block], store: &RawStore) -> String {
     chunks.join("\n\n")
 }
 
-fn render_block(block: &Block, store: &RawStore) -> Option<String> {
+fn render_block(block: &Block, store: &RawStore, ctx: Ctx) -> Option<String> {
     Some(match block {
-        Block::Paragraph(inlines) => guard_block_starts(&render_inlines(inlines, store)),
+        Block::Paragraph(inlines) => guard_block_starts(&render_inlines(inlines, store, ctx)),
         Block::Heading { level, content } => {
             let level = (*level).clamp(1, 6);
-            format!("h{level}. {}", one_line(render_inlines(content, store)))
+            format!(
+                "h{level}. {}",
+                one_line(render_inlines(content, store, ctx))
+            )
         }
         Block::CodeBlock { language, code } => match language {
             Some(lang) => format!("{{code:{lang}}}\n{code}\n{{code}}"),
             None => format!("{{noformat}}\n{code}\n{{noformat}}"),
         },
         Block::BlockQuote(inner) => {
-            let body = render_blocks(inner, store);
+            let body = render_blocks(inner, store, ctx);
             let simple = matches!(inner.as_slice(), [Block::Paragraph(_)]) && !body.contains('\n');
             if simple {
                 format!("bq. {body}")
@@ -769,8 +904,8 @@ fn render_block(block: &Block, store: &RawStore) -> Option<String> {
                 format!("{{quote}}\n{body}\n{{quote}}")
             }
         }
-        Block::BulletList(items) => render_list(items, '*', "", store),
-        Block::OrderedList { items, .. } => render_list(items, '#', "", store),
+        Block::BulletList(items) => render_list(items, '*', "", store, ctx),
+        Block::OrderedList { items, .. } => render_list(items, '#', "", store, ctx),
         Block::TaskList(items) => {
             // Wiki markup has no task list; the checkbox degrades to a Jira
             // emoticon inside a plain bullet.
@@ -779,7 +914,7 @@ fn render_block(block: &Block, store: &RawStore) -> Option<String> {
                 let mark = if item.checked { "(/)" } else { "(x)" };
                 lines.push(format!(
                     "* {mark} {}",
-                    one_line(render_inlines(&item.content, store))
+                    one_line(render_inlines(&item.content, store, ctx))
                 ));
             }
             lines.join("\n")
@@ -790,7 +925,13 @@ fn render_block(block: &Block, store: &RawStore) -> Option<String> {
     })
 }
 
-fn render_list(items: &[ListItem], marker: char, prefix: &str, store: &RawStore) -> String {
+fn render_list(
+    items: &[ListItem],
+    marker: char,
+    prefix: &str,
+    store: &RawStore,
+    ctx: Ctx,
+) -> String {
     let bullet = format!("{prefix}{marker}");
     let mut lines: Vec<String> = Vec::new();
 
@@ -800,15 +941,15 @@ fn render_list(items: &[ListItem], marker: char, prefix: &str, store: &RawStore)
                 Block::Paragraph(inlines) => {
                     lines.push(format!(
                         "{bullet} {}",
-                        one_line(render_inlines(inlines, store))
+                        one_line(render_inlines(inlines, store, ctx))
                     ));
                 }
-                Block::BulletList(sub) => lines.push(render_list(sub, '*', &bullet, store)),
+                Block::BulletList(sub) => lines.push(render_list(sub, '*', &bullet, store, ctx)),
                 Block::OrderedList { items: sub, .. } => {
-                    lines.push(render_list(sub, '#', &bullet, store))
+                    lines.push(render_list(sub, '#', &bullet, store, ctx))
                 }
                 other => {
-                    if let Some(s) = render_block(other, store) {
+                    if let Some(s) = render_block(other, store, ctx) {
                         lines.push(s);
                     }
                 }
@@ -833,36 +974,220 @@ fn render_table(t: &Table, store: &RawStore) -> String {
 }
 
 fn render_cell(cell: &[Block], store: &RawStore) -> String {
-    one_line(render_blocks(cell, store))
+    let ctx = Ctx {
+        in_table: true,
+        ..Ctx::default()
+    };
+    one_line(render_blocks(cell, store, ctx))
 }
 
-/// Backslash-escape the characters that open a construct the tokenizer would
-/// otherwise consume.
+/// Where a run of text sits, as far as escaping it is concerned.
+#[derive(Debug, Clone, Copy, Default)]
+struct Ctx {
+    /// Something is written right before the text, on its line: a mark, a
+    /// link, another run. What it ends with is not known here.
+    before: bool,
+    /// Something is written right after the text.
+    after: bool,
+    /// Inside a table cell, where a bare `|` ends the cell.
+    in_table: bool,
+}
+
+impl Ctx {
+    /// The text is enclosed: a mark's delimiters or a link's brackets sit on
+    /// both sides of it.
+    fn enclosed(self) -> Self {
+        Self {
+            before: true,
+            after: true,
+            ..self
+        }
+    }
+}
+
+/// Phrase delimiters: strong, emphasis, strikethrough, underline,
+/// superscript, subscript. `??` (citation) and `!` (an image) are their own
+/// cases.
+const PHRASE_MARKS: [char; 6] = ['*', '_', '-', '+', '^', '~'];
+
+/// Backslash-escape what Jira would read as markup in literal text.
 ///
-/// Only the openers need escaping: `[` starts a link or mention, `{` starts a
-/// macro or a code span, and `\` has to escape itself where it would escape
-/// what follows it. Mark delimiters
-/// (`*`, `_`, `-`) are left alone — they only bind between word boundaries, and
-/// escaping every one of them would make ordinary prose unreadable in Jira.
-fn escape_text(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        let escape = match ch {
+/// `[` starts a link or a mention and `{` a macro or a code span, so those are
+/// always escaped, and `\` is doubled where it would escape what follows it.
+///
+/// A phrase delimiter is escaped only where it would pair up: a word boundary
+/// on its outside, text on its inside, and a partner on the same line. Every
+/// `-` in prose escaped would make the Jira source unreadable; none escaped,
+/// and `a +b+ c` went out as an underline — it is Markdown's literal text, and
+/// a push turned it into formatting. Where the text meets something else the
+/// neighbour is not known, and a delimiter there is escaped as if the
+/// neighbour completed the pair.
+///
+/// A token holding `://` is a URL, which Jira links before it looks for marks,
+/// so the `/-/` of a merge-request link is left alone.
+fn escape_text(text: &str, ctx: Ctx) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut escape = vec![false; chars.len()];
+    let in_url = url_mask(&chars);
+
+    let mut start = 0;
+    while start <= chars.len() {
+        let end = chars[start..]
+            .iter()
+            .position(|c| *c == '\n')
+            .map_or(chars.len(), |rel| start + rel);
+        let line = Line {
+            chars: &chars,
+            start,
+            end,
+            open_before: start == 0 && ctx.before,
+            open_after: end == chars.len() && ctx.after,
+        };
+        // An escape changes what its neighbour sees — `--a-` with the second
+        // hyphen escaped leaves the first one opening onto a backslash — so
+        // the flags are settled by running until nothing more changes.
+        loop {
+            let settled = escape.clone();
+            for d in PHRASE_MARKS {
+                line.mark_pairs(&[d], &in_url, &mut escape);
+            }
+            line.mark_pairs(&['?', '?'], &in_url, &mut escape);
+            line.mark_images(&in_url, &mut escape);
+            if escape == settled {
+                break;
+            }
+        }
+        start = end + 1;
+    }
+
+    let mut out = String::with_capacity(text.len() + 8);
+    for (i, &ch) in chars.iter().enumerate() {
+        let needed = match ch {
             '[' | '{' => true,
             // A backslash only escapes punctuation, so one before a letter is
             // written as it is and the server's text stays byte-identical. At
             // the end of the text the next character is not known — a mark or
             // a link may follow — so it is escaped there.
-            '\\' => chars.peek().is_none_or(char::is_ascii_punctuation),
-            _ => false,
+            '\\' => chars.get(i + 1).is_none_or(char::is_ascii_punctuation),
+            '|' => ctx.in_table,
+            _ => escape[i],
         };
-        if escape {
+        if needed {
             out.push('\\');
         }
         out.push(ch);
     }
     out
+}
+
+/// Which characters belong to a whitespace-delimited token holding `://`.
+fn url_mask(chars: &[char]) -> Vec<bool> {
+    let mut mask = vec![false; chars.len()];
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            i += 1;
+            continue;
+        }
+        let end = chars[i..]
+            .iter()
+            .position(|c| c.is_whitespace())
+            .map_or(chars.len(), |rel| i + rel);
+        if chars[i..end].windows(3).any(|w| w == [':', '/', '/']) {
+            mask[i..end].iter_mut().for_each(|m| *m = true);
+        }
+        i = end;
+    }
+    mask
+}
+
+/// One line of a run of text, with what is known about its edges.
+struct Line<'a> {
+    chars: &'a [char],
+    start: usize,
+    end: usize,
+    /// The line is the first of the run and something precedes the run.
+    open_before: bool,
+    /// The line is the last of the run and something follows it.
+    open_after: bool,
+}
+
+impl Line<'_> {
+    /// The character at `i`, `None` past either end of the line.
+    fn at(&self, i: isize) -> Option<char> {
+        let i = usize::try_from(i).ok()?;
+        (self.start..self.end).contains(&i).then(|| self.chars[i])
+    }
+
+    /// Flag every delimiter `delim` that could open or close a span and has a
+    /// partner it could pair with.
+    fn mark_pairs(&self, delim: &[char], in_url: &[bool], escape: &mut [bool]) {
+        let n = delim.len();
+        let mut opens = Vec::new();
+        let mut closes = Vec::new();
+        let mut i = self.start;
+        while i + n <= self.end {
+            if self.chars[i..i + n] != *delim || in_url[i] {
+                i += 1;
+                continue;
+            }
+            let prev = self.at(i as isize - 1);
+            // What the reader meets after the delimiter is the backslash of
+            // an escape, when there is one.
+            let next = match self.at((i + n) as isize) {
+                Some(_) if escape[i + n] => Some('\\'),
+                other => other,
+            };
+            let first = i == self.start;
+            let last = i + n == self.end;
+            // `--` is a dash, not an empty strikethrough: a delimiter followed
+            // by its own character does not open, here as in the reader.
+            let can_open = prev.is_none_or(|p| !p.is_alphanumeric())
+                && match next {
+                    Some(c) => !c.is_whitespace() && c != delim[0],
+                    None => self.open_after && last,
+                };
+            let can_close = match prev {
+                Some(c) => !c.is_whitespace(),
+                None => self.open_before && first,
+            } && next.is_none_or(|c| !c.is_alphanumeric());
+            if can_open {
+                opens.push(i);
+            }
+            if can_close {
+                closes.push(i);
+            }
+            i += n;
+        }
+        for &o in &opens {
+            if self.open_after || closes.iter().any(|&c| c > o + n) {
+                escape[o] = true;
+            }
+        }
+        for &c in &closes {
+            if self.open_before || opens.iter().any(|&o| o + n < c) {
+                escape[c] = true;
+            }
+        }
+    }
+
+    /// Flag a `!` that would start an embedded image: text right after it and
+    /// another `!` later on the line.
+    fn mark_images(&self, in_url: &[bool], escape: &mut [bool]) {
+        for i in self.start..self.end {
+            if self.chars[i] != '!' || in_url[i] {
+                continue;
+            }
+            let opens = match self.at(i as isize + 1) {
+                Some(c) => !c.is_whitespace(),
+                None => self.open_after,
+            };
+            let closed = self.open_after || self.chars[i + 1..self.end].contains(&'!');
+            if opens && closed {
+                escape[i] = true;
+            }
+        }
+    }
 }
 
 fn is_representable_user(user: &str) -> bool {
@@ -872,8 +1197,8 @@ fn is_representable_user(user: &str) -> bool {
         })
 }
 
-fn push_mark(out: &mut String, delimiter: char, content: &[Inline], store: &RawStore) {
-    let inner = render_inlines(content, store);
+fn push_mark(out: &mut String, delimiter: char, content: &[Inline], store: &RawStore, ctx: Ctx) {
+    let inner = render_inlines(content, store, ctx.enclosed());
     if inner.is_empty() {
         return;
     }
@@ -897,23 +1222,65 @@ fn escape_in_brackets(label: &str) -> String {
     out
 }
 
-fn render_inlines(inlines: &[Inline], store: &RawStore) -> String {
+fn render_inlines(inlines: &[Inline], store: &RawStore, ctx: Ctx) -> String {
     let mut out = String::new();
-    for i in inlines {
+    for (k, i) in inlines.iter().enumerate() {
+        // A partner can be anywhere on the line, not only next door: a `*`
+        // in bold text closes the bold even with a code span in between.
+        let earlier = &inlines[..k];
+        let later = &inlines[k + 1..];
+        let here = Ctx {
+            before: match earlier.iter().rposition(|n| matches!(n, Inline::LineBreak)) {
+                Some(br) => earlier[br + 1..].iter().any(may_hold_delimiter),
+                None => ctx.before || earlier.iter().any(may_hold_delimiter),
+            },
+            after: match later.iter().position(|n| matches!(n, Inline::LineBreak)) {
+                Some(br) => later[..br].iter().any(may_hold_delimiter),
+                None => ctx.after || later.iter().any(may_hold_delimiter),
+            },
+            ..ctx
+        };
         match i {
-            Inline::Text(t) => out.push_str(&escape_text(t)),
+            Inline::Text(t) => {
+                let mut escaped = escape_text(t, here);
+                // A delimiter against the same delimiter of the mark beside
+                // it makes a run, and a run neither opens nor closes: `*a*`
+                // then `*b` left the bold open.
+                let first = t.chars().next();
+                if first.is_some_and(|c| PHRASE_MARKS.contains(&c))
+                    && first == last_bare_char(&out)
+                    && !escaped.starts_with('\\')
+                {
+                    escaped.insert(0, '\\');
+                }
+                let last = t.chars().next_back();
+                if last.is_some_and(|c| PHRASE_MARKS.contains(&c))
+                    && last == inlines.get(k + 1).and_then(|n| first_char(n, store))
+                    && !escaped.ends_with(&format!("\\{}", last.unwrap_or_default()))
+                {
+                    let at = escaped.len() - last.map_or(0, char::len_utf8);
+                    escaped.insert(at, '\\');
+                }
+                out.push_str(&escaped);
+            }
             // An empty mark has no wiki spelling: `**` or `__` re-parses as
             // literal text, so a mark with no content is simply dropped.
-            Inline::Strong(c) => push_mark(&mut out, '*', c, store),
-            Inline::Emphasis(c) => push_mark(&mut out, '_', c, store),
-            Inline::Strike(c) => push_mark(&mut out, '-', c, store),
+            Inline::Strong(c) => push_mark(&mut out, '*', c, store, ctx),
+            Inline::Emphasis(c) => push_mark(&mut out, '_', c, store, ctx),
+            Inline::Strike(c) => push_mark(&mut out, '-', c, store, ctx),
             Inline::Code(c) => {
                 out.push_str("{{");
                 out.push_str(c);
                 out.push_str("}}");
             }
             Inline::Link { text, href } => {
-                let label = render_inlines(text, store);
+                // Inside the brackets a `|` is escaped by the brackets' own
+                // rule, below, not by the table's.
+                let inner = Ctx {
+                    in_table: false,
+                    ..ctx.enclosed()
+                };
+                let label = render_inlines(text, store, inner);
                 let mut label = escape_in_brackets(&label);
                 // `[~name]` is mention syntax, so a label starting with `~`
                 // has to be escaped or the link comes back as a mention.
@@ -938,7 +1305,7 @@ fn render_inlines(inlines: &[Inline], store: &RawStore) -> String {
                 // Real Jira usernames never contain them, so an unrepresentable
                 // one degrades to text rather than corrupting the line.
                 if !is_representable_user(user) {
-                    out.push_str(&escape_text(&format!("@{user}")));
+                    out.push_str(&escape_text(&format!("@{user}"), here));
                     continue;
                 }
                 let user = &escape_in_brackets(user);
@@ -954,6 +1321,40 @@ fn render_inlines(inlines: &[Inline], store: &RawStore) -> String {
         }
     }
     out
+}
+
+/// The last character written, unless it is escaped.
+fn last_bare_char(out: &str) -> Option<char> {
+    let last = out.chars().next_back()?;
+    (!out[..out.len() - last.len_utf8()].ends_with('\\')).then_some(last)
+}
+
+/// The first character a node is written with.
+fn first_char(inline: &Inline, store: &RawStore) -> Option<char> {
+    match inline {
+        Inline::Strong(_) => Some('*'),
+        Inline::Emphasis(_) => Some('_'),
+        Inline::Strike(_) => Some('-'),
+        Inline::Raw(r) => store.get(&r.id)?.node_json.chars().next(),
+        _ => None,
+    }
+}
+
+/// Whether a node on the same line can put a bare phrase delimiter there.
+///
+/// A mark writes its own, and a region writes the server's text verbatim.
+/// Code, links and mentions cannot: the reader looks for no partner inside
+/// them, and a key is letters, digits and one hyphen between them. A line
+/// break starts a line, and marks do not cross one.
+fn may_hold_delimiter(inline: &Inline) -> bool {
+    matches!(
+        inline,
+        Inline::Strong(_)
+            | Inline::Emphasis(_)
+            | Inline::Strike(_)
+            | Inline::Raw(_)
+            | Inline::Text(_)
+    )
 }
 
 fn one_line(s: String) -> String {
@@ -1051,6 +1452,105 @@ mod escaping_tests {
         )])]);
         let text = from_ast(&doc, &RawStore::new());
         assert_eq!(text, "x\\\\\\[y] z\\\\");
+        assert_eq!(ast_of(&text), doc);
+    }
+
+    fn para(text: &str) -> Document {
+        Document::new(vec![Block::Paragraph(vec![Inline::Text(text.into())])])
+    }
+
+    /// Markdown's literal text was sent as Jira formatting: `+x+` is an
+    /// underline there, `-x-` a strikethrough, `^x^` a superscript.
+    #[test]
+    fn literal_phrase_markers_are_escaped_where_they_would_pair() {
+        for (literal, wire) in [
+            ("word +underlined+ end", "word \\+underlined\\+ end"),
+            ("and -struck- and", "and \\-struck\\- and"),
+            ("and ^up^ and", "and \\^up\\^ and"),
+            ("and ~down~ and", "and \\~down\\~ and"),
+            ("and *bold* and _it_", "and \\*bold\\* and \\_it\\_"),
+            ("a ??cited?? b", "a \\??cited\\?? b"),
+            ("an !image.png! here", "an \\!image.png! here"),
+            ("signs «+» (none), «++»", "signs «\\+» (none), «\\+\\+»"),
+            ("«[22]»", "«\\[22]»"),
+        ] {
+            let rendered = from_ast(&para(literal), &RawStore::new());
+            assert_eq!(rendered, wire, "for {literal:?}");
+            assert_eq!(ast_of(&rendered), para(literal), "for {literal:?}");
+        }
+    }
+
+    /// Prose punctuation that cannot pair stays unescaped, so the Jira source
+    /// reads as it did.
+    #[test]
+    fn punctuation_that_cannot_pair_is_left_alone() {
+        for text in [
+            "a well-known fix, 2026-11-15",
+            "a - b and 1 + 2 = 3",
+            "C++ and x^2",
+            "-- and --- are dashes",
+            "Wow! Great!",
+            "Really? Yes?",
+            "see https://git.example/group/proj/-/merge_requests/1 and -x-y",
+            "snake_case_name",
+        ] {
+            assert_eq!(from_ast(&para(text), &RawStore::new()), text);
+            assert_eq!(ast_of(text), para(text), "{text:?} must read as text");
+        }
+    }
+
+    /// Where the text ends and a mark begins, the mark's delimiter could
+    /// complete a pair, so the text's side is escaped.
+    #[test]
+    fn a_delimiter_next_to_another_node_is_escaped() {
+        let doc = Document::new(vec![Block::Paragraph(vec![
+            Inline::Text("x +a ".into()),
+            Inline::Strong(vec![Inline::Text("b+".into())]),
+        ])]);
+        let text = from_ast(&doc, &RawStore::new());
+        assert_eq!(ast_of(&text), doc, "{text:?}");
+    }
+
+    /// Jira's own underline, superscript, subscript and citation have no
+    /// Markdown form; they come back as regions that push back verbatim.
+    #[test]
+    fn jira_only_marks_are_kept_as_regions() {
+        for (src, label, approx) in [
+            ("a +under+ b", "underline", "<u>under</u>"),
+            ("a ^up^ b", "superscript", "<sup>up</sup>"),
+            ("a ~down~ b", "subscript", "<sub>down</sub>"),
+            ("a ??Book?? b", "citation", "<cite>Book</cite>"),
+        ] {
+            let mut store = RawStore::new();
+            let doc = to_ast(src, &mut store);
+            assert_eq!(store.blocks().len(), 1, "{src:?}: {doc:?}");
+            assert_eq!(store.blocks()[0].label, label);
+            assert_eq!(store.blocks()[0].approx_md, approx);
+            assert_eq!(from_ast(&doc, &store), src);
+
+            let md = crate::convert::markdown::render(&doc, &store);
+            let back = crate::convert::markdown::parse(&md, &store);
+            assert_eq!(from_ast(&back, &store), src, "through the file: {md}");
+        }
+    }
+
+    /// A `|` in a table cell is escaped, and an escaped one or one inside a
+    /// link does not split the cell.
+    #[test]
+    fn a_pipe_in_a_table_cell_stays_in_the_cell() {
+        let cell = |inlines: Vec<Inline>| vec![Block::Paragraph(inlines)];
+        let doc = Document::new(vec![Block::Table(Table {
+            header: Some(vec![cell(vec![Inline::Text("a | b".into())])]),
+            rows: vec![vec![cell(vec![
+                Inline::Text("x|y ".into()),
+                Inline::Link {
+                    text: vec![Inline::Text("l".into())],
+                    href: "https://h.example/".into(),
+                },
+            ])]],
+        })]);
+        let text = from_ast(&doc, &RawStore::new());
+        assert_eq!(text, "||a \\| b||\n|x\\|y [l|https://h.example/]|");
         assert_eq!(ast_of(&text), doc);
     }
 

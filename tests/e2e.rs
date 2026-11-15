@@ -2164,6 +2164,34 @@ fn data_center_wiki_markup_becomes_markdown() {
     assert!(text.contains("No directory changes during the release window."));
 }
 
+/// What is literal text in the file reaches Jira as text: wiki markup reads
+/// `+x+` as an underline and `-x-` as a strikethrough, so they are escaped,
+/// while a hyphen inside a word is left as it is.
+#[test]
+fn literal_markup_characters_are_escaped_on_data_center() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws.read(ws.issue_file()).replace(
+        "for the rollback plan.",
+        "for the rollback plan.\n\nSigns: +plus+ and -minus-, a well-known ^caret^.",
+    );
+    ws.write(ws.issue_file(), &text);
+
+    let report = ws.json(&["push", "--dry-run"]);
+    let ops = report["results"][0]["ops"].as_array().unwrap();
+    let sent = ops
+        .iter()
+        .find_map(|op| op["request"]["body"]["fields"]["description"].as_str())
+        .unwrap_or_else(|| panic!("no description in the plan: {report}"));
+    assert!(
+        sent.ends_with("Signs: \\+plus\\+ and \\-minus\\-, a well-known \\^caret\\^."),
+        "{sent}"
+    );
+    // The untouched part goes back as the server had it.
+    assert!(sent.contains("{panel:title=Change freeze}"), "{sent}");
+}
+
 #[test]
 fn data_center_custom_fields_are_mapped_by_name() {
     let ws = Ws::of(Deployment::DataCenter);
