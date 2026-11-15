@@ -2,11 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jired/show/1",
   "title": "jired show result",
-  "description": "Everything the workspace knows about one issue",
+  "description": "Everything the workspace knows about one issue, or, given several, about each of them under `issues`",
   "type": "object",
   "required": [
-    "schema",
-    "key"
+    "schema"
   ],
   "properties": {
     "schema": {
@@ -39,6 +38,16 @@
     "raw": {
       "type": "object",
       "description": "With --raw: the server's own payload, including fields jired does not model and the ones it has no value for"
+    },
+    "sections": {
+      "type": "object",
+      "description": "With --section: the text of each section asked for, by its lower-case name (description, checklist, children, comments, worklogs, attachments), as the file has it under the heading",
+      "additionalProperties": { "type": "string" }
+    },
+    "issues": {
+      "type": "array",
+      "description": "Given several issues: one document per issue, each shaped like a single `show`, in the order asked; `key` and the rest are then absent from the top level",
+      "items": { "type": "object", "required": ["key"] }
     }
   }
 }

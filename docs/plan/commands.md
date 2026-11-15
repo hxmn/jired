@@ -1433,8 +1433,8 @@ named one when both exist. A template is a partial file: the identity fields
 (`key`, `id`, `jired`) are supplied if it does not carry them, so a skeleton with
 frontmatter no longer needs a placeholder key to get past the parser.
 
-### `jired show ISSUE [--raw|--path]`
-Everything the workspace knows about one issue, from the file when there is one
+### `jired show ISSUE… [--raw|--path|--section S,…]`
+Everything the workspace knows about an issue, from the file when there is one
 and from the snapshot when there is not — the preference `create --like` uses
 too, and the reason both live on `cmd::lookup`. The default is the issue as jired
 models it; `--raw` is the server's own payload.
@@ -1446,6 +1446,15 @@ the padding is not something a caller should have to do. `ISSUE` is a key in any
 case and with or without the padding. An issue the workspace knows but has no
 file for is exit 2, as is one it does not know at all. Every form of the JSON
 carries `file`, null when there is none.
+
+Several issues are shown one after another. The JSON for one is the document
+it always was; for several it is `issues`, one such document each, in the order
+asked. `--section` takes a comma-separated list of `fields` and the file's own
+sections — `description`, `checklist`, `children`, `comments`, `worklogs`,
+`attachments` — and prints only those, each under its `## ` heading and exactly
+as the file has it, in the file's order; the JSON adds their text under
+`sections`. Reading the description and comments of four issues was a loop over
+`--path` and an `awk` per file. An unknown section is exit 2 naming the others.
 
 `--raw` is the point of the command. An unset field is not written into a `.md`
 file, so the file cannot answer "is this empty, or does this instance not have

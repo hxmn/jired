@@ -23,6 +23,16 @@ pub const SECTION_COMMENTS: &str = "Comments";
 pub const SECTION_WORKLOGS: &str = "Worklogs";
 pub const SECTION_ATTACHMENTS: &str = "Attachments";
 
+/// The fixed sections, in the order the file writes them.
+pub const SECTIONS: [&str; 6] = [
+    SECTION_DESCRIPTION,
+    SECTION_CHECKLIST,
+    SECTION_CHILDREN,
+    SECTION_COMMENTS,
+    SECTION_WORKLOGS,
+    SECTION_ATTACHMENTS,
+];
+
 /// A parsed issue file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IssueDoc {
@@ -205,6 +215,67 @@ impl IssueDoc {
             .collect()
     }
 
+    /// The text under one of the fixed sections — what follows its `## `
+    /// heading in the file, byte for byte — or `None` for a name that is not
+    /// one of [`SECTIONS`].
+    pub fn section_body(&self, name: &str) -> Option<String> {
+        let mut out = String::new();
+        match name {
+            SECTION_DESCRIPTION => {
+                if !self.description.trim().is_empty() {
+                    out.push_str(self.description.trim());
+                    out.push_str("\n\n");
+                }
+            }
+            SECTION_CHECKLIST => {
+                out.push_str(&self.checklist_text());
+                if !self.checklist.is_empty() {
+                    out.push('\n');
+                }
+            }
+            SECTION_CHILDREN => {
+                out.push_str(&self.children_text());
+                if !self.children.is_empty() {
+                    out.push('\n');
+                }
+            }
+            SECTION_COMMENTS => {
+                for c in &self.comments {
+                    out.push_str(&render_comment_heading(c));
+                    out.push_str("\n\n");
+                    if !c.body.trim().is_empty() {
+                        out.push_str(c.body.trim());
+                        out.push_str("\n\n");
+                    }
+                }
+            }
+            SECTION_WORKLOGS => {
+                for w in &self.worklogs {
+                    out.push_str(&render_worklog_heading(w));
+                    out.push_str("\n\n");
+                    if !w.body.trim().is_empty() {
+                        out.push_str(w.body.trim());
+                        out.push_str("\n\n");
+                    }
+                }
+            }
+            SECTION_ATTACHMENTS => {
+                for a in &self.attachments {
+                    out.push_str(&format!("- [{}]({})", a.filename, a.path));
+                    if !a.note.is_empty() {
+                        out.push_str(&format!(" ({})", a.note));
+                    }
+                    out.push('\n');
+                }
+                if !self.attachments.is_empty() {
+                    out.push('\n');
+                }
+            }
+            _ => return None,
+        }
+        Some(out)
+    }
+
     pub fn render(&self) -> Result<String> {
         let mut out = String::new();
         out.push_str("---\n");
@@ -217,54 +288,9 @@ impl IssueDoc {
             out.push_str("\n\n");
         }
 
-        out.push_str(&format!("## {SECTION_DESCRIPTION}\n\n"));
-        if !self.description.trim().is_empty() {
-            out.push_str(self.description.trim());
-            out.push_str("\n\n");
-        }
-
-        out.push_str(&format!("## {SECTION_CHECKLIST}\n\n"));
-        out.push_str(&self.checklist_text());
-        if !self.checklist.is_empty() {
-            out.push('\n');
-        }
-
-        out.push_str(&format!("## {SECTION_CHILDREN}\n\n"));
-        out.push_str(&self.children_text());
-        if !self.children.is_empty() {
-            out.push('\n');
-        }
-
-        out.push_str(&format!("## {SECTION_COMMENTS}\n\n"));
-        for c in &self.comments {
-            out.push_str(&render_comment_heading(c));
-            out.push_str("\n\n");
-            if !c.body.trim().is_empty() {
-                out.push_str(c.body.trim());
-                out.push_str("\n\n");
-            }
-        }
-
-        out.push_str(&format!("## {SECTION_WORKLOGS}\n\n"));
-        for w in &self.worklogs {
-            out.push_str(&render_worklog_heading(w));
-            out.push_str("\n\n");
-            if !w.body.trim().is_empty() {
-                out.push_str(w.body.trim());
-                out.push_str("\n\n");
-            }
-        }
-
-        out.push_str(&format!("## {SECTION_ATTACHMENTS}\n\n"));
-        for a in &self.attachments {
-            out.push_str(&format!("- [{}]({})", a.filename, a.path));
-            if !a.note.is_empty() {
-                out.push_str(&format!(" ({})", a.note));
-            }
-            out.push('\n');
-        }
-        if !self.attachments.is_empty() {
-            out.push('\n');
+        for name in SECTIONS {
+            out.push_str(&format!("## {name}\n\n"));
+            out.push_str(&self.section_body(name).unwrap_or_default());
         }
 
         for (name, content) in &self.extra_sections {

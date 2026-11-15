@@ -8029,6 +8029,53 @@ fn show_answers_from_the_snapshot_including_the_raw_payload() {
     );
 }
 
+/// Reading the description and comments of several issues took a loop over
+/// `show --path` and a text filter over each file. `show` takes several
+/// issues and prints only the sections asked for.
+#[test]
+fn show_prints_chosen_sections_of_several_issues() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+
+    let out = ws
+        .cmd(&[
+            "show",
+            "DC-77",
+            "DC-79",
+            "--section",
+            "comments,description",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let (first, second) = stdout.split_at(stdout.find("DC-79").expect("both issues"));
+    assert!(first.contains("DC-77"), "{stdout}");
+    // In the file's order, whatever order they were asked in.
+    let (d, c) = (first.find("## Description"), first.find("## Comments"));
+    assert!(d.is_some() && c.is_some() && d < c, "{stdout}");
+    assert!(first.contains("### Steps"), "{stdout}");
+    // No frontmatter fields unless asked for.
+    assert!(!first.contains("priority"), "{stdout}");
+    assert!(second.contains("connector.yaml"), "{stdout}");
+
+    let doc = ws.json(&["show", "DC-77", "DC-79", "--section", "description"]);
+    let issues = doc["issues"].as_array().unwrap();
+    assert_eq!(issues.len(), 2);
+    assert_eq!(issues[0]["key"], "DC-77");
+    assert!(issues[1]["sections"]["description"]
+        .as_str()
+        .unwrap()
+        .contains("connector.yaml"));
+
+    // One issue is the document it always was.
+    assert_eq!(ws.json(&["show", "DC-77"])["key"], "DC-77");
+
+    let err = ws.json_err(&["show", "DC-77", "--section", "body"], 2);
+    assert!(err["hint"].as_str().unwrap().contains("comments"), "{err}");
+}
+
 /// The field report: `ls TSK-710*.md` found nothing, because files are named
 /// `TSK-0710. …`. `--path` prints the file, from the key however it is padded.
 #[test]

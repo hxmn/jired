@@ -526,6 +526,8 @@ fn recipes(s: &mut String) {
     s.push_str("jired users maria\n");
     s.push_str("# The file for a key — the number in a file name is zero-padded\n");
     s.push_str("jired show TSK-710 --path\n");
+    s.push_str("# The description and comments of several issues, nothing else\n");
+    s.push_str("jired show TSK-710 TSK-711 TSK-712 --section description,comments\n");
     s.push_str("# Create a task straight into a sprint and a version\n");
     s.push_str("jired create --type Task --summary \"Release notes\" --labels release --sprint 17 --set fix_versions=1.0.0 --push\n");
     s.push_str("# Link issues (a chain goes out in one push) and link a Confluence page\n");
