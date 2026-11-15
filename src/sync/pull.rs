@@ -666,11 +666,12 @@ fn field_changes(base: &IssueDoc, remote: &IssueDoc, names: &FieldMap) -> Vec<Fi
         }
         let (b, r) = (base.frontmatter.field(name), remote.frontmatter.field(name));
         if b != r {
+            let (from, to) = show_pair(b.as_ref(), r.as_ref());
             out.push(FieldChange {
                 field: (*name).to_string(),
                 label: None,
-                from: b.as_ref().and_then(show),
-                to: r.as_ref().and_then(show),
+                from,
+                to,
                 added: None,
                 removed: None,
             });
@@ -693,11 +694,12 @@ fn field_changes(base: &IssueDoc, remote: &IssueDoc, names: &FieldMap) -> Vec<Fi
         if b == r {
             continue;
         }
+        let (from, to) = show_pair(b, r);
         out.push(FieldChange {
             field: format!("custom.{id}"),
             label: names.names.get(id).cloned(),
-            from: b.and_then(show),
-            to: r.and_then(show),
+            from,
+            to,
             added: None,
             removed: None,
         });
@@ -912,7 +914,44 @@ fn line_counts(from: &str, to: &str) -> (usize, usize) {
 const VALUE_WIDTH: usize = 32;
 
 /// A field value as one short line, or `None` when there is nothing there.
-fn show(v: &serde_json::Value) -> Option<String> {
+/// Both sides of a change, each cut to the width of a summary line.
+///
+/// Two long values that differ past that width would come out the same — a
+/// Data Center development-summary field read `{summaryBean=com.atlassian.…`
+/// on both sides of every pull — and a line saying a value changed from X to
+/// X says nothing. Those are shown from just before the point they part.
+fn show_pair(
+    b: Option<&serde_json::Value>,
+    r: Option<&serde_json::Value>,
+) -> (Option<String>, Option<String>) {
+    let (full_b, full_r) = (b.and_then(full_text), r.and_then(full_text));
+    let clip = |t: &String| crate::project::naming::truncate(t, VALUE_WIDTH);
+    let (short_b, short_r) = (full_b.as_ref().map(clip), full_r.as_ref().map(clip));
+    let (Some(fb), Some(fr)) = (&full_b, &full_r) else {
+        return (short_b, short_r);
+    };
+    if short_b != short_r || fb == fr {
+        return (short_b, short_r);
+    }
+    let common = fb
+        .chars()
+        .zip(fr.chars())
+        .take_while(|(x, y)| x == y)
+        .count();
+    let start = common.saturating_sub(8);
+    let from_there = |t: &str| {
+        let rest: String = t.chars().skip(start).collect();
+        format!(
+            "…{}",
+            crate::project::naming::truncate(&rest, VALUE_WIDTH - 1)
+        )
+    };
+    (Some(from_there(fb)), Some(from_there(fr)))
+}
+
+/// A value as one line of text, untruncated; `None` when there is nothing to
+/// show.
+fn full_text(v: &serde_json::Value) -> Option<String> {
     let text = match v {
         serde_json::Value::Null => return None,
         serde_json::Value::String(s) => s.clone(),
@@ -921,17 +960,15 @@ fn show(v: &serde_json::Value) -> Option<String> {
         serde_json::Value::Array(items) if items.is_empty() => return None,
         serde_json::Value::Array(items) => items
             .iter()
-            .map(|i| show(i).unwrap_or_default())
+            .map(|i| full_text(i).unwrap_or_default())
             .collect::<Vec<_>>()
             .join(", "),
         serde_json::Value::Object(map) if map.is_empty() => return None,
         other => other.to_string(),
     };
     let text = text.replace('\n', " ");
-    if text.trim().is_empty() {
-        return None;
-    }
-    Some(crate::project::naming::truncate(text.trim(), VALUE_WIDTH))
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// The merge-granularity names, derived from the per-field list.
@@ -1319,6 +1356,33 @@ fn merge_worklogs(
 mod tests {
     use super::*;
     use crate::doc::{Frontmatter, SyncMeta};
+
+    /// Two values alike for a summary line's width are shown from where they
+    /// part, not as the same text twice.
+    #[test]
+    fn values_alike_at_the_cut_are_shown_where_they_differ() {
+        let b =
+            serde_json::json!("{summaryBean=com.example.jira.plugin.SummaryBean@1a2b, count=3}");
+        let r =
+            serde_json::json!("{summaryBean=com.example.jira.plugin.SummaryBean@9f8e, count=3}");
+        let (from, to) = show_pair(Some(&b), Some(&r));
+        let (from, to) = (from.unwrap(), to.unwrap());
+        assert_ne!(from, to);
+        assert!(from.starts_with('…') && from.contains("1a2b"), "{from}");
+        assert!(to.contains("9f8e"), "{to}");
+
+        // Short values and values that differ early are shown as they are.
+        let (from, to) = show_pair(
+            Some(&serde_json::json!("To Do")),
+            Some(&serde_json::json!("Done")),
+        );
+        assert_eq!(
+            (from.as_deref(), to.as_deref()),
+            (Some("To Do"), Some("Done"))
+        );
+        let (from, to) = show_pair(None, Some(&serde_json::json!("x")));
+        assert_eq!((from, to.as_deref()), (None, Some("x")));
+    }
 
     fn doc(summary: &str, description: &str, labels: &[&str]) -> IssueDoc {
         IssueDoc {
