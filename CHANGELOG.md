@@ -8,6 +8,25 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.27.1] — 2026-11-15
+
+### Fixed
+
+- **A change in the same second as the last sync is pulled.** Whether the
+  server had moved on was decided by `updated` to the second, so an
+  attachment upload and an edit straight after it read as one write: `pull`
+  reported nothing changed and left the file behind the server. Jira's own
+  milliseconds in the payload now settle a tie.
+- **`push --verify` compares what a description says, not its spelling.** A
+  description the server held exactly as asked failed with exit 10 because
+  the file had `~x~` or `_x_` where the read-back has `~~x~~` or `*x*`.
+- **An attachment link stays one link when the folder name has spaces or
+  brackets.** `## Attachments` wrote the path bare, so a summary like
+  `Scratch (safe to delete)` broke the link; such a path is now written in
+  `<…>`.
+- **`--` is sent as written** on a line that also has a strikethrough, so
+  Jira still draws it as a dash.
+
 ## [0.27.0] — 2026-11-15
 
 ### Breaking
