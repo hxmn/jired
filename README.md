@@ -453,6 +453,16 @@ and the same rule covers it wherever it is. Indentation is not an edit: a region
 written inside a list or a quote carries that container's indent on every line,
 and push compares what is between the markers without it.
 
+Text that is literal in the file reaches Jira as literal text. On Data Center a
+`+`, `-`, `^`, `~`, `*`, `_`, `??` or `!` that wiki markup would pair into
+underline, strikethrough, an image and the like is sent with a backslash, so
+`a +b+ c` stays three words rather than becoming an underline; a hyphen in a word
+and `--` are sent as written. Jira's own underline, superscript, subscript and
+citation have no Markdown form and arrive as read-only regions. An embedded image
+or an attachment link points into the issue's attachment folder, and goes back
+as `!name!` or `[^name]`. `jired push -n --show-body` prints each description,
+comment and worklog note as it will be sent.
+
 `pull --strategy merge` writes git-style `<<<<<<< LOCAL` / `=======` /
 `>>>>>>> REMOTE` markers into the file and exits 5. Fix them with `jired resolve`:
 

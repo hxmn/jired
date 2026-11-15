@@ -1133,6 +1133,64 @@ pub fn render() -> String {
          region have `lossy: true` in the `jired:` block.\n\n",
     );
 
+    s.push_str("## Markup conversion\n\n");
+    s.push_str(
+        "The file is Markdown — CommonMark plus GFM tables, strikethrough and task \
+         lists. `push` converts it to the server's markup, wiki markup on Data Center \
+         and ADF on Cloud, and `pull` converts back. On Data Center:\n\n",
+    );
+    s.push_str("| In the file | Sent as |\n|---|---|\n");
+    for (md, wiki) in [
+        (
+            "`**bold**`, `*italic*`, `~~struck~~`",
+            "`*bold*`, `_italic_`, `-struck-`",
+        ),
+        (
+            "`` `code` ``, a fenced block",
+            "`{{code}}`, `{code:lang}` or `{noformat}`",
+        ),
+        ("`#` … `######` headings", "`h1.` … `h6.`"),
+        (
+            "`- item`, `1. item`, nested",
+            "`* item`, `# item`, `** item`",
+        ),
+        ("`> quote`", "`bq.` or `{quote}`"),
+        ("a GFM table", "`||head||` and `|cell|` rows"),
+        ("`[text](url)`, `<url>`", "`[text|url]`, `[url]`"),
+        ("`@[Name](username)`", "`[~username]`"),
+        (
+            "`![](<.TSK-0710. Summary/shot.png>)`",
+            "`!shot.png!`, an embedded attachment",
+        ),
+        (
+            "`[logs.zip](<.TSK-0710. Summary/logs.zip>)`",
+            "`[^logs.zip]`, an attachment link",
+        ),
+        (
+            "`- [ ] task`",
+            "`* (x) task` — wiki markup has no task list",
+        ),
+    ] {
+        s.push_str(&format!("| {md} | {wiki} |\n"));
+    }
+    s.push_str(
+        "\nWrite text as you mean it; do not escape for Jira. Text that is literal in \
+         the file is sent as literal text: a `* _ - + ^ ~ ?? !` that Jira would pair \
+         into formatting gets a backslash, as do `[`, `{`, a `|` in a table cell and a \
+         line that would start a heading, list, table or quote. A hyphen inside a word \
+         and `--` go as written, and so does a delimiter with nothing on its line to \
+         pair with, like the `+` of `C++`; Jira shows an escaped one the same. A single `~x~` in the file is strikethrough, as \
+         GFM reads it.\n\n\
+         What Markdown cannot write comes back as a read-only region (see below): \
+         Jira's underline `+x+`, superscript `^x^`, subscript `~x~` and citation \
+         `??x??`, colours, panels and other macros, an image with parameters such as \
+         `!shot.png|thumbnail!`. On Cloud an image written in the file goes out as a \
+         link to its target, and an attachment link as its text.\n\n\
+         To see what Jira will receive, `jired push -n --show-body` prints each planned \
+         description, comment and worklog note as it will be sent; `jired show KEY \
+         --raw` prints what the server holds now.\n\n",
+    );
+
     s.push_str("## Conflicts\n\n");
     s.push_str(
         "Exit 5 from `pull` means a field changed on both sides. The default strategy \
@@ -1323,6 +1381,43 @@ mod tests {
     /// Every recipe is a command this binary accepts, flags and all: a recipe
     /// is a promise that the one command exists, and one that no longer parses
     /// would send an agent back to writing the loop it replaced.
+    /// The markup table is a promise: each row's Markdown converts to the
+    /// wiki markup the row says.
+    #[test]
+    fn the_markup_table_says_what_push_sends() {
+        use crate::api::{Markup, RichText};
+        let wire = |md: &str| match crate::convert::from_markdown(md, Markup::Wiki, &[]) {
+            RichText::Wiki(w) => w,
+            other => panic!("{other:?}"),
+        };
+        for (md, expected) in [
+            (
+                "**bold**, *italic*, ~~struck~~",
+                "*bold*, _italic_, -struck-",
+            ),
+            ("~struck~ too", "-struck- too"),
+            ("`code`", "{{code}}"),
+            ("```rust\nfn x() {}\n```", "{code:rust}\nfn x() {}\n{code}"),
+            ("### Title", "h3. Title"),
+            ("- item\n  - nested", "* item\n** nested"),
+            ("1. item", "# item"),
+            ("> quote", "bq. quote"),
+            ("[text](https://x.example/)", "[text|https://x.example/]"),
+            ("<https://x.example/>", "[https://x.example/]"),
+            ("@[Jane D](jane)", "[~jane]"),
+            ("![](<.TSK-0710. Summary/shot.png>)", "!shot.png!"),
+            ("[logs.zip](<.TSK-0710. Summary/logs.zip>)", "[^logs.zip]"),
+            ("- [ ] task", "* (x) task"),
+            ("a +b+ c, well-known", "a \\+b\\+ c, well-known"),
+            ("C++ and --", "C++ and --"),
+        ] {
+            assert_eq!(wire(md), expected, "for {md:?}");
+        }
+        let text = render();
+        assert!(text.contains("## Markup conversion"));
+        assert!(text.contains("`!shot.png!`"));
+    }
+
     #[test]
     fn every_recipe_parses() {
         let mut doc = String::new();
