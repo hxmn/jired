@@ -1205,6 +1205,11 @@ in the database, `push` refuses to send a copy left in a file, and
 `jired config remove ignored_custom_fields customfield_10000` followed by another
 `jired doctor` brings it back.
 
+Fields Jira computes for itself — the development panel, Rank, time in status,
+SLAs — change without anyone editing the issue, so they are left out without
+being listed. They are recognised by their type, not their id, which differs on
+every instance.
+
 See [docs/security.md](docs/security.md), which is explicit about what each
 store does and does not protect against.
 

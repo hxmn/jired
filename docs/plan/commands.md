@@ -228,7 +228,10 @@ gives it — is left out of the file altogether rather than written empty, which
 would read as a clearing edit. Nothing is discarded: the value stays in the
 payload and in `state.db`, so the setting is reversible. `push` skips (and reports)
 an ignored field a file still carries, and `jired doctor` is what brings the files
-into line in either direction.
+into line in either direction. Fields of a computed type (`schema.custom` of
+`devsummary`/`devsummarycf`, `gh-lexo-rank`, `gh-global-rank`, `timeinstatus`,
+`firstresponsedate`, `sd-sla-field`) are ignored the same way without being
+listed: their value changes on its own and would show as a change on every pull.
 
 ### `jired push`
 `jired push [ISSUE…] [-n/--dry-run|preview] [--force] [--allow-lossy] [--allow-comment-delete] [--allow-worklog-delete] [--resume] [--refresh-stale] [--verify]`

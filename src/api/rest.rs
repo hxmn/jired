@@ -413,6 +413,11 @@ impl JiraApi for Rest {
                         .and_then(|s| s.get("items"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
+                    custom_type: f
+                        .get("schema")
+                        .and_then(|s| s.get("custom"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                 })
             })
             .collect())

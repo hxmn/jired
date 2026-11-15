@@ -699,7 +699,9 @@ pub fn render() -> String {
          field's name), then `jired doctor` to take it out of the files that already \
          carry it. Ignoring hides a field, it does not clear it — the value stays on \
          the server and in the database, `push` refuses to send one, and removing the \
-         entry plus another `jired doctor` brings it back.\n\n",
+         entry plus another `jired doctor` brings it back. Fields Jira computes — the \
+         development panel, Rank, time in status, SLAs — are left out already, \
+         by their type, so they need no entry.\n\n",
     );
 
     s.push_str("## Comments\n\n");

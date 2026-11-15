@@ -1501,8 +1501,9 @@ fn plan_custom_fields(
         // read the file's leftover copy as a new value and send it back.
         if ignored.contains(id) {
             warnings.push(format!(
-                "{}: `{id}` is in ignored_custom_fields and was not pushed — \
-                 run `jired doctor` to take it out of the file",
+                "{}: `{id}` is not kept in issue files (Jira computes it, or \
+                 ignored_custom_fields names it) and was not pushed — run \
+                 `jired doctor` to take it out of the file",
                 bf.key
             ));
             continue;

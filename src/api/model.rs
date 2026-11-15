@@ -704,6 +704,11 @@ pub struct FieldMeta {
     /// is what decides how one of its values has to be written back.
     #[serde(default)]
     pub items: Option<String>,
+    /// The plugin type behind a custom field, `schema.custom`, such as
+    /// `com.pyxis.greenhopper.jira:gh-lexo-rank`. Unlike the id it is the
+    /// same on every instance.
+    #[serde(default)]
+    pub custom_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

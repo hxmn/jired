@@ -235,6 +235,7 @@ mod tests {
             custom: true,
             schema_type: Some(schema_type.into()),
             items: items.map(str::to_string),
+            custom_type: None,
         }
     }
 

@@ -26,7 +26,8 @@ pub struct FieldMap {
     pub checklist_text: Option<String>,
     pub checklist_progress: Option<String>,
     pub names: BTreeMap<String, String>,
-    /// Field ids the workspace has asked to keep out of issue files.
+    /// Field ids kept out of issue files: the ones `ignored_custom_fields`
+    /// names, and every field of a [`COMPUTED_TYPES`] type.
     pub ignored: std::collections::BTreeSet<String>,
 }
 
@@ -45,10 +46,34 @@ const CHECKLIST_NAMES: [&str; 6] = [
     "smart checklist text",
 ];
 
+/// Custom-field types whose value Jira computes and nobody edits.
+///
+/// Their value changes on its own — a commit lands, a card is dragged on a
+/// board, a clock ticks — so in an issue file they made every pull report a
+/// change nobody made, in a form nobody can read: the development panel is a
+/// stringified Java object on Data Center, Rank an opaque `0|i046n3:`. They
+/// are kept out of the file the way `ignored_custom_fields` keeps a field
+/// out, and matched by type because their ids differ on every instance.
+const COMPUTED_TYPES: [&str; 7] = [
+    "com.atlassian.jira.plugins.jira-development-integration-plugin:devsummary",
+    "com.atlassian.jira.plugins.jira-development-integration-plugin:devsummarycf",
+    "com.pyxis.greenhopper.jira:gh-lexo-rank",
+    "com.pyxis.greenhopper.jira:gh-global-rank",
+    "com.atlassian.jira.ext.charting:timeinstatus",
+    "com.atlassian.jira.ext.charting:firstresponsedate",
+    "com.atlassian.servicedesk:sd-sla-field",
+];
+
 impl FieldMap {
     pub fn from_meta(fields: &[FieldMeta]) -> Self {
         let mut map = FieldMap::default();
         for f in fields {
+            if f.custom_type
+                .as_deref()
+                .is_some_and(|t| COMPUTED_TYPES.contains(&t))
+            {
+                map.ignored.insert(f.id.clone());
+            }
             let name = f.name.trim().to_ascii_lowercase();
             match name.as_str() {
                 // Company-managed and team-managed projects name this differently.
@@ -703,6 +728,7 @@ mod tests {
                 custom: true,
                 schema_type: Some("number".into()),
                 items: None,
+                custom_type: None,
             },
             FieldMeta {
                 id: "customfield_10014".into(),
@@ -710,6 +736,7 @@ mod tests {
                 custom: true,
                 schema_type: Some("any".into()),
                 items: None,
+                custom_type: None,
             },
             FieldMeta {
                 id: "customfield_10020".into(),
@@ -717,6 +744,7 @@ mod tests {
                 custom: true,
                 schema_type: Some("array".into()),
                 items: Some("json".into()),
+                custom_type: None,
             },
             FieldMeta {
                 id: "customfield_10205".into(),
@@ -724,6 +752,7 @@ mod tests {
                 custom: true,
                 schema_type: Some("any".into()),
                 items: None,
+                custom_type: None,
             },
             FieldMeta {
                 id: "customfield_10207".into(),
@@ -731,6 +760,7 @@ mod tests {
                 custom: true,
                 schema_type: Some("string".into()),
                 items: None,
+                custom_type: None,
             },
         ])
     }
@@ -973,6 +1003,7 @@ mod tests {
             custom: true,
             schema_type: Some(schema.into()),
             items: None,
+            custom_type: None,
         };
         let map = FieldMap::from_meta(&[
             meta("customfield_10205", "Smart Checklist", "any"),

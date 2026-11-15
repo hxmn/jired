@@ -247,7 +247,8 @@ pub const KEYS: &[KeyDef] = &[
               it with `jired config add`/`remove`. The values are still \
               fetched and still in the database, so un-ignoring a field brings \
               it back; `jired doctor` removes an ignored field from files that \
-              already carry it",
+              already carry it. Fields Jira computes — the development panel, \
+              Rank, time in status, SLAs — are left out without being listed",
     },
     KeyDef {
         key: "links.mode",

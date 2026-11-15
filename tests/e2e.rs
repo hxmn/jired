@@ -2192,6 +2192,29 @@ fn literal_markup_characters_are_escaped_on_data_center() {
     assert!(sent.contains("{panel:title=Change freeze}"), "{sent}");
 }
 
+/// Jira computes the development panel and Rank, and their values change on
+/// their own; in the file they made every pull report a change. They are
+/// kept out by their type, whatever id the instance gives them.
+#[test]
+fn computed_custom_fields_stay_out_of_the_file() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws.read(ws.issue_file());
+    assert!(!text.contains("customfield_10000"), "{text}");
+    assert!(!text.contains("customfield_10108"), "{text}");
+    assert!(!text.contains("summaryBean"), "{text}");
+    // An ordinary unmapped field is still there.
+    assert!(text.contains("customfield_10300"), "{text}");
+
+    // And nothing about them is ever planned.
+    let report = ws.json(&["push", "--dry-run"]);
+    assert!(
+        !report.to_string().contains("customfield_10108"),
+        "{report}"
+    );
+}
+
 #[test]
 fn data_center_custom_fields_are_mapped_by_name() {
     let ws = Ws::of(Deployment::DataCenter);

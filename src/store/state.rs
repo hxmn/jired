@@ -1068,11 +1068,16 @@ impl StateStore {
             // The column has always been called schema_json; it now holds the
             // whole schema rather than only its type. Older rows hold the bare
             // type string and are read back as such.
-            let schema = match (&f.schema_type, &f.items) {
-                (None, _) => None,
-                (Some(t), None) => Some(serde_json::json!({ "type": t }).to_string()),
-                (Some(t), Some(i)) => Some(serde_json::json!({"type": t, "items": i}).to_string()),
-            };
+            let schema = f.schema_type.as_ref().map(|t| {
+                let mut schema = serde_json::json!({ "type": t });
+                if let Some(i) = &f.items {
+                    schema["items"] = serde_json::json!(i);
+                }
+                if let Some(c) = &f.custom_type {
+                    schema["custom"] = serde_json::json!(c);
+                }
+                schema.to_string()
+            });
             tx.execute(
                 "INSERT INTO field_meta (field_id, name, schema_json) VALUES (?1, ?2, ?3)",
                 params![f.id, f.name, schema],
@@ -1088,13 +1093,14 @@ impl StateStore {
             .prepare("SELECT field_id, name, schema_json FROM field_meta ORDER BY field_id")?;
         let rows = stmt.query_map([], |r| {
             let id: String = r.get(0)?;
-            let (schema_type, items) = parse_schema(r.get::<_, Option<String>>(2)?);
+            let (schema_type, items, custom_type) = parse_schema(r.get::<_, Option<String>>(2)?);
             Ok(crate::api::FieldMeta {
                 custom: id.starts_with("customfield_"),
                 id,
                 name: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 schema_type,
                 items,
+                custom_type,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -1420,18 +1426,16 @@ fn issue_row_from(r: &rusqlite::Row<'_>) -> Result<IssueRow> {
 /// Content hash used for change detection (decision D18).
 /// Read back what `save_field_meta` wrote, tolerating the bare type string that
 /// databases written by earlier versions hold.
-fn parse_schema(stored: Option<String>) -> (Option<String>, Option<String>) {
+fn parse_schema(stored: Option<String>) -> (Option<String>, Option<String>, Option<String>) {
     let Some(text) = stored else {
-        return (None, None);
+        return (None, None, None);
     };
     match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(serde_json::Value::Object(map)) => (
-            map.get("type").and_then(|v| v.as_str()).map(str::to_string),
-            map.get("items")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-        ),
-        _ => (Some(text), None),
+        Ok(serde_json::Value::Object(map)) => {
+            let get = |k: &str| map.get(k).and_then(|v| v.as_str()).map(str::to_string);
+            (get("type"), get("items"), get("custom"))
+        }
+        _ => (Some(text), None, None),
     }
 }
 

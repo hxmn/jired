@@ -48,6 +48,8 @@
         }
       ],
       "versions": [],
+      "customfield_10000": "{summaryBean=com.atlassian.jira.plugin.devstatus.rest.SummaryBean@5e1f7a2b[cachedValue={errors=[],summary={}}], isStale=false}",
+      "customfield_10108": "0|i00abc:",
       "customfield_10106": 3,
       "customfield_10100": "DC-50",
       "customfield_10104": [
