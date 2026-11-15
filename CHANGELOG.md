@@ -8,6 +8,74 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.27.0] — 2026-11-15
+
+### Breaking
+
+- **`config add`/`remove ignored_custom_fields` rewrite the issue files.** In
+  a workspace they now take the field out of every file that carries it, or
+  put it back, which is the repair `jired doctor` used to be needed for, and
+  list the files under `rewritten`. A `--global` change still leaves that to
+  `jired doctor` in each workspace.
+- **Text that is literal in the file is sent to Data Center as literal text.**
+  A `+`, `-`, `^`, `~`, `*`, `_`, `??` or `!` that wiki markup would pair into
+  formatting is sent with a backslash: `a +b+ c` used to go out as an
+  underline, `-x-` as a strikethrough, `!name.png!` as an embedded image. A
+  delimiter with nothing to pair with, a hyphen in a word and `--` are sent as
+  written. In a table cell `|` is escaped too.
+- **Jira's underline, superscript, subscript and citation come back as
+  read-only regions** (`+x+`, `^x^`, `~x~`, `??x??`), like the panels and
+  colours before them: read as text, the escaping above would have turned
+  them into literal characters on the next push. An issue that has one now
+  reads `lossy: true`.
+- **`jired/show/1` no longer requires `key` at the top level**: given several
+  issues, they are listed under `issues` instead.
+
+### Added
+
+- **Images and attachment links point into the attachment folder.** An
+  embedded `!shot.png!` is written in the file as
+  `![](<.PROJ-7. Summary/shot.png>)`, so it shows in a Markdown viewer, and
+  `[^logs.zip]` as a link to the file there; both go back as Jira wrote them,
+  whichever attachment folder the path names. An image with parameters is kept
+  as a read-only region.
+- **Fields Jira computes stay out of the issue files**: the development panel,
+  Rank, time in status, date of first response and SLAs, recognised by their
+  type rather than their id. A file written by an older jired keeps them until
+  `jired doctor`.
+- **`pull` warns about a custom field that changed in every issue it
+  updated** (three or more), and names the `config add` that keeps it out.
+- **`push --show-body`** prints each planned description, comment and worklog
+  note as it will be sent — wiki markup on Data Center, ADF on Cloud.
+- **`show` takes several issues, and `--section description,comments,…`**
+  prints only those parts of each, as the file has them; the JSON adds their
+  text under `sections`.
+- **`diff --stat` names what changed**, `summary, Description, +50 -7`, and
+  counts sections apart from fields; `jired/diff/1` has `stat.sections`.
+
+### Fixed
+
+- **A backslash before a letter survives a pull.** A description holding
+  `\n` pasted from JSON came into the file as `n`, reported clean and not
+  lossy, so the next edit pushed it without the backslash.
+- **A bare link keeps its text.** `[https://host/x]` came into the file as
+  `[](https://host/x)`, which shows nothing; it is `<https://host/x>` now.
+- **A change between two long values shows where they differ.** The
+  development-summary field read `{summaryBean=com.atlassian.jira…` on both
+  sides of every pull.
+- **A `!` written before a link stays text**, rather than making the link an
+  image.
+- **Issue keys are read the same way on both sides.** The Markdown reader took
+  a one-letter project (`A-1`) or a key after a `/` for a key and found keys
+  across a backslash escape; the wiki reader did not, and an untouched Data
+  Center description could change between pull and push.
+
+### Documentation
+
+- **The generated agent docs have a "Markup conversion" section**: what each
+  Markdown construct is sent as on Data Center, what is escaped, what comes
+  back read-only, and how to preview the wire text.
+
 ## [0.26.1] — 2026-11-12
 
 ### Fixed
