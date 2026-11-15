@@ -1855,6 +1855,30 @@ fn human_mode_narrates_on_stdout() {
     assert!(stdout.contains("new"), "expected a summary: {stdout}");
 }
 
+/// `--verify` compares what the description says, not how the file spells
+/// it: the read-back is the renderer's spelling, and a description the
+/// server held exactly as asked failed with exit 10 over `~x~` against
+/// `~~x~~`.
+#[test]
+fn verify_accepts_a_description_spelled_differently_from_the_read_back() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = ws.issue_file();
+    let text = ws.read(file).replace(
+        "for the rollback plan.",
+        "for the rollback plan.\n\nA ~struck~ and _leaning_ word,\nwrapped onto a second line.",
+    );
+    ws.write(file, &text);
+
+    let report = ws.json(&["push", "DC-77", "--verify"]);
+    assert_eq!(
+        report["verify"].as_array().map(Vec::len),
+        Some(0),
+        "{report}"
+    );
+}
+
 /// `push --dry-run --show-body` prints the wire text a push would send, so
 /// what Jira will make of the file's Markdown can be read without a JSON
 /// filter.

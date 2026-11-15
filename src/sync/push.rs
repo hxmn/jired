@@ -1912,9 +1912,15 @@ fn differences(
             out.push((format!("custom.{id}"), want, have));
         }
     }
-    let squash = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Compared as documents, not as text: the file is the user's spelling and
+    // the read-back is the renderer's, and Markdown has more than one for the
+    // same thing — `~x~` and `~~x~~`, `_x_` and `*x*`, a wrapped line and an
+    // unwrapped one. Compared as text, a description the server held exactly
+    // as asked failed verify with exit 10.
+    let meaning =
+        |t: &str| crate::convert::markdown::parse(t, &crate::convert::ast::RawStore::new());
     if !(created && asked.description.trim().is_empty())
-        && squash(&asked.description) != squash(&server.description)
+        && meaning(&asked.description) != meaning(&server.description)
     {
         out.push((
             "description".into(),
