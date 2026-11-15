@@ -776,14 +776,14 @@ fn is_punctuation(c: char) -> bool {
 }
 
 /// Insert a gap when the character already written would fuse with the one
-/// about to be written — `@` before a link would read as a mention, and equal
-/// delimiter characters would form a longer run.
+/// about to be written — `@` before a link would read as a mention, `!` as an
+/// image, and equal delimiter characters would form a longer run.
 fn separate(out: &mut String, next: &str) {
     let (Some(last), Some(first)) = (last_literal_char(out), next.chars().next()) else {
         return;
     };
-    let fuses =
-        (last == '@' && first == '[') || (last == first && matches!(last, '*' | '_' | '~' | '`'));
+    let fuses = (matches!(last, '@' | '!') && first == '[')
+        || (last == first && matches!(last, '*' | '_' | '~' | '`'));
     if fuses {
         out.push_str(HTML_GAP);
     }
@@ -1191,6 +1191,8 @@ fn convert_table<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Block {
 
 fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline> {
     let kids: Vec<&'a AstNode<'a>> = node.children().collect();
+    // Text up to the last gap comment, keys already split out of it.
+    let mut done: Vec<Inline> = Vec::new();
     let mut out: Vec<Inline> = Vec::new();
 
     for (i, child) in kids.iter().copied().enumerate() {
@@ -1209,6 +1211,11 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline>
             // Every other raw tag is dropped: it has no AST equivalent and the
             // gap comments this module writes must not survive.
             NodeValue::HtmlInline(html) if is_break_tag(&html) => out.push(Inline::LineBreak),
+            // A gap is written to keep text apart, a key from the word beside
+            // it among other things, so the text on either side is not merged.
+            NodeValue::HtmlInline(_) => done.extend(split_issue_keys(normalize_inlines(
+                std::mem::take(&mut out),
+            ))),
             // An image keeps its target as a plain link rather than vanishing;
             // real Jira media arrives as a raw region, not as Markdown.
             NodeValue::Link(link) | NodeValue::Image(link) => {
@@ -1243,6 +1250,22 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline>
             _ => {}
         }
     }
+    // Keys are found in the merged text, not node by node: comrak splits text
+    // at every escape, and `A\_PROJ-1` read the key as standing alone after
+    // the `_`, which the server does not.
+    done.extend(split_issue_keys(normalize_inlines(out)));
+    done
+}
+
+/// Re-split merged text on bare issue keys.
+fn split_issue_keys(inlines: Vec<Inline>) -> Vec<Inline> {
+    let mut out = Vec::with_capacity(inlines.len());
+    for inline in inlines {
+        match inline {
+            Inline::Text(t) => push_plain(&mut out, &t),
+            other => out.push(other),
+        }
+    }
     out
 }
 
@@ -1254,7 +1277,7 @@ fn is_break_tag(html: &str) -> bool {
 fn push_text(out: &mut Vec<Inline>, text: &str, regions: &[Region]) {
     let mut rest = text;
     while let Some((before, index, after)) = split_placeholder(rest) {
-        push_plain(out, before);
+        push_literal(out, before);
         if let Some(region) = regions.get(index) {
             out.push(Inline::Raw(RawRef {
                 id: region.id.clone(),
@@ -1262,7 +1285,14 @@ fn push_text(out: &mut Vec<Inline>, text: &str, regions: &[Region]) {
         }
         rest = after;
     }
-    push_plain(out, rest);
+    push_literal(out, rest);
+}
+
+/// Text as it stands; keys are split out of it once it is merged.
+fn push_literal(out: &mut Vec<Inline>, text: &str) {
+    if !text.is_empty() {
+        out.push(Inline::Text(text.to_string()));
+    }
 }
 
 fn split_placeholder(s: &str) -> Option<(&str, usize, &str)> {
@@ -1305,10 +1335,13 @@ fn push_plain(out: &mut Vec<Inline>, text: &str) {
     }
 }
 
+/// The same rule as the wiki reader's, so that the two agree on every piece
+/// of text: a project key of two characters or more, not inside a word or a
+/// path.
 fn issue_key_at(chars: &[char], i: usize) -> Option<usize> {
     if i > 0 {
         let prev = chars[i - 1];
-        if prev.is_alphanumeric() || prev == '_' || prev == '-' {
+        if prev.is_alphanumeric() || matches!(prev, '_' | '-' | '/') {
             return None;
         }
     }
@@ -1321,7 +1354,7 @@ fn issue_key_at(chars: &[char], i: usize) -> Option<usize> {
     {
         j += 1;
     }
-    if chars.get(j) != Some(&'-') {
+    if j - i < 2 || chars[j - 1] == '_' || chars.get(j) != Some(&'-') {
         return None;
     }
     j += 1;
@@ -1693,6 +1726,21 @@ mod tests {
             },
         ])]);
         round_trip(&doc, &store);
+    }
+
+    /// `!` then a link is image syntax; a literal `!` there has to stay text.
+    #[test]
+    fn text_ending_in_a_bang_is_not_read_as_an_image() {
+        let store = RawStore::new();
+        let doc = Document::new(vec![Block::Paragraph(vec![
+            Inline::Text("look!".into()),
+            Inline::Link {
+                text: vec![Inline::Text("here".into())],
+                href: "https://example.com".into(),
+            },
+        ])]);
+        let md = round_trip(&doc, &store);
+        assert!(!md.contains("!["), "{md}");
     }
 
     #[test]
