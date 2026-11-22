@@ -222,7 +222,7 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
                     .as_ref()
                     .map(|b| snapshot_doc(&b.raw, markup, &fields, &rctx))
                     .transpose()?,
-                working_doc(&engine, &files, &row.key)?,
+                working_doc(&engine, &files, &row.key, &fields.ignored)?,
             ),
             DiffMode::BaseRemote => (
                 row.base
@@ -239,7 +239,7 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
                     .as_ref()
                     .map(|r| snapshot_doc(&r.raw, markup, &fields, &rctx))
                     .transpose()?,
-                working_doc(&engine, &files, &row.key)?,
+                working_doc(&engine, &files, &row.key, &fields.ignored)?,
             ),
         };
 
@@ -316,15 +316,24 @@ fn snapshot_doc(
     Ok(render_issue(&issue, rctx)?.doc)
 }
 
+/// The working copy as `push` would read it.
+///
+/// A field kept out of the files — one Jira computes, or one
+/// `ignored_custom_fields` names — can still be in a file an older jired
+/// wrote. `push` never sends it, so it is no change: offered as a sendable
+/// one, it read as a stale Rank about to go back over the board's order.
 fn working_doc(
     engine: &Engine,
     files: &std::collections::BTreeMap<String, crate::project::FoundFile>,
     key: &str,
+    ignored: &std::collections::BTreeSet<String>,
 ) -> Result<Option<IssueDoc>> {
-    match files.get(key) {
-        Some(f) => Ok(Some(engine.projector.read(&f.relative)?)),
-        None => Ok(None),
-    }
+    let Some(f) = files.get(key) else {
+        return Ok(None);
+    };
+    let mut doc = engine.projector.read(&f.relative)?;
+    doc.frontmatter.custom.retain(|id, _| !ignored.contains(id));
+    Ok(Some(doc))
 }
 
 /// Compare two versions of an issue, returning None when they match.

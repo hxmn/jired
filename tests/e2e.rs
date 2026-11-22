@@ -2295,6 +2295,44 @@ fn computed_custom_fields_stay_out_of_the_file() {
     );
 }
 
+/// A file an older jired wrote still carries Rank. Editing anything else in
+/// it must not make the stale value a change `diff` offers or `push` sends:
+/// it was a Rank from weeks ago, written back over the board's order.
+#[test]
+fn a_computed_field_left_in_an_old_file_is_never_sent() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    let file = ws.issue_file();
+    let text = ws.read(file);
+    let text = text.replacen(
+        "custom:\n",
+        "custom:\n  customfield_10108: 0|i000aa:zzzzzz\n",
+        1,
+    );
+    assert!(text.contains("customfield_10108"), "{text}");
+    ws.write(file, &text);
+    ws.json(&["set", "DC-77", "--field", "labels", "--value", "x"]);
+
+    let diff = ws.json(&["diff"]);
+    let fields = &diff["issues"][0]["fields"];
+    assert!(
+        !fields.to_string().contains("customfield_10108"),
+        "{diff:#}"
+    );
+    assert_eq!(diff["stat"]["fields"], 1, "only the label: {diff:#}");
+
+    let plan = ws.json(&["push", "--dry-run"]);
+    let ops = plan["results"][0]["ops"].to_string();
+    assert!(!ops.contains("customfield_10108"), "{plan:#}");
+    assert!(ops.contains("labels"), "{plan:#}");
+    // Not sent, and said so: the file still holds it until `doctor` runs.
+    assert!(
+        plan["warnings"].to_string().contains("customfield_10108"),
+        "{plan:#}"
+    );
+}
+
 /// Two writes inside one second — an upload, then an edit straight after it
 /// — share the stored stamp, which is to the second. The pull read the second
 /// one as no change and left the file behind the server.
