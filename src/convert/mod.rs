@@ -12,6 +12,57 @@ pub mod wiki;
 use crate::api::{Markup, RichText};
 use ast::{RawBlock, RawStore};
 
+/// Run one issue's conversion, turning a panic in it into an error.
+///
+/// A reader that panics on one description used to take the whole process
+/// with it, and `pull` and `doctor` convert every issue in the workspace: a
+/// table header of Cyrillic cells in one issue stopped both for everyone, and
+/// an issue new to the workspace with that table could never be pulled at
+/// all. Caught here, the caller can fail that one issue and go on.
+///
+/// The message keeps where it panicked, because that is what makes a report
+/// of it fixable. Inside a guarded call the default hook stays quiet, so the
+/// panic is said once, in the error the caller reports, and not also as a
+/// `thread 'main' panicked` block in the middle of a pull's output; a panic
+/// anywhere else is printed exactly as before.
+pub fn guarded<T>(f: impl FnOnce() -> T) -> std::result::Result<T, String> {
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static GUARDED: Cell<usize> = const { Cell::new(0) };
+        static CAUGHT: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if GUARDED.with(Cell::get) == 0 {
+                return previous(info);
+            }
+            let payload = info.payload();
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a panic with no message".to_string());
+            let message = match info.location() {
+                Some(at) => format!("{message} (at {}:{})", at.file(), at.line()),
+                None => message,
+            };
+            CAUGHT.with(|c| *c.borrow_mut() = Some(message));
+        }));
+    });
+
+    GUARDED.with(|g| g.set(g.get() + 1));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    GUARDED.with(|g| g.set(g.get() - 1));
+    outcome.map_err(|_| {
+        CAUGHT
+            .with(|c| c.borrow_mut().take())
+            .unwrap_or_else(|| "a panic with no message".to_string())
+    })
+}
+
 /// Markdown plus the lossy regions that had to be set aside to produce it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Converted {
@@ -94,6 +145,16 @@ pub fn edited_regions(md: &str, raw: &[RawBlock]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a caller reports has to say what panicked and where, or the one
+    /// line it is left with is no use to anyone fixing it.
+    #[test]
+    fn a_guarded_panic_comes_back_as_its_message_and_place() {
+        let caught = guarded(|| -> usize { "Ф"[1..].len() }).unwrap_err();
+        assert!(caught.contains("is not a char boundary"), "{caught}");
+        assert!(caught.contains("src/convert/mod.rs:"), "{caught}");
+        assert_eq!(guarded(|| 7), Ok(7));
+    }
 
     #[test]
     fn empty_rich_text_converts_to_nothing() {

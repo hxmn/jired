@@ -47,7 +47,19 @@ impl RenderContext<'_> {
 /// Body text is trimmed to exactly what [`IssueDoc::parse`] yields when it reads
 /// the same file back. Without that symmetry a trailing newline alone would make
 /// every issue register as locally edited.
+///
+/// A conversion that panics is an error naming the issue, not the end of the
+/// process: see [`convert::guarded`].
 pub fn render_issue(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rendered> {
+    convert::guarded(|| render_unguarded(issue, ctx)).unwrap_or_else(|panic| {
+        Err(crate::error::JiredError::generic(format!(
+            "{}: converting the issue failed, a bug in jired: {panic}",
+            issue.key
+        )))
+    })
+}
+
+fn render_unguarded(issue: &RemoteIssue, ctx: &RenderContext<'_>) -> Result<Rendered> {
     let attachment_folder = naming::attachment_dir(&issue.key, &issue.fields.summary);
     let to_markdown = |rich| convert::to_markdown_in(rich, Some(&attachment_folder));
     let description = to_markdown(&issue.description);
