@@ -2416,6 +2416,51 @@ fn an_issue_that_cannot_be_converted_fails_alone_in_a_pull() {
     assert!(text.contains("2 failed"), "{text}");
 }
 
+/// `doctor` stopped at the first issue it could not convert, so no file
+/// written by an older jired could be migrated. That file is now a problem of
+/// its own, and the rest are repaired.
+#[test]
+fn an_issue_that_cannot_be_converted_does_not_stop_doctor() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    let first = ws.json(&["pull"]);
+    let other = first["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["file"].as_str().unwrap().to_string())
+        .find(|f| f.starts_with("DC-0078"))
+        .unwrap();
+    // A Rank left behind by an older jired, which doctor takes out.
+    let stale = ws.read(&other).replacen(
+        "\njired:",
+        "\ncustom:\n  customfield_10108: '0|i000aa:'\njired:",
+        1,
+    );
+    assert!(stale.contains("customfield_10108"), "{stale}");
+    ws.write(&other, &stale);
+    let broken = ws.read(ws.issue_file());
+    break_snapshots(&ws, "base_raw", &["DC-77"]);
+
+    let report = ws.json_code(&["doctor"], 1);
+    let check = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "custom-fields")
+        .unwrap();
+    assert_eq!(check["status"], "problem", "{report:#}");
+    assert!(
+        check["detail"].as_str().unwrap().contains(ws.issue_file()),
+        "{report:#}"
+    );
+    assert!(
+        !ws.read(&other).contains("customfield_10108"),
+        "repaired: {report:#}"
+    );
+    assert_eq!(ws.read(ws.issue_file()), broken, "left as it was");
+}
+
 /// Two writes inside one second — an upload, then an edit straight after it
 /// — share the stored stamp, which is to the second. The pull read the second
 /// one as no change and left the file behind the server.

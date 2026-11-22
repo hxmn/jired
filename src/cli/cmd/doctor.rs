@@ -82,6 +82,18 @@ struct Check {
     regrouped: Option<crate::sync::group::GroupReport>,
 }
 
+impl Check {
+    /// Whether applying would change anything.
+    ///
+    /// Not only `WouldFix`: a check can be a problem for one file and a repair
+    /// for the rest, and counted as a problem alone its repairs were never
+    /// applied — one issue that could not be converted kept every other file
+    /// from being migrated.
+    fn has_repairs(&self) -> bool {
+        self.status == Status::WouldFix || !self.changes.is_empty()
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct Change {
     from: String,
@@ -108,10 +120,7 @@ pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
         ..args.clone()
     };
     let preview = collect(&mut ctx, &survey)?;
-    let repairable = preview
-        .iter()
-        .filter(|c| c.status == Status::WouldFix)
-        .count();
+    let repairable = preview.iter().filter(|c| c.has_repairs()).count();
 
     // Only a person gets asked; a script or `--yes` proceeds, and then the
     // preview would just be the same list printed twice.
@@ -704,6 +713,7 @@ fn check_custom_fields(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     };
 
     let mut changes = Vec::new();
+    let mut blocked = Vec::new();
     for (key, file) in &files {
         let (Ok(text), Ok(mut doc)) = (
             projector.read_raw(&file.relative),
@@ -714,7 +724,15 @@ fn check_custom_fields(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
         let in_sync = was_in_sync(&state, key, &text)?;
 
         let wanted = if in_sync {
-            base_custom(&state, &render_ctx, engine.markup(), &field_map, key)?
+            // One issue that cannot be converted is that file's problem, not
+            // the workspace's: the rest are still brought into line.
+            match base_custom(&state, &render_ctx, engine.markup(), &field_map, key) {
+                Ok(custom) => custom,
+                Err(e) => {
+                    blocked.push(format!("{}: {}", file.relative, e.message));
+                    continue;
+                }
+            }
         } else {
             let mut kept = doc.frontmatter.custom.clone();
             // An ignored field must not be pushed, and a field that has a home
@@ -764,6 +782,11 @@ fn check_custom_fields(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
         });
     }
 
+    if !blocked.is_empty() {
+        let mut check = problem("custom-fields", blocked.join("; "));
+        check.changes = changes;
+        return Ok(check);
+    }
     if changes.is_empty() {
         return Ok(ok(
             "custom-fields",
@@ -809,6 +832,10 @@ fn join(ids: &[&String]) -> String {
 }
 
 /// The custom fields the last snapshot renders to, ignore list applied.
+///
+/// A snapshot that cannot be read is an error rather than no fields: the file
+/// is in sync, so "none" would have been written over every custom field it
+/// holds.
 fn base_custom(
     state: &StateStore,
     render_ctx: &crate::sync::render::RenderContext<'_>,
@@ -819,9 +846,7 @@ fn base_custom(
     let Some(base) = state.issue(key)?.and_then(|row| row.base) else {
         return Ok(Default::default());
     };
-    let Ok(issue) = crate::api::normalize::issue_from_json(&base.raw, markup, field_map) else {
-        return Ok(Default::default());
-    };
+    let issue = crate::api::normalize::issue_from_json(&base.raw, markup, field_map)?;
     Ok(crate::sync::render::render_issue(&issue, render_ctx)?
         .doc
         .frontmatter
