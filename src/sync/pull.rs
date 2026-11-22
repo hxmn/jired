@@ -337,7 +337,9 @@ pub fn run_scoped(
             continue;
         };
         // A snapshot that cannot be converted fails its own issue: the rest
-        // of the workspace has nothing to do with it.
+        // of the workspace has nothing to do with it. Nor is an issue level
+        // with the server converted at all, since it has nothing to pull: a
+        // plain pull panicked over one that had not moved in weeks.
         let convert = |raw: &serde_json::Value| {
             render_issue(
                 &parse_snapshot(raw, markup, &fields, &row.key)?,
@@ -351,17 +353,12 @@ pub fn run_scoped(
                 error: e.message.clone(),
             })
         };
-        let remote_doc = match convert(&remote_snapshot.raw) {
-            Ok(doc) => doc,
-            Err(e) => {
-                fail(e);
-                continue;
-            }
-        };
-
         match (&row.base, &existing) {
             // Never seen locally: write it fresh.
             (None, _) | (Some(_), None) => {
+                let Ok(remote_doc) = convert(&remote_snapshot.raw).map_err(&mut fail) else {
+                    continue;
+                };
                 planned.push(PlannedWrite {
                     key: row.key.clone(),
                     base_doc: remote_doc.doc.clone(),
@@ -385,21 +382,23 @@ pub fn run_scoped(
                 let dirty = working_hash != base.md_hash;
                 let behind = row.is_behind();
 
-                if !dirty && !behind {
-                    if !args.dry_run && conflicted.contains(&row.key) {
+                if !behind {
+                    // Local-only edits are left exactly as the user left them;
+                    // a file with none has nothing left to decide either.
+                    if !dirty && !args.dry_run && conflicted.contains(&row.key) {
                         engine.state.clear_conflicts(&row.key)?;
                     }
                     report.unchanged += 1;
                     continue;
                 }
+                let Ok(remote_doc) = convert(&remote_snapshot.raw).map_err(&mut fail) else {
+                    continue;
+                };
                 if !dirty {
-                    let base_doc = match convert(&base.raw) {
-                        Ok(rendered) => rendered.doc,
-                        Err(e) => {
-                            fail(e);
-                            continue;
-                        }
+                    let Ok(base) = convert(&base.raw).map_err(&mut fail) else {
+                        continue;
                     };
+                    let base_doc = base.doc;
                     let changes = field_changes(&base_doc, &remote_doc.doc, &fields);
                     planned.push(PlannedWrite {
                         key: row.key.clone(),
@@ -415,19 +414,10 @@ pub fn run_scoped(
                     });
                     continue;
                 }
-                if !behind {
-                    // Local-only edits: leave the file exactly as the user left it.
-                    report.unchanged += 1;
+                let Ok(base) = convert(&base.raw).map_err(&mut fail) else {
                     continue;
-                }
-
-                let base_doc = match convert(&base.raw) {
-                    Ok(rendered) => rendered.doc,
-                    Err(e) => {
-                        fail(e);
-                        continue;
-                    }
                 };
+                let base_doc = base.doc;
                 let working_doc = IssueDoc::parse(&working_text)
                     .map_err(|e| JiredError::generic(format!("{file}: {}", e.message)))?;
 

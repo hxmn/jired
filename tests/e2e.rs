@@ -2416,6 +2416,19 @@ fn an_issue_that_cannot_be_converted_fails_alone_in_a_pull() {
     assert!(text.contains("2 failed"), "{text}");
 }
 
+/// An issue level with the server has nothing to pull, so it is not
+/// converted: a plain pull failed over one that had not moved in weeks.
+#[test]
+fn an_issue_level_with_the_server_is_not_converted() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    ws.json(&["pull"]);
+    break_snapshots(&ws, "remote_raw", &["DC-77"]);
+    let report = ws.json(&["pull", "--no-fetch"]);
+    assert!(report.get("failed").is_none(), "{report:#}");
+    assert_eq!(report["unchanged"], 3, "{report:#}");
+}
+
 /// `doctor` stopped at the first issue it could not convert, so no file
 /// written by an older jired could be migrated. That file is now a problem of
 /// its own, and the rest are repaired.
