@@ -252,17 +252,7 @@ impl Out {
             return;
         }
         let mut doc = envelope(name, payload);
-        let parked = drain_parked();
-        if !parked.is_empty() {
-            if let serde_json::Value::Object(map) = &mut doc {
-                let entry = map
-                    .entry("warnings")
-                    .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-                if let serde_json::Value::Array(list) = entry {
-                    list.extend(parked.into_iter().map(serde_json::Value::from));
-                }
-            }
-        }
+        merge_parked(&mut doc, drain_parked());
         // Shaped last, so a warning parked before the projection can still be
         // asked for by name and is still dropped by `--fields` when it was not.
         let doc = shaped(doc);
@@ -364,6 +354,31 @@ impl Out {
     }
 }
 
+/// Add the parked warnings to a document's own `warnings`.
+///
+/// A report that carries its warnings also renders them, and rendering under
+/// `--json` parks each one: merged as they came, every warning `push` gave
+/// was in its document twice. One the document already has is not added
+/// again.
+fn merge_parked(doc: &mut serde_json::Value, parked: Vec<String>) {
+    if parked.is_empty() {
+        return;
+    }
+    let serde_json::Value::Object(map) = doc else {
+        return;
+    };
+    let entry = map
+        .entry("warnings")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if let serde_json::Value::Array(list) = entry {
+        for w in parked {
+            if !list.iter().any(|have| have.as_str() == Some(w.as_str())) {
+                list.push(serde_json::Value::from(w));
+            }
+        }
+    }
+}
+
 fn drain_parked() -> Vec<String> {
     PARKED_WARNINGS
         .lock()
@@ -454,6 +469,27 @@ mod tests {
                 {"kind": "transition", "status": "done"},
             ]})
         );
+    }
+
+    /// A report renders the warnings it carries, and under `--json` that
+    /// parks them; merged back, each one was in the document twice.
+    #[test]
+    fn a_parked_warning_the_document_already_has_is_not_added_again() {
+        let mut d = doc();
+        d["warnings"] = serde_json::json!(["TSK-1: not pushed"]);
+        merge_parked(
+            &mut d,
+            vec!["TSK-1: not pushed".into(), "TSK-2: elsewhere".into()],
+        );
+        assert_eq!(
+            d["warnings"],
+            serde_json::json!(["TSK-1: not pushed", "TSK-2: elsewhere"])
+        );
+
+        // A document without warnings of its own still gets the parked ones.
+        let mut bare = serde_json::json!({"schema": "jired/x/1"});
+        merge_parked(&mut bare, vec!["w".into()]);
+        assert_eq!(bare["warnings"], serde_json::json!(["w"]));
     }
 
     #[test]

@@ -2327,8 +2327,13 @@ fn a_computed_field_left_in_an_old_file_is_never_sent() {
     assert!(!ops.contains("customfield_10108"), "{plan:#}");
     assert!(ops.contains("labels"), "{plan:#}");
     // Not sent, and said so: the file still holds it until `doctor` runs.
-    assert!(
-        plan["warnings"].to_string().contains("customfield_10108"),
+    let warned = plan["warnings"].as_array().unwrap();
+    assert_eq!(
+        warned
+            .iter()
+            .filter(|w| w.to_string().contains("customfield_10108"))
+            .count(),
+        1,
         "{plan:#}"
     );
 }
