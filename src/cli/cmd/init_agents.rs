@@ -1150,6 +1150,10 @@ pub fn render() -> String {
             "`*bold*`, `_italic_`, `-struck-`",
         ),
         (
+            "`a**bold**b`, a mark inside a word",
+            "`a{*}bold{*}b`, Jira's braced form",
+        ),
+        (
             "`` `code` ``, a fenced block",
             "`{{code}}`, `{code:lang}` or `{noformat}`",
         ),

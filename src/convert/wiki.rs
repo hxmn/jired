@@ -282,9 +282,7 @@ fn split_row(line: &str, header: bool) -> Vec<&str> {
             b'\\' => i += 1 + inner[i + 1..].chars().next().map_or(0, char::len_utf8),
             b'[' => i = bracket_end(inner, i).map_or(i + 1, |close| close + 1),
             b'{' if inner[i..].starts_with("{{") => {
-                i = inner[i + 2..]
-                    .find("}}")
-                    .map_or(i + 2, |rel| i + 2 + rel + 2)
+                i = code_span(inner, i).map_or(i + 2, |(_, _, end)| end)
             }
             _ if inner[i..].starts_with(sep) => {
                 cells.push(&inner[cell_start..i]);
@@ -384,7 +382,9 @@ fn macro_at(text: &str, pos: usize) -> Option<MacroSpan> {
     while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'-' || b[i] == b'_') {
         i += 1;
     }
-    if i == pos + 1 {
+    // `{-}` and `{_}` are braced delimiters, not macros: read as one, a line
+    // starting `{-}gone{-}` became a read-only block.
+    if i == pos + 1 || !b[pos + 1].is_ascii_alphanumeric() {
         return None;
     }
     let name = text[pos + 1..i].to_string();
@@ -527,31 +527,54 @@ fn parse_inlines_in(text: &str, store: &mut RawStore, within: Option<u8>) -> Vec
                 out.push(Inline::LineBreak);
                 i += 1;
             }
-            b'{' if text[i..].starts_with("{{") => match text[i + 2..].find("}}") {
-                Some(rel) => {
+            b'{' if text[i..].starts_with("{{") => match code_span(text, i) {
+                Some((from, to, end)) => {
                     flush(&mut buf, &mut out);
-                    out.push(Inline::Code(text[i + 2..i + 2 + rel].to_string()));
-                    i = i + 2 + rel + 2;
+                    out.push(Inline::Code(text[from..to].to_string()));
+                    i = end;
                 }
                 None => {
                     buf.push('{');
                     i += 1;
                 }
             },
-            b'{' => match macro_at(text, i) {
-                Some(m) if m.closed && !is_structural_macro(&m.name) => {
+            b'{' => {
+                if let Some((delim, from, to, end)) = braced_mark(text, i) {
                     flush(&mut buf, &mut out);
-                    let source = text[m.start..m.end].to_string();
-                    let approx = macro_approx(&m.name, &m.params, &text[m.body.0..m.body.1]);
-                    let r = store.insert(source, approx, m.name.to_ascii_lowercase());
-                    out.push(Inline::Raw(r));
-                    i = m.end;
+                    let d = delim.as_bytes()[0];
+                    out.push(match d {
+                        b'*' | b'_' | b'-' => {
+                            let inner = parse_inlines_in(&text[from..to], store, Some(d));
+                            match d {
+                                b'*' => Inline::Strong(inner),
+                                b'_' => Inline::Emphasis(inner),
+                                _ => Inline::Strike(inner),
+                            }
+                        }
+                        // Underline and the rest have no Markdown form, as
+                        // with their bare delimiters below.
+                        _ => {
+                            Inline::Raw(phrase_region(&text[i..end], &text[from..to], delim, store))
+                        }
+                    });
+                    i = end;
+                    continue;
                 }
-                _ => {
-                    buf.push('{');
-                    i += 1;
+                match macro_at(text, i) {
+                    Some(m) if m.closed && !is_structural_macro(&m.name) => {
+                        flush(&mut buf, &mut out);
+                        let source = text[m.start..m.end].to_string();
+                        let approx = macro_approx(&m.name, &m.params, &text[m.body.0..m.body.1]);
+                        let r = store.insert(source, approx, m.name.to_ascii_lowercase());
+                        out.push(Inline::Raw(r));
+                        i = m.end;
+                    }
+                    _ => {
+                        buf.push('{');
+                        i += 1;
+                    }
                 }
-            },
+            }
             b'!' => match image_end(text, i) {
                 Some(close) => {
                     flush(&mut buf, &mut out);
@@ -651,6 +674,44 @@ fn flush(buf: &mut String, out: &mut Vec<Inline>) {
     if !buf.is_empty() {
         out.push(Inline::Text(std::mem::take(buf)));
     }
+}
+
+/// A `{{code}}` span opened at `open`: where its text starts and ends, and
+/// where the span does.
+///
+/// Jira's editor pads the text with `{}`, an empty token its renderer drops,
+/// when the span touches a word: `run{{{}make build{}}}`. Neither pad is code,
+/// and the first `}}` in `{}}}` is the pad's brace and one of the span's, so
+/// cutting there kept `{}make build{` as the code and a `}` after it.
+fn code_span(text: &str, open: usize) -> Option<(usize, usize, usize)> {
+    let mut from = open + 2;
+    if text[from..].starts_with("{}") {
+        from += 2;
+    }
+    let close = from + text[from..].find("}}")?;
+    if close > from && text[..close].ends_with('{') && text[close..].starts_with("}}}") {
+        return Some((from, close - 1, close + 3));
+    }
+    Some((from, close, close + 2))
+}
+
+/// A mark written with braced delimiters, `{*}bold{*}`, opened at `open`:
+/// the delimiter, where its text starts and ends, and where the mark does.
+///
+/// Braces are how wiki markup puts a mark inside a word, where a bare `*`
+/// would be text, and Jira's editor writes them wherever a mark touches a
+/// letter. Read as text and a macro, `a{*}b{*}c` came out as `a{**}b{**}c`.
+fn braced_mark(text: &str, open: usize) -> Option<(&'static str, usize, usize, usize)> {
+    const DELIMITERS: [&str; 7] = ["??", "*", "_", "-", "+", "^", "~"];
+    let delim = DELIMITERS.into_iter().find(|d| {
+        let rest = &text[open + 1..];
+        rest.starts_with(d) && rest[d.len()..].starts_with('}')
+    })?;
+    let token = &text[open..open + delim.len() + 2];
+    let from = open + token.len();
+    let line = text[from..].find('\n').map_or(text.len(), |rel| from + rel);
+    let to = from + text[from..line].find(token)?;
+    (to > from).then_some((delim, from, to, to + token.len()))
 }
 
 /// Find the `]` that closes a bracket span, skipping escaped ones.
@@ -819,7 +880,7 @@ fn mark_close(text: &str, open: usize, delim: &str) -> Option<usize> {
         // those are written as they are, and their text is not prose.
         let skip_to = match c {
             '{' if text[i..limit].starts_with("{{") => {
-                text[i + 2..limit].find("}}").map(|r| i + 2 + r + 2)
+                code_span(&text[..limit], i).map(|(_, _, end)| end)
             }
             '[' => bracket_end(&text[..limit], i).map(|close| close + 1),
             _ => None,
@@ -1264,14 +1325,38 @@ fn is_representable_user(user: &str) -> bool {
         })
 }
 
-fn push_mark(out: &mut String, delimiter: char, content: &[Inline], store: &RawStore, ctx: Ctx) {
+/// A bare delimiter only opens and closes against a word boundary, so a mark
+/// touching a word from outside — `a**b**c` in the file — is written with
+/// braced delimiters, `a{*}b{*}c`, the form Jira's own editor writes. Bare,
+/// it went to Jira as literal stars.
+fn push_mark(
+    out: &mut String,
+    delimiter: char,
+    content: &[Inline],
+    store: &RawStore,
+    ctx: Ctx,
+    next: Option<char>,
+) {
     let inner = render_inlines(content, store, ctx.enclosed());
     if inner.is_empty() {
         return;
     }
-    out.push(delimiter);
-    out.push_str(&inner);
-    out.push(delimiter);
+    if touches_word(out, delimiter, next) {
+        out.push_str(&format!("{{{delimiter}}}{inner}{{{delimiter}}}"));
+    } else {
+        out.push(delimiter);
+        out.push_str(&inner);
+        out.push(delimiter);
+    }
+}
+
+/// Whether a span written next to `out`, with `next` after it, sits against
+/// text a bare delimiter cannot open or close beside.
+fn touches_word(out: &str, delimiter: char, next: Option<char>) -> bool {
+    out.chars()
+        .next_back()
+        .is_some_and(|prev| !opens_after(prev, delimiter))
+        || next.is_some_and(|c| c.is_alphanumeric() || c == delimiter)
 }
 
 /// Escape the characters that would end a bracket span early.
@@ -1307,6 +1392,11 @@ fn render_inlines(inlines: &[Inline], store: &RawStore, ctx: Ctx) -> String {
             },
             ..ctx
         };
+        // What follows a span decides whether its delimiters can be bare.
+        let next = inlines.get(k + 1).and_then(|n| match n {
+            Inline::Text(t) | Inline::IssueKey(t) => t.chars().next(),
+            other => first_char(other, store),
+        });
         match i {
             Inline::Text(t) => {
                 let mut escaped = escape_text(t, here);
@@ -1332,9 +1422,16 @@ fn render_inlines(inlines: &[Inline], store: &RawStore, ctx: Ctx) -> String {
             }
             // An empty mark has no wiki spelling: `**` or `__` re-parses as
             // literal text, so a mark with no content is simply dropped.
-            Inline::Strong(c) => push_mark(&mut out, '*', c, store, ctx),
-            Inline::Emphasis(c) => push_mark(&mut out, '_', c, store, ctx),
-            Inline::Strike(c) => push_mark(&mut out, '-', c, store, ctx),
+            Inline::Strong(c) => push_mark(&mut out, '*', c, store, ctx, next),
+            Inline::Emphasis(c) => push_mark(&mut out, '_', c, store, ctx, next),
+            Inline::Strike(c) => push_mark(&mut out, '-', c, store, ctx, next),
+            // Against a word, padded the way Jira's editor pads it; see
+            // `code_span`.
+            Inline::Code(c) if touches_word(&out, '{', next) => {
+                out.push_str("{{{}");
+                out.push_str(c);
+                out.push_str("{}}}");
+            }
             Inline::Code(c) => {
                 out.push_str("{{");
                 out.push_str(c);
@@ -2008,6 +2105,87 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Jira's editor pads a code span that touches a word with `{}`, which
+    /// its renderer drops. Cut at the first `}}`, `{{{}make build{}}}` came
+    /// out as `` `{}make build{`} ``.
+    #[test]
+    fn a_code_span_padded_with_empty_braces_is_just_the_code() {
+        for (src, code) in [
+            ("run {{{}make build{}}} now", "make build"),
+            ("in{{{}src/lib{}}}.", "src/lib"),
+            ("{{{}x{}}}", "x"),
+        ] {
+            let (doc, store) = parse(src);
+            let Block::Paragraph(inlines) = &doc.blocks[0] else {
+                panic!("{doc:?}");
+            };
+            assert!(
+                inlines.contains(&Inline::Code(code.into())),
+                "{src}: {inlines:?}"
+            );
+            let md = crate::convert::markdown::render(&doc, &store);
+            assert!(md.contains(&format!("`{code}`")), "{md}");
+            assert!(!md.contains("{}"), "{md}");
+        }
+        // Against a word it goes back padded, so Jira still draws it.
+        assert_eq!(round_trip("x{{{}a{}}}y"), "x{{{}a{}}}y");
+        assert_eq!(
+            round_trip("run {{{}make build{}}} now"),
+            "run {{make build}} now"
+        );
+    }
+
+    /// Braces are how wiki markup puts a mark inside a word, and Jira's
+    /// editor writes them wherever a mark touches a letter: read as text and
+    /// a macro, `a{*}b{*}c` came out as `a{**}b{**}c`.
+    #[test]
+    fn a_mark_with_braced_delimiters_is_the_mark() {
+        let (doc, _) = parse("a{*}bold{*}b {_}em{_}x y{-}gone{-}");
+        assert_eq!(
+            doc.blocks,
+            vec![Block::Paragraph(vec![
+                text("a"),
+                Inline::Strong(vec![text("bold")]),
+                text("b "),
+                Inline::Emphasis(vec![text("em")]),
+                text("x y"),
+                Inline::Strike(vec![text("gone")]),
+            ])]
+        );
+        // And written back braced where a bare delimiter would be text.
+        assert_eq!(
+            round_trip("a{*}bold{*}b {_}em{_}x y{-}gone{-}"),
+            "a{*}bold{*}b {_}em{_}x y{-}gone{-}"
+        );
+        // At the start of a line too, where `{-}` was read as a macro.
+        let (doc, _) = parse("{-}gone{-}x");
+        assert_eq!(
+            doc.blocks,
+            vec![Block::Paragraph(vec![
+                Inline::Strike(vec![text("gone")]),
+                text("x")
+            ])]
+        );
+        // Bare where a bare one works, as before.
+        assert_eq!(round_trip("a {*}bold{*} b"), "a *bold* b");
+
+        // Underline and the rest stay read-only regions, verbatim.
+        for src in ["a{+}u{+}b", "a{^}2{^}", "H{~}2{~}O", "a{??}c{??}"] {
+            let (doc, store) = parse(src);
+            assert!(
+                matches!(&doc.blocks[0], Block::Paragraph(p) if p.iter().any(|i| matches!(i, Inline::Raw(_)))),
+                "{src}: {doc:?}"
+            );
+            assert_eq!(from_ast(&doc, &store), src);
+        }
+
+        // A literal `{*}` in the file is still escaped on the way out, so it
+        // does not come back as a mark.
+        let literal = Document::new(vec![Block::Paragraph(vec![text("x {*} and {*} y")])]);
+        let sent = from_ast(&literal, &RawStore::new());
+        assert_eq!(parse(&sent).0, literal, "{sent}");
     }
 
     #[test]

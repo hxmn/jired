@@ -85,6 +85,12 @@ blocks with language; blockquotes; GFM tables; rules; mentions `@[Name](id)`
 (accountId on Cloud, username on DC); emoji as unicode; bare issue keys ⇄ Jira
 issue links.
 
+Wiki markup marks a span inside a word with braced delimiters, `a{*}b{*}c`,
+because a bare `*` there is text; Jira's editor writes that form wherever a mark
+touches a letter, and pads a code span the same way with `{}`, an empty token
+its renderer drops: `run{{{}make build{}}}`. Both are read as the mark or the
+code, and written back in that form where a bare delimiter would not pair.
+
 ## Lossy-region mechanism (the invariant)
 
 Any node with no faithful Markdown form (panel, expand, media, layout, macro,

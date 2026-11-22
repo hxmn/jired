@@ -457,7 +457,8 @@ Text that is literal in the file reaches Jira as literal text. On Data Center a
 `+`, `-`, `^`, `~`, `*`, `_`, `??` or `!` that wiki markup would pair into
 underline, strikethrough, an image and the like is sent with a backslash, so
 `a +b+ c` stays three words rather than becoming an underline; a hyphen in a word
-and `--` are sent as written. Jira's own underline, superscript, subscript and
+and `--` are sent as written. A mark inside a word goes in Jira's braced form,
+`a{*}b{*}c`, which is also how Jira's editor writes one and how it is read. Jira's own underline, superscript, subscript and
 citation have no Markdown form and arrive as read-only regions. An embedded image
 or an attachment link points into the issue's attachment folder, and goes back
 as `!name!` or `[^name]`. `jired push -n --show-body` prints each description,
