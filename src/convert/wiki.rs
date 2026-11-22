@@ -291,7 +291,9 @@ fn split_row(line: &str, header: bool) -> Vec<&str> {
                 i += sep.len();
                 cell_start = i;
             }
-            _ => i += 1,
+            // A whole character, not a byte: the next turn slices `inner[i..]`,
+            // and a cell starting with `Ф` would put that slice inside it.
+            _ => i += inner[i..].chars().next().map_or(1, char::len_utf8),
         }
     }
     cells.push(&inner[cell_start.min(inner.len())..]);
@@ -1929,6 +1931,83 @@ mod tests {
             ])]
         );
         assert_eq!(round_trip(src), src);
+    }
+
+    /// A header row of Cyrillic cells panicked every pull of the workspace:
+    /// the cell splitter stepped a byte at a time and sliced inside `Ф`.
+    #[test]
+    fn a_table_whose_cells_start_with_a_multibyte_character_is_a_table() {
+        let src = "||Имя||Тип||Размер||Владелец||\n|a|b|c|d|";
+        let (doc, store) = parse(src);
+        let row = |cells: &[&str]| {
+            cells
+                .iter()
+                .map(|c| vec![Block::Paragraph(vec![text(c)])])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            doc.blocks,
+            vec![Block::Table(Table {
+                header: Some(row(&["Имя", "Тип", "Размер", "Владелец"])),
+                rows: vec![row(&["a", "b", "c", "d"])],
+            })]
+        );
+        assert_eq!(round_trip(src), src);
+        let md = crate::convert::markdown::render(&doc, &store);
+        assert!(md.contains("| Имя | Тип | Размер | Владелец |"), "{md}");
+    }
+
+    /// Every delimiter the reader scans for, with a character of two, three
+    /// and four bytes on each side of it, at the start and the end of the
+    /// text and of a table cell. The reader walks bytes, so each of these is a
+    /// place a step of one could land inside a character.
+    #[test]
+    fn multibyte_text_beside_any_delimiter_does_not_panic() {
+        let delimited = [
+            "*Ф*",
+            "_Ф_",
+            "-Ф-",
+            "+Ф+",
+            "^Ф^",
+            "~Ф~",
+            "??Ф??",
+            "{{Ф}}",
+            "{{{}Ф{}}}",
+            "[Ф]",
+            "[Ф|https://x.example/]",
+            "[~Ф]",
+            "!Ф.png!",
+            "{color:red}Ф{color}",
+            "\\Ф",
+            "Ф-1",
+            "{Ф}",
+            "||",
+            "|",
+            "{",
+            "}",
+            "[",
+            "!",
+            "?",
+        ];
+        for d in delimited {
+            for ch in ["Ф", "日", "😀"] {
+                for text in [
+                    format!("{ch}{d}{ch}"),
+                    format!("{d}{ch}"),
+                    format!("{ch}{d}"),
+                    format!("x {ch}{d}{ch} x"),
+                    format!("||{ch}{d}||{d}{ch}||\n|{ch}{d}|{d}{ch}|"),
+                    format!("* {ch}{d}\n# {d}{ch}"),
+                    format!("h1. {ch}{d}{ch}"),
+                ] {
+                    let (doc, store) = parse(&text);
+                    let wiki = from_ast(&doc, &store);
+                    let md = crate::convert::markdown::render(&doc, &store);
+                    let _ = from_ast(&crate::convert::markdown::parse(&md, &store), &store);
+                    let _ = parse(&wiki);
+                }
+            }
+        }
     }
 
     #[test]

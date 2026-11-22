@@ -380,3 +380,54 @@ proptest! {
         prop_assert!(back.extra_sections.is_empty(), "\n--- file ---\n{}", file);
     }
 }
+
+/// Arbitrary text as a server might hold it: the readers' delimiters packed
+/// against characters of two to four bytes, with nothing in between. The
+/// document strategies above join their fragments with spaces, which is why
+/// they never put `Ф` where a byte-stepping scanner would slice inside it.
+fn server_text() -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        prop_oneof![
+            4 => prop_oneof![Just("Ф"), Just("é"), Just("日本"), Just("😀"), Just("a"), Just(" ")],
+            1 => prop_oneof![
+                Just("|"), Just("||"), Just("{{"), Just("}}"), Just("{"), Just("}"), Just("{}"),
+                Just("*"), Just("_"), Just("+"), Just("-"), Just("^"), Just("~"), Just("??"),
+                Just("["), Just("]"), Just("!"), Just("\\"), Just("#"), Just("`"), Just("<"),
+                Just(":"), Just("."), Just("@"), Just("PROJ-1"), Just("http://x.example/"),
+            ],
+            1 => prop_oneof![
+                Just("\n"), Just("\r\n"), Just("h1. "), Just("bq. "), Just("* "), Just("# "),
+                Just("----"), Just("{code}"), Just("{noformat}"), Just("{quote}"),
+                Just("{color:red}"), Just("{panel:title=Ф}"), Just("[~"),
+            ],
+        ],
+        0..30,
+    )
+    .prop_map(|parts| parts.concat())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// No description a server can hold may panic the reader: a pull converts
+    /// every issue in the workspace, so one header row of Cyrillic cells
+    /// stopped the whole pull, behind or not.
+    #[test]
+    fn no_wiki_text_panics_the_conversion(text in server_text()) {
+        let mut store = RawStore::default();
+        let doc = wiki::to_ast(&text, &mut store);
+        let md = markdown::render(&doc, &store);
+        let _ = wiki::from_ast(&markdown::parse(&md, &store), &store);
+        let _ = adf::from_ast(&doc, &store);
+    }
+
+    /// The same for what someone types into an issue file.
+    #[test]
+    fn no_markdown_text_panics_the_conversion(text in server_text()) {
+        let store = RawStore::default();
+        let doc = markdown::parse(&text, &store);
+        let _ = wiki::from_ast(&doc, &store);
+        let _ = adf::from_ast(&doc, &store);
+        let _ = markdown::render(&doc, &store);
+    }
+}
