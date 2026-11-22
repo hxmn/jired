@@ -8,6 +8,39 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.0] — 2026-11-22
+
+### Added
+
+- **An issue that cannot be converted fails alone in `pull`.** It is listed
+  under `failed` with the error, its file is left as it was, and the next
+  pull tries it again; every other issue is pulled, and the exit code is 1.
+  One such description used to stop the whole pull with exit 101, and an
+  issue new to the workspace that held one could never be pulled, nor
+  anything named alongside it.
+
+### Fixed
+
+- **A wiki table whose cells start with a non-ASCII character is a table.**
+  `||Имя||Тип||` panicked every `pull` and `doctor` in the workspace.
+- **`doctor` repairs the files it can** when one issue cannot be converted,
+  and names that one as its problem; it used to stop, so files written by an
+  older jired kept Rank and the other computed fields.
+- **A computed field left in an old file is not a change.** `diff` listed a
+  stale Rank as sendable once anything else in the file was edited; `push`
+  never sent it, and still says so in a warning.
+- **`pull` does not convert an issue level with the server**, so a
+  description it cannot read stops nothing until that issue moves.
+- **Jira's braced marks and padded code spans are read as marks and code.**
+  `run{{{}make build{}}}` came into the file as `` `{}make build{`} ``,
+  `a{*}b{*}c` as `a{**}b{**}c`, `{_}x{_}` as a read-only macro. A mark inside
+  a word is now also sent in that braced form, where it used to reach Jira as
+  literal stars.
+- **A warning is in the JSON once.** Every warning `push --json` gave was
+  listed twice.
+- A conversion that panics in any command is an error naming the issue and
+  the place, not a crash.
+
 ## [0.27.1] — 2026-11-15
 
 ### Fixed
