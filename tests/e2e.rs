@@ -2338,6 +2338,84 @@ fn a_computed_field_left_in_an_old_file_is_never_sent() {
     );
 }
 
+/// Break what jired keeps of some issues so their conversion fails: the
+/// snapshot loses `updated`, without which no issue can be read.
+fn break_snapshots(ws: &Ws, column: &str, keys: &[&str]) {
+    let db = rusqlite::Connection::open(ws.path().join(".jired/state.db")).unwrap();
+    for key in keys {
+        let raw: String = db
+            .query_row(
+                &format!("SELECT {column} FROM issue WHERE key = ?1"),
+                [key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut raw: Value = serde_json::from_str(&raw).unwrap();
+        raw["fields"].as_object_mut().unwrap().remove("updated");
+        db.execute(
+            &format!("UPDATE issue SET {column} = ?1 WHERE key = ?2"),
+            [raw.to_string(), key.to_string()],
+        )
+        .unwrap();
+    }
+}
+
+/// A description the reader could not convert stopped the whole pull, and an
+/// issue new to the workspace with it could never be pulled at all. It now
+/// fails that issue, and every other one is pulled.
+#[test]
+fn an_issue_that_cannot_be_converted_fails_alone_in_a_pull() {
+    let ws = Ws::of(Deployment::DataCenter);
+    ws.init();
+    let first = ws.json(&["pull"]);
+    let files: Vec<String> = first["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(files.len(), 3, "{first:#}");
+    let on_disk = ws.read(ws.issue_file());
+
+    // DC-77 stays on disk and moves on the server; DC-78 and DC-79 are new to
+    // the workspace, and only DC-78 can be read.
+    let db = rusqlite::Connection::open(ws.path().join(".jired/state.db")).unwrap();
+    db.execute(
+        "UPDATE issue SET remote_updated = '2099-01-01T00:00:00.000+0000' WHERE key = 'DC-77'",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE issue SET base_raw = NULL, base_updated = NULL, base_md_hash = NULL \
+         WHERE key IN ('DC-78', 'DC-79')",
+        [],
+    )
+    .unwrap();
+    for file in files.iter().filter(|f| !f.starts_with("DC-0077")) {
+        std::fs::remove_file(ws.path().join(file)).unwrap();
+    }
+    break_snapshots(&ws, "remote_raw", &["DC-77", "DC-79"]);
+
+    let report = ws.json_code(&["pull", "--no-fetch"], 1);
+    let failed = report["failed"].as_array().unwrap();
+    let keys: Vec<&str> = failed.iter().map(|f| f["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, ["DC-77", "DC-79"], "{report:#}");
+    assert_eq!(failed[0]["file"], ws.issue_file(), "{report:#}");
+    assert!(failed[1]["file"].is_null(), "not on disk: {report:#}");
+    assert!(
+        failed[0]["error"].as_str().unwrap().contains("DC-77"),
+        "{report:#}"
+    );
+    assert_eq!(report["created"][0]["key"], "DC-78", "{report:#}");
+    assert_eq!(ws.read(ws.issue_file()), on_disk, "left as it was");
+
+    let human = ws.cmd(&["pull", "--no-fetch"]).output().unwrap();
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert_eq!(human.status.code(), Some(1), "{text}");
+    assert!(text.contains("failed    DC-77"), "{text}");
+    assert!(text.contains("2 failed"), "{text}");
+}
+
 /// Two writes inside one second — an upload, then an edit straight after it
 /// — share the stored stamp, which is to the second. The pull read the second
 /// one as no change and left the file behind the server.

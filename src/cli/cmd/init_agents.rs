@@ -616,6 +616,10 @@ pub fn render() -> String {
     );
     s.push_str("#   `updated[].changes` says what each issue's pull brought in\n");
     s.push_str(
+        "#   exit 1 with `failed[]`: those issues could not be converted and were left as\n",
+    );
+    s.push_str("#   they were; every other issue was pulled\n");
+    s.push_str(
         "#   `state` is what `status` would report next; `state.clean` needs no second call\n",
     );
     s.push_str("#   ... edit the .md files ...\n");

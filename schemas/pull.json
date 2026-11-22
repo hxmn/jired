@@ -125,6 +125,33 @@
       "type": "boolean",
       "description": "True when the run planned the writes but made none (--dry-run)"
     },
+    "failed": {
+      "type": "array",
+      "description": "Issues that could not be converted: nothing was written for them and the next pull tries them again; the rest of the pull went ahead, and the exit code is 1. Absent when there were none",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "file",
+          "error"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file left as it was; null for an issue not yet in the workspace"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {

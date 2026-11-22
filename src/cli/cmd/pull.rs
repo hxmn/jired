@@ -83,11 +83,16 @@ pub fn run(g: &GlobalArgs, args: &PullArgs, out: Out) -> Result<ExitCode> {
         state.render(out);
     }
     out.emit("pull", &report);
-    // Conflicts are a distinct, scriptable outcome rather than an error.
-    Ok(if report.conflicts.is_empty() {
-        ExitCode::Success
-    } else {
+    // Conflicts are a distinct, scriptable outcome rather than an error. An
+    // issue that could not be converted is one: the rest were written, and
+    // exit 0 would say the workspace is level with the server when one issue
+    // is not.
+    Ok(if !report.conflicts.is_empty() {
         ExitCode::Conflict
+    } else if !report.failed.is_empty() {
+        ExitCode::Generic
+    } else {
+        ExitCode::Success
     })
 }
 

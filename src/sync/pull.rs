@@ -44,6 +44,13 @@ pub struct PullReport {
     /// a grouping folder that could not be rebuilt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Issues that could not be converted, and so were neither written nor
+    /// advanced: the next pull tries them again.
+    ///
+    /// One issue's description used to stop the whole pull, behind or not,
+    /// and an issue new to the workspace with it could never be pulled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<IssueFailure>,
     /// What is left to push or resolve once the pull is written, filled in by
     /// the command rather than the merge: `resolve` re-merges through here
     /// and has its own report.
@@ -123,6 +130,14 @@ impl FieldChange {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct IssueFailure {
+    pub key: String,
+    /// The file that was left as it was; absent for an issue not yet on disk.
+    pub file: Option<String>,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Rename {
     pub key: String,
     pub from: String,
@@ -174,6 +189,12 @@ impl PullReport {
                 format!("  warning   {w}"),
             ));
         }
+        for f in &self.failed {
+            out.say(crate::style::out(
+                crate::style::RED,
+                format!("  failed    {}  {}", f.key, f.error),
+            ));
+        }
         for d in &self.deleted {
             out.say(format!("  gone      {}  (no longer in scope)", d.key));
         }
@@ -189,12 +210,19 @@ impl PullReport {
             ));
         }
         if self.conflicts.is_empty() {
+            let failed = match self.failed.len() {
+                0 => String::new(),
+                n => format!(", {n} failed"),
+            };
             out.say(format!(
-                "{} new, {} updated, {} unchanged",
+                "{} new, {} updated, {} unchanged{failed}",
                 self.created.len(),
                 self.updated.len(),
                 self.unchanged
             ));
+            if !self.failed.is_empty() {
+                out.hint("a failed issue was left as it was; the next pull tries it again");
+            }
             if self.dry_run {
                 out.say("dry run — no files were written");
             }
@@ -308,8 +336,28 @@ pub fn run_scoped(
         let Some(remote_snapshot) = &row.remote else {
             continue;
         };
-        let remote_issue = parse_snapshot(&remote_snapshot.raw, markup, &fields, &row.key)?;
-        let remote_doc = render_issue(&remote_issue, &render_ctx)?;
+        // A snapshot that cannot be converted fails its own issue: the rest
+        // of the workspace has nothing to do with it.
+        let convert = |raw: &serde_json::Value| {
+            render_issue(
+                &parse_snapshot(raw, markup, &fields, &row.key)?,
+                &render_ctx,
+            )
+        };
+        let mut fail = |e: JiredError| {
+            report.failed.push(IssueFailure {
+                key: row.key.clone(),
+                file: existing.clone(),
+                error: e.message.clone(),
+            })
+        };
+        let remote_doc = match convert(&remote_snapshot.raw) {
+            Ok(doc) => doc,
+            Err(e) => {
+                fail(e);
+                continue;
+            }
+        };
 
         match (&row.base, &existing) {
             // Never seen locally: write it fresh.
@@ -345,11 +393,13 @@ pub fn run_scoped(
                     continue;
                 }
                 if !dirty {
-                    let base_doc = render_issue(
-                        &parse_snapshot(&base.raw, markup, &fields, &row.key)?,
-                        &render_ctx,
-                    )?
-                    .doc;
+                    let base_doc = match convert(&base.raw) {
+                        Ok(rendered) => rendered.doc,
+                        Err(e) => {
+                            fail(e);
+                            continue;
+                        }
+                    };
                     let changes = field_changes(&base_doc, &remote_doc.doc, &fields);
                     planned.push(PlannedWrite {
                         key: row.key.clone(),
@@ -371,8 +421,13 @@ pub fn run_scoped(
                     continue;
                 }
 
-                let base_issue = parse_snapshot(&base.raw, markup, &fields, &row.key)?;
-                let base_doc = render_issue(&base_issue, &render_ctx)?.doc;
+                let base_doc = match convert(&base.raw) {
+                    Ok(rendered) => rendered.doc,
+                    Err(e) => {
+                        fail(e);
+                        continue;
+                    }
+                };
                 let working_doc = IssueDoc::parse(&working_text)
                     .map_err(|e| JiredError::generic(format!("{file}: {}", e.message)))?;
 
@@ -609,6 +664,7 @@ pub fn run_scoped(
 
     report.created.sort_by(|a, b| a.key.cmp(&b.key));
     report.updated.sort_by(|a, b| a.key.cmp(&b.key));
+    report.failed.sort_by(|a, b| a.key.cmp(&b.key));
     report.conflicts.sort_by(|a, b| a.key.cmp(&b.key));
     report.decided.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(report)

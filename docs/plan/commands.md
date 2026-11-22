@@ -213,6 +213,10 @@ sections and closing line as `status` (`nothing to push, no conflicts` when ther
 is nothing), and its JSON carries them as `state`. Not after `--dry-run`, which
 wrote nothing, and not after a pull that reported conflicts of its own: under
 `abort` those are not recorded, and a closing all-clear would contradict them.
+An issue whose snapshot cannot be converted fails on its own: it is listed
+under `failed` with the error, its file is left as it was and its base is not
+advanced, so the next pull tries it again. Every other issue is pulled, and the
+exit code is 1 (5 when there are conflicts too).
 Agent example: `jired pull --no-input --json || test $? -eq 5`
 
 Custom fields are written into the file in their editable form — a select list
