@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.1] — 2026-11-27
+
+### Fixed
+
+- **A code block that holds a fence line stays one code block.** Code with
+  a ```` ``` ```` line in it is written inside a wider fence, but reading the
+  file closed it at that line, so what followed was taken for the file's own
+  structure: a `### [new]` heading in another person's code block became a
+  new comment that `push` would post under your name, and a description was
+  cut short at the inner fence. A fence now closes only on a run of the same
+  character at least as long.
+
 ## [0.28.0] — 2026-11-22
 
 ### Added
