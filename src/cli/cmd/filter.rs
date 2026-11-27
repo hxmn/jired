@@ -819,18 +819,12 @@ fn not_found(client: &dyn JiraApi, wanted: &str) -> JiredError {
 
 /// How many issues a JQL matches, asked before it is saved.
 ///
-/// One search with room for no issues: the server parses the whole query, and
-/// names an unknown field or value, at the cost of a count.
+/// One count: the server parses the whole query, and names an unknown field
+/// or value, at the cost of a number. A search with room for no issues used
+/// to stand in for it, and Cloud's search reports no total.
 fn check_jql(client: &dyn JiraApi, jql: &str) -> Result<usize> {
-    let query = crate::api::SearchQuery {
-        jql: jql.to_string(),
-        start_at: 0,
-        max_results: 0,
-        fields: crate::api::FieldSet::Summary,
-        expand_changelog: false,
-    };
-    match crate::api::block_on(client.search(&query)) {
-        Ok(page) => Ok(page.total),
+    match crate::api::block_on(client.count(jql)) {
+        Ok(total) => Ok(total),
         // A 400 from search is the query, and the query is the user's input:
         // exit 2, with nothing saved.
         Err(e) if status(&e) == Some(400) => Err(JiredError::usage(format!(

@@ -178,6 +178,7 @@ fn issues(g: &GlobalArgs, args: &IssuesArgs, out: Out) -> Result<ExitCode> {
                     max_results: 100,
                     fields: crate::api::FieldSet::Listing,
                     expand_changelog: false,
+                    page_token: None,
                 },
                 |page| {
                     let seen = page.start_at + page.issues.len();

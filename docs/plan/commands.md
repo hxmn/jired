@@ -1045,7 +1045,11 @@ status sent every check after it back to the server one issue at a time.
 rules `list --columns` has: padded on a terminal, tab-separated into a pipe, an
 empty cell for an empty value, `sprint` the one it is in now. `--keys` prints
 the keys alone. `--count` prints only how many issues match: one request with
-no issues in it, whatever the size of the answer.
+no issues in it, whatever the size of the answer. On Cloud the search is
+`POST /rest/api/3/search/jql`, paged by `nextPageToken`, which says nothing of a
+total: `total` there counts the issues read so far and one more while a page
+follows, and is exact once the last page is in; `--count` asks
+`search/approximate-count`, which is Atlassian's estimate, not a tally.
 JSON: `{"schema":"jired/search/1","jql","total","issues":[{"key","summary","status","status_category","type","assignee","assignee_id","parent","epic","sprint":[…],"fix_versions":[…],"labels":[…],"priority","components":[…],"created","updated"}]}`;
 with `--count`, `{"schema":"jired/search-count/1","jql","total"}`.
 

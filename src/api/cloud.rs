@@ -23,6 +23,26 @@ pub fn client(http: HttpClient) -> Rest {
 // `PUBLISHED_OPENAPI`, a document Atlassian hosts rather than one the site
 // serves.
 
+/// Cloud's issue search. The offset-paged `search` it shares with Data
+/// Center is being withdrawn on Cloud; this one pages by token and reports
+/// no total.
+pub const SEARCH_JQL: Route = Route {
+    id: "searchAndReconsileIssuesUsingJqlPost",
+    method: "POST",
+    module: Module::Api,
+    path: "search/jql",
+    query: &[],
+};
+
+/// How many issues a JQL matches, which [`SEARCH_JQL`] no longer says.
+pub const APPROXIMATE_COUNT: Route = Route {
+    id: "countIssues",
+    method: "POST",
+    module: Module::Api,
+    path: "search/approximate-count",
+    query: &[],
+};
+
 /// Cloud paginates its project listing; Data Center answers `project` with the
 /// whole array.
 pub const PROJECT_SEARCH: Route = Route {

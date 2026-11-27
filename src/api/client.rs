@@ -27,6 +27,10 @@ pub struct SearchQuery {
     pub max_results: usize,
     pub fields: FieldSet,
     pub expand_changelog: bool,
+    /// The page to ask for on Cloud, whose search pages by token: the
+    /// `next_page_token` the page before it gave. Data Center pages by
+    /// `start_at` and never reads it.
+    pub page_token: Option<String>,
 }
 
 impl Default for SearchQuery {
@@ -37,6 +41,7 @@ impl Default for SearchQuery {
             max_results: 100,
             fields: FieldSet::Full,
             expand_changelog: false,
+            page_token: None,
         }
     }
 }
@@ -45,8 +50,11 @@ impl Default for SearchQuery {
 pub struct SearchPage {
     pub issues: Vec<RemoteIssue>,
     pub start_at: usize,
+    /// How many issues match. Cloud's search does not say, so there it is
+    /// the issues up to and including this page, and one more while a page
+    /// token says there are more: a lower bound that is exact on the last.
     pub total: usize,
-    /// Cloud's newer search endpoint paginates by token rather than offset.
+    /// Cloud's search paginates by token rather than offset.
     pub next_page_token: Option<String>,
 }
 
@@ -172,6 +180,20 @@ pub trait JiraApi: Send + Sync {
     async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()>;
 
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage>;
+    /// How many issues `jql` matches, in one request. Data Center reports it
+    /// beside an empty page; Cloud's search reports no total, and has a count
+    /// of its own.
+    async fn count(&self, jql: &str) -> Result<usize> {
+        let page = self
+            .search(&SearchQuery {
+                jql: jql.to_string(),
+                max_results: 0,
+                fields: FieldSet::Summary,
+                ..Default::default()
+            })
+            .await?;
+        Ok(page.total)
+    }
     async fn issue(&self, key: &str) -> Result<RemoteIssue>;
     async fn changelog(&self, key: &str) -> Result<Vec<ChangelogEntry>>;
     async fn transitions(&self, key: &str) -> Result<Vec<Transition>>;
@@ -322,6 +344,7 @@ pub async fn search_all(
         all.extend(page.issues);
         match next_page(count, all.len(), page.total, page.next_page_token, &token) {
             Page::Next(next) => {
+                query.page_token = next.clone();
                 token = next;
                 query.start_at += count;
             }

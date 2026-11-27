@@ -198,17 +198,11 @@ pub fn answer(
         // No issues, only the total the server reports beside them: one
         // request whatever the size of the answer. Counting by fetching was 75
         // searches and a jq loop for one chart.
-        let page = crate::api::block_on(client.search(&crate::api::SearchQuery {
-            jql: jql.clone(),
-            start_at: 0,
-            max_results: 0,
-            fields: crate::api::FieldSet::Summary,
-            expand_changelog: false,
-        }))?;
-        out.say(page.total.to_string());
+        let total = crate::api::block_on(client.count(&jql))?;
+        out.say(total.to_string());
         out.emit(
             "search-count",
-            &serde_json::json!({"jql": jql, "total": page.total}),
+            &serde_json::json!({"jql": jql, "total": total}),
         );
         return Ok(ExitCode::Success);
     }
@@ -262,6 +256,7 @@ fn fetch(
 ) -> Result<(Vec<RemoteIssue>, usize)> {
     let mut issues: Vec<RemoteIssue> = Vec::new();
     let mut total = 0;
+    let mut page_token: Option<String> = None;
     while issues.len() < limit {
         let page = crate::api::block_on(client.search(&crate::api::SearchQuery {
             jql: jql.to_string(),
@@ -269,13 +264,17 @@ fn fetch(
             max_results: (limit - issues.len()).min(PAGE),
             fields: crate::api::FieldSet::Listing,
             expand_changelog: false,
+            page_token: page_token.clone(),
         }))?;
         total = page.total;
         let count = page.issues.len();
         issues.extend(page.issues);
-        if count == 0 || issues.len() >= total {
+        // Cloud's total is a lower bound until the last page, which is the
+        // one without a token.
+        if count == 0 || (page.next_page_token.is_none() && issues.len() >= total) {
             break;
         }
+        page_token = page.next_page_token;
     }
     issues.truncate(limit);
     Ok((issues, total))

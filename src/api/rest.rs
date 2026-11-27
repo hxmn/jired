@@ -710,9 +710,35 @@ impl JiraApi for Rest {
         Ok(())
     }
 
+    async fn count(&self, jql: &str) -> Result<usize> {
+        if self.deployment != Deployment::Cloud {
+            let page = self
+                .search(&SearchQuery {
+                    jql: jql.to_string(),
+                    max_results: 0,
+                    fields: FieldSet::Summary,
+                    ..Default::default()
+                })
+                .await?;
+            return Ok(page.total);
+        }
+        let v = self
+            .http
+            .post_json_repeatable(
+                &self.url(&crate::api::cloud::APPROXIMATE_COUNT, &[], &[]),
+                json!({ "jql": jql }),
+            )
+            .await?;
+        v.get("count")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
+            .ok_or_else(|| JiredError::generic("the issue count came back without a `count`"))
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         let map = self.field_map().await?.clone();
         let markup = self.markup();
+        let cloud = self.deployment == Deployment::Cloud;
         let mut body = json!({
             "jql": query.jql,
             "maxResults": query.max_results,
@@ -720,14 +746,30 @@ impl JiraApi for Rest {
                 .split(',')
                 .collect::<Vec<_>>(),
         });
-        if query.expand_changelog {
-            body["expand"] = json!(["changelog"]);
+        // Cloud's search takes `expand` as one string, pages by token, and
+        // has no offset; Data Center's takes a list and an offset.
+        if cloud {
+            if query.expand_changelog {
+                body["expand"] = json!("changelog");
+            }
+            if let Some(token) = &query.page_token {
+                body["nextPageToken"] = json!(token);
+            }
+        } else {
+            if query.expand_changelog {
+                body["expand"] = json!(["changelog"]);
+            }
+            body["startAt"] = json!(query.start_at);
         }
-        body["startAt"] = json!(query.start_at);
+        let route = if cloud {
+            &crate::api::cloud::SEARCH_JQL
+        } else {
+            &routes::SEARCH
+        };
 
         let v = self
             .http
-            .post_json_repeatable(&self.url(&routes::SEARCH, &[], &[]), body)
+            .post_json_repeatable(&self.url(route, &[], &[]), body)
             .await?;
 
         let mut issues = v
@@ -744,16 +786,24 @@ impl JiraApi for Rest {
             self.complete(issue).await;
         }
 
+        let next_page_token = v
+            .get("nextPageToken")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            // `isLast` is the word; a token beside it means nothing more.
+            .filter(|_| !v.get("isLast").and_then(Value::as_bool).unwrap_or(false));
+        let start_at = match v.get("startAt").and_then(Value::as_u64) {
+            Some(n) => n as usize,
+            None => query.start_at,
+        };
+        let total = match v.get("total").and_then(Value::as_u64) {
+            Some(n) => n as usize,
+            None => start_at + issues.len() + usize::from(next_page_token.is_some()),
+        };
         Ok(SearchPage {
-            start_at: v.get("startAt").and_then(Value::as_u64).unwrap_or(0) as usize,
-            total: v
-                .get("total")
-                .and_then(Value::as_u64)
-                .unwrap_or(issues.len() as u64) as usize,
-            next_page_token: v
-                .get("nextPageToken")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            start_at,
+            total,
+            next_page_token,
             issues,
         })
     }
@@ -1622,5 +1672,107 @@ mod tests {
             ),
             "/rest/api/3/issue/PROJ-1/worklog?startAt=0&maxResults=100"
         );
+    }
+
+    /// A Cloud site on a loopback port: an empty field list, and a search
+    /// that answers in two token-paged pages. Keeps each search body.
+    type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+
+    fn cloud_server() -> (String, Seen) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap();
+                let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let issue = |key: &str| {
+                    json!({"id": "1", "key": key,
+                           "fields": {"summary": "s", "updated": "2026-01-01T00:00:00.000+0000"}})
+                };
+                let reply = if path.ends_with("/field") {
+                    json!([])
+                } else if body.get("nextPageToken").is_none() {
+                    json!({"issues": [issue("PROJ-1")], "nextPageToken": "p2", "isLast": false})
+                } else {
+                    json!({"issues": [issue("PROJ-2")], "isLast": true})
+                };
+                log.lock().unwrap().push((path, body));
+                let text = reply.to_string();
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                        text.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (url, seen)
+    }
+
+    /// Cloud's search is `search/jql`, paged by the token each page gives:
+    /// the offset search it used to share with Data Center is going away
+    /// there, and a token that was read and never sent back walked nothing.
+    #[tokio::test]
+    async fn a_cloud_search_pages_by_token() {
+        let (url, seen) = cloud_server();
+        let http = HttpClient::new(crate::api::Connection {
+            base_url: url,
+            deployment: Deployment::Cloud,
+            auth_kind: crate::api::AuthKind::ApiToken,
+            identity: Some("a@example.invalid".into()),
+            token: "t".to_string().into(),
+            tls: Default::default(),
+        })
+        .unwrap();
+        let rest = Rest::new(http);
+        let all = crate::api::client::search_all(
+            &rest,
+            SearchQuery {
+                jql: "project = PROJ".into(),
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            all.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+            ["PROJ-1", "PROJ-2"]
+        );
+        let searches: Vec<_> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| !path.ends_with("/field"))
+            .cloned()
+            .collect();
+        assert_eq!(searches.len(), 2, "{searches:?}");
+        assert!(
+            searches.iter().all(|(p, _)| p == "/rest/api/3/search/jql"),
+            "{searches:?}"
+        );
+        assert_eq!(searches[1].1["nextPageToken"], "p2");
+        assert!(searches[0].1.get("startAt").is_none());
     }
 }

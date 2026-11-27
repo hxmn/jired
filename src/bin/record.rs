@@ -143,6 +143,7 @@ fn run() -> Result<()> {
                 max_results: args.limit,
                 fields: FieldSet::Full,
                 expand_changelog: false,
+                page_token: None,
             })
             .await?;
         eprintln!("  {} issue(s) of {} matched", page.issues.len(), page.total);
