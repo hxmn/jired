@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.34.1] — 2026-11-27
+
+### Fixed
+
+- **`--json` documents match their published schemas.** A warning folded
+  into an error document, or into `status` where warnings are objects, broke
+  the schema an agent validates against; `config path`/`config edit` lacked
+  a required field; a declined `push` returned a document missing most of
+  what `jired/push/1` requires. Every schema now declares `warnings`,
+  `status` lists every warning as an object with a `message`, and a declined
+  push returns its full plan with `"cancelled": true`.
+
 ## [0.34.0] — 2026-11-27
 
 ### Added
