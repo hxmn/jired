@@ -88,7 +88,7 @@ impl Engine {
     }
 
     pub fn client(&self, ctx: &mut Context) -> Result<Box<dyn JiraApi>> {
-        crate::api::build_client(ctx, &self.account)
+        ctx.client_for(&self.account)
     }
 }
 

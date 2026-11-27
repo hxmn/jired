@@ -33,7 +33,7 @@ pub fn run(g: &GlobalArgs, args: &WhoamiArgs, out: Out) -> Result<ExitCode> {
     let account = session.require_account()?;
 
     let (display_name, account_id) = if args.refresh {
-        let client = crate::api::build_client(&mut ctx, &account)?;
+        let client = ctx.client_for(&account)?;
         let me = crate::api::block_on(client.myself())?;
         session.record_verification(account.id, &me)?;
         (me.display_name, Some(me.account_id))

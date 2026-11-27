@@ -62,7 +62,7 @@ pub fn run(g: &GlobalArgs, args: &FetchSpecArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
     let account = session.require_account()?;
-    let client = crate::api::build_client(&mut ctx, &account)?;
+    let client = ctx.client_for(&account)?;
 
     let modules = client.spec_modules();
     if modules.is_empty() {

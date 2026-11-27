@@ -586,7 +586,7 @@ fn connect(
     store: Option<CredStore>,
     reuse_stored: bool,
 ) -> Result<Connected> {
-    let mut tls = TlsOptions::from_resolver(&mut ctx.resolver)?;
+    let mut tls = crate::cli::context::tls_options(&mut ctx.resolver)?;
     // A certificate trusted during an earlier init stays trusted; that decision
     // was made once and does not need making again.
     if tls.ca_path.is_none() && ctx.workspace.trusted_ca_path().is_file() {
@@ -953,7 +953,7 @@ fn choose_project(
         return Ok(None);
     }
 
-    let client = crate::api::build_client(ctx, account)?;
+    let client = ctx.client_for(account)?;
     let projects = match ui.working("loading projects", || {
         crate::api::block_on(client.projects())
     }) {

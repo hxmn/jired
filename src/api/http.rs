@@ -1,7 +1,6 @@
 //! Shared HTTP core: TLS, auth headers, rate limiting, retry [M1.6].
 
 use crate::api::{AuthKind, Connection, Deployment};
-use crate::config::Resolver;
 use crate::error::{JiredError, Result};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Method, StatusCode};
@@ -15,15 +14,6 @@ use tokio::sync::Mutex;
 pub struct TlsOptions {
     pub ca_path: Option<PathBuf>,
     pub insecure: bool,
-}
-
-impl TlsOptions {
-    pub fn from_resolver(r: &mut Resolver) -> Result<Self> {
-        Ok(Self {
-            ca_path: r.get_quiet("tls.ca_cert")?.map(PathBuf::from),
-            insecure: r.get_bool("tls.insecure")?.unwrap_or(false),
-        })
-    }
 }
 
 /// Requests per second allowed before jired throttles itself.

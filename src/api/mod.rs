@@ -282,36 +282,6 @@ pub fn open_client(conn: Connection) -> Result<Box<dyn JiraApi>> {
     make_client(conn)
 }
 
-/// Build the client for an already-authenticated workspace account.
-pub fn build_client(
-    ctx: &mut crate::cli::context::Context,
-    account: &crate::store::session::Account,
-) -> Result<Box<dyn JiraApi>> {
-    #[cfg(feature = "fixtures")]
-    if let Some(dir) = fixture_dir() {
-        return Ok(Box::new(fixture::FixtureClient::open(
-            &dir,
-            account.deployment,
-        )?));
-    }
-    let tls = TlsOptions {
-        ca_path: account
-            .tls_ca_path
-            .clone()
-            .or(ctx.resolver.get_quiet("tls.ca_cert")?)
-            .map(Into::into),
-        insecure: account.tls_insecure || ctx.resolver.get_bool("tls.insecure")?.unwrap_or(false),
-    };
-    make_client(Connection {
-        base_url: account.base_url.clone(),
-        deployment: account.deployment,
-        auth_kind: account.auth_kind,
-        identity: account.identity.clone(),
-        token: account.token()?,
-        tls,
-    })
-}
-
 pub fn make_client(conn: Connection) -> Result<Box<dyn JiraApi>> {
     let deployment = conn.deployment;
     let http = http::HttpClient::new(conn)?;
