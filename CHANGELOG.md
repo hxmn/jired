@@ -8,6 +8,19 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.6] — 2026-11-27
+
+### Fixed
+
+- **A read-only region copied into another text is refused rather than
+  lost.** Quoting a panel from the description into a new comment, for
+  instance, sent the comment without it, text and all. `push` now stops
+  that issue (exit 2) and says which text holds a region that is not its
+  own.
+- **Region markers shown inside code stay as written.** A code block or
+  code span showing `<!--jired:raw:…-->` went back to Jira with an internal
+  placeholder in its place.
+
 ## [0.31.5] — 2026-11-27
 
 ### Fixed
