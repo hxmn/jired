@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.8] — 2026-11-27
+
+### Changed
+
+- **`fetch` and `pull` are faster on issues with many comments or web
+  links.** The extra requests for each issue now run a few at a time rather
+  than one after another, within the same request rate as before.
+
 ## [0.39.7] — 2026-11-27
 
 ### Changed
