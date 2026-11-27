@@ -77,7 +77,18 @@ pub async fn move_subtask_parent(
         }
         let fields = form.submission(answer.take().map(|p| (PARENT_FIELD, p)));
         posted.push(form.action.clone());
-        page = http.post_form(&form.action, &fields).await?;
+        // The action is the form's, relative to the page it is on: joined to
+        // the configured URL instead, `MoveSubTaskParent.jspa` named a host
+        // `jira.corp.exampleMoveSubTaskParent.jspa`.
+        let target = reqwest::Url::parse(&page.url)
+            .and_then(|at| at.join(&form.action))
+            .map_err(|e| {
+                JiredError::unsupported_server(format!(
+                    "{key}: the Move wizard's form posts to `{}`, which is not a URL: {e}",
+                    form.action
+                ))
+            })?;
+        page = http.post_form(target.as_str(), &fields).await?;
     }
 
     Err(
@@ -478,5 +489,52 @@ mod tests {
             Some("The parent issue DC-900 does not exist.")
         );
         assert_eq!(complaint("<div>all fine</div>"), None);
+    }
+
+    /// The form's action is relative to the page it is on, which on a Jira
+    /// with a context path is under it: joined to the configured URL, it named
+    /// another host.
+    #[tokio::test]
+    async fn a_relative_action_is_posted_beside_the_page() {
+        use crate::api::loopback::{self, Reply};
+        let (url, seen) = loopback::serve(|r| {
+            let html = if r.method == "GET" {
+                STEP_ONE
+            } else {
+                "<html><body>done</body></html>"
+            };
+            Reply::With(
+                200,
+                vec!["Content-Type: text/html".into()],
+                html.to_string(),
+            )
+        });
+        let http = loopback::client(&format!("{url}/jira"), crate::api::Deployment::DataCenter);
+        move_subtask_parent(&http, "DC-78", "10412", "DC-80")
+            .await
+            .unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen[1].method, "POST");
+        assert_eq!(seen[1].path, "/jira/secure/MoveSubTaskParent.jspa");
+        assert!(String::from_utf8_lossy(&seen[1].body).contains("parentIssue=DC-80"));
+    }
+
+    /// A form that posts to another site is not followed.
+    #[tokio::test]
+    async fn a_form_aimed_at_another_site_is_refused() {
+        use crate::api::loopback::{self, Reply};
+        let (url, seen) = loopback::serve(|_| {
+            let html = STEP_ONE.replace(
+                "\"MoveSubTaskParent.jspa\"",
+                "\"https://elsewhere.example/MoveSubTaskParent.jspa\"",
+            );
+            Reply::With(200, vec!["Content-Type: text/html".into()], html)
+        });
+        let http = loopback::client(&url, crate::api::Deployment::DataCenter);
+        let err = move_subtask_parent(&http, "DC-78", "10412", "DC-80")
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("elsewhere.example"), "{}", err.message);
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 }

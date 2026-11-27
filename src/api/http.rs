@@ -384,6 +384,18 @@ impl HttpClient {
         } else {
             self.url(action)
         };
+        // A form is the page's to aim, and the page is the server's: one that
+        // posts somewhere else is not followed, credential or not.
+        let same_origin = reqwest::Url::parse(&url).is_ok_and(|u| {
+            u.origin().is_tuple() && u.origin().ascii_serialization() == self.origin
+        });
+        if !same_origin {
+            return Err(JiredError::unsupported_server(format!(
+                "a form on {} posts to {url}, which is not this server",
+                self.base_url
+            ))
+            .with_detail("action", action.to_string()));
+        }
         tracing::debug!("POST {action} ({} field(s))", fields.len());
         // The values can name an issue and its new parent, which is content;
         // the same rule the JSON bodies follow puts them at `-vv`.
