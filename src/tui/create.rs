@@ -259,6 +259,24 @@ impl CreateScreen {
 impl Screen for CreateScreen {
     type Output = Draft;
 
+    /// The description is the one field of several lines, and keeps a
+    /// pasted newline as one; anywhere else it is a space.
+    fn paste(&mut self, text: &str) -> Flow<Draft> {
+        for c in text.chars() {
+            let code = match c {
+                '\r' => continue,
+                '\n' if self.focus == DESCRIPTION => KeyCode::Enter,
+                '\n' => KeyCode::Char(' '),
+                c => KeyCode::Char(c),
+            };
+            match self.handle(KeyEvent::new(code, KeyModifiers::NONE)) {
+                Flow::Continue => {}
+                other => return other,
+            }
+        }
+        Flow::Continue
+    }
+
     fn handle(&mut self, key: KeyEvent) -> Flow<Draft> {
         if let Some(overlay) = self.overlay.take() {
             return self.handle_overlay(key, overlay);
@@ -508,6 +526,23 @@ mod tests {
         assert_eq!(screen.fields[TYPE].text(), "Story");
         assert_eq!(screen.fields[PROJECT].text(), "PROJ");
         assert_eq!(screen.fields[PRIORITY].filled(), None);
+    }
+
+    /// A paste of two lines into the summary is one summary, and the form
+    /// is still open: its newline used to be the Enter that sent it.
+    #[test]
+    fn a_pasted_newline_does_not_submit_the_form() {
+        let mut screen = screen();
+        assert!(matches!(
+            screen.paste("Fix the\nlogin flow"),
+            Flow::Continue
+        ));
+        assert_eq!(screen.fields[SUMMARY].text(), "Fix the login flow");
+
+        screen.focus = DESCRIPTION;
+        screen.paste("one\r\ntwo");
+        let draft = done(screen.handle(ctrl('s')));
+        assert_eq!(draft.description, "one\ntwo");
     }
 
     #[test]

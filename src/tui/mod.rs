@@ -54,6 +54,26 @@ pub trait Screen {
 
     fn render(&mut self, frame: &mut Frame);
     fn handle(&mut self, key: KeyEvent) -> Flow<Self::Output>;
+
+    /// Text pasted into the screen, typed into whatever has focus. A newline
+    /// is a space: pasted unbracketed, the first one was an Enter that ended
+    /// the form with half a summary, and `sprint add` sent that to Jira, while
+    /// the rest of the paste went on to the shell. A screen with a field of
+    /// several lines can take them as they are.
+    fn paste(&mut self, text: &str) -> Flow<Self::Output> {
+        for c in text.chars() {
+            let c = if matches!(c, '\n' | '\r') { ' ' } else { c };
+            let key = KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            );
+            match self.handle(key) {
+                Flow::Continue => {}
+                other => return other,
+            }
+        }
+        Flow::Continue
+    }
 }
 
 /// Whether a full-screen interface stands a chance of working.
@@ -97,6 +117,11 @@ fn event_loop<S: Screen>(
                 Flow::Done(value) => return Ok(Some(value)),
                 Flow::Cancel => return Ok(None),
             },
+            Event::Paste(text) => match screen.paste(&text) {
+                Flow::Continue => {}
+                Flow::Done(value) => return Ok(Some(value)),
+                Flow::Cancel => return Ok(None),
+            },
             // A resize invalidates the whole buffer; the redraw at the top of
             // the loop is the response.
             Event::Resize(_, _) => terminal.clear()?,
@@ -122,6 +147,9 @@ fn enter() -> Result<Terminal<CrosstermBackend<Stderr>>> {
             "cannot open the alternate screen: {e}"
         )));
     }
+    // Bracketed, so a paste arrives as one paste and not as keys, Enter
+    // among them. A terminal that does not know the sequence ignores it.
+    let _ = stderr.execute(crossterm::event::EnableBracketedPaste);
     ACTIVE.store(true, Ordering::SeqCst);
     let terminal = Terminal::new(CrosstermBackend::new(stderr));
     if terminal.is_err() {
@@ -134,6 +162,7 @@ fn leave() {
     if !ACTIVE.swap(false, Ordering::SeqCst) {
         return;
     }
+    let _ = std::io::stderr().execute(crossterm::event::DisableBracketedPaste);
     let _ = std::io::stderr().execute(LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
