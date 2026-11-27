@@ -15,6 +15,12 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Longest filename jired will produce, before the `.md` extension.
 pub const MAX_STEM: usize = 120;
 
+/// The same in bytes, which is what a filesystem counts: 255 on ext4, xfs and
+/// btrfs. A summary of eighty CJK characters is within [`MAX_STEM`] and some
+/// 240 bytes, and the write failed. The margin covers `.md` and the leading
+/// `.` of the attachment folder with room to spare.
+pub const MAX_STEM_BYTES: usize = 200;
+
 /// Digits an issue number is padded to inside a filename.
 ///
 /// Four covers the first 9999 issues of a project, which is where sorting
@@ -97,6 +103,23 @@ pub fn truncate(text: &str, max: usize) -> String {
     format!("{}…", out.trim_end())
 }
 
+/// [`truncate`] by UTF-8 length rather than by characters, the ellipsis
+/// included.
+fn truncate_bytes(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let room = max.saturating_sub('…'.len_utf8());
+    let mut out = String::new();
+    for g in text.graphemes(true) {
+        if out.len() + g.len() > room {
+            break;
+        }
+        out.push_str(g);
+    }
+    format!("{}…", out.trim_end())
+}
+
 /// `PROJ-142` → `PROJ-0142`, for use in filenames only.
 ///
 /// Temporary `NEW-*` keys carry a hex suffix rather than an issue number and
@@ -138,7 +161,9 @@ pub fn file_stem(key: &str, summary: &str) -> String {
     let stem = if clean.is_empty() {
         key.to_string()
     } else {
-        format!("{prefix}{}", truncate(&clean, room))
+        let short = truncate(&clean, room);
+        let bytes = MAX_STEM_BYTES.saturating_sub(prefix.len());
+        format!("{prefix}{}", truncate_bytes(&short, bytes))
     };
     guard_reserved(&stem)
 }
@@ -271,6 +296,21 @@ fn guard_reserved(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name is capped in bytes as well as characters, and cut between
+    /// characters: eighty CJK characters made a name the filesystem refused.
+    #[test]
+    fn a_long_non_ascii_summary_makes_a_name_the_filesystem_takes() {
+        let summary = "日本語の要約".repeat(20);
+        let name = file_name("PROJ-1", &summary);
+        assert!(name.len() <= MAX_STEM_BYTES + 3, "{} bytes", name.len());
+        assert!(attachment_dir("PROJ-1", &summary).len() < 255);
+        assert!(name.starts_with("PROJ-0001. 日本語"), "{name}");
+        assert!(name.ends_with("….md"), "{name}");
+        // An ASCII summary is cut at the character cap as before.
+        let ascii = file_stem("PROJ-1", &"a".repeat(300));
+        assert_eq!(ascii.chars().count(), MAX_STEM);
+    }
 
     #[test]
     fn a_server_file_name_stays_inside_its_folder() {
