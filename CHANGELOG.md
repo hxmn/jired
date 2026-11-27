@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.8] — 2026-11-27
+
+### Fixed
+
+- **`status` and `push` no longer crash on a read-only region with a
+  no-break space on a line of its own.** Inside a list or a quote, such a
+  region panicked the check for edited regions with exit 101.
+
 ## [0.31.7] — 2026-11-27
 
 ### Fixed
