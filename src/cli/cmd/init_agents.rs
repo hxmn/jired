@@ -390,9 +390,9 @@ pub fn write_block(
         return Ok(false);
     }
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(crate::error::io_ctx("create", parent))?;
     }
-    crate::workspace::write_atomic(path, updated)?;
+    crate::workspace::write_atomic(path, updated).map_err(crate::error::io_ctx("write", path))?;
     Ok(true)
 }
 
@@ -473,9 +473,9 @@ fn write_claude_settings(path: &Path) -> Result<bool> {
         return Ok(false);
     }
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(crate::error::io_ctx("create", parent))?;
     }
-    crate::workspace::write_atomic(path, updated)?;
+    crate::workspace::write_atomic(path, updated).map_err(crate::error::io_ctx("write", path))?;
     Ok(true)
 }
 

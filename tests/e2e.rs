@@ -2499,6 +2499,20 @@ fn what_a_command_prints_is_its_result_under_json_and_quiet() {
     assert_eq!(doc["files"], serde_json::json!([]), "{doc}");
 }
 
+/// A file that cannot be written is named, with why: `init-agents --json`
+/// said only "i/o error".
+#[test]
+fn an_unwritable_file_is_named_in_the_json_error() {
+    let ws = Ws::new();
+    ws.init();
+    std::fs::remove_file(ws.path().join("AGENTS.md")).ok();
+    std::fs::create_dir_all(ws.path().join("AGENTS.md/in-the-way")).unwrap();
+    let err = ws.json_err(&["init-agents"], 1);
+    let message = err["message"].as_str().unwrap();
+    assert!(message.contains("AGENTS.md"), "{err}");
+    assert!(message.contains("directory"), "the reason is part of it: {err}");
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();

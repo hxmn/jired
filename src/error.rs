@@ -182,13 +182,34 @@ impl JiredError {
             serde_json::Value::from(self.exit_code().as_i32()),
         );
         obj.insert("kind".into(), self.0.kind.as_str().into());
-        obj.insert("message".into(), self.0.message.clone().into());
-        obj.insert("details".into(), self.0.details.clone());
+        // The message as a person reads it, the cause appended: `i/o error`
+        // alone was all an agent was told when a file could not be written.
+        obj.insert("message".into(), self.to_string().into());
+        let mut details = self.0.details.clone();
+        if let (Some(source), serde_json::Value::Object(map)) = (&self.0.source, &mut details) {
+            map.entry("cause")
+                .or_insert_with(|| cause_chain(source.as_ref()).into());
+        }
+        obj.insert("details".into(), details);
         if let Some(hint) = &self.0.hint {
             obj.insert("hint".into(), hint.clone().into());
         }
         serde_json::Value::Object(obj)
     }
+}
+
+/// An error and every error behind it, outermost first.
+fn cause_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![e.to_string()];
+    let mut next = e.source();
+    while let Some(inner) = next {
+        let text = inner.to_string();
+        if !parts.last().is_some_and(|p| p.contains(&text)) {
+            parts.push(text);
+        }
+        next = inner.source();
+    }
+    parts.join(": ")
 }
 
 impl fmt::Display for JiredError {
@@ -272,9 +293,12 @@ impl From<rusqlite::Error> for JiredError {
                     ErrorKind::CorruptState,
                     Some("run `jired doctor`; if it is state.db, deleting it and running `jired fetch` rebuilds it"),
                 ),
-                _ => (ErrorKind::CorruptState, None),
+                // Only the two codes above say the file is damaged; anything
+                // else called corrupt sent people to delete a database that
+                // was fine.
+                _ => (ErrorKind::Generic, None),
             },
-            _ => (ErrorKind::CorruptState, None),
+            _ => (ErrorKind::Generic, None),
         };
         let err = JiredError::new(kind, "database error").with_source(e);
         match hint {
@@ -299,6 +323,16 @@ impl From<serde_yaml_ng::Error> for JiredError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A machine reading the error learns what a person does: the cause is in
+    /// the message and, on its own, under `details.cause`.
+    #[test]
+    fn the_cause_reaches_the_json() {
+        let io = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let json = JiredError::from(io).to_json();
+        assert_eq!(json["message"], "i/o error: denied");
+        assert_eq!(json["details"]["cause"], "denied");
+    }
 
     /// The exit-code table is a public contract; this test is its lock.
     #[test]
