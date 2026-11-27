@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.29.0] — 2026-11-27
+
+### Breaking
+
+- **On Cloud, `search` and `fetch` use `POST /rest/api/3/search/jql`.**
+  Atlassian is withdrawing the search jired used before; where it is gone,
+  every fetch, pull and search failed. The new one does not say how many
+  issues match, so on Cloud `search --json`'s `total` counts the issues read,
+  plus one while more remain, and is exact only once all are read;
+  `search --count` and the match count `filter create` reports are
+  Atlassian's approximate count. Data Center is unchanged.
+
 ## [0.28.12] — 2026-11-27
 
 ### Fixed
