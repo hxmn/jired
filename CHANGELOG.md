@@ -8,6 +8,20 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.4] — 2026-11-27
+
+### Fixed
+
+- **A request that adds something is sent once.** When Jira was slow, or a
+  proxy answered 502–504, jired sent the request again up to five times,
+  whatever it did: an issue was created twice, a comment posted twice, time
+  booked twice. Creating an issue, a comment, a worklog, a link, a sprint or
+  a version, and a transition, are now retried only when the server cannot
+  have acted on them (it was unreachable, or answered 429). Otherwise the
+  error says the outcome is unknown (`details.outcome` in `--json`) and to
+  check the issue before trying again. Reads, searches, moves to a sprint and
+  watches are retried as before.
+
 ## [0.28.3] — 2026-11-27
 
 ### Fixed
