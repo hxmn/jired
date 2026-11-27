@@ -8,6 +8,13 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.6] — 2026-11-27
+
+### Changed
+
+- Nothing in jired itself: fewer dependencies are built, and none of the
+  test tooling compiles C any more.
+
 ## [0.39.5] — 2026-11-27
 
 ### Fixed
