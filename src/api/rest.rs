@@ -358,6 +358,9 @@ impl JiraApi for Rest {
     }
 
     async fn projects(&self) -> Result<Vec<Project>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::projects(self).await;
+        }
         // Cloud paginates `/project/search`, which Data Center does not
         // serve at all; there the whole listing is one array, and
         // `datacenter::client` reads it that way.
@@ -489,6 +492,9 @@ impl JiraApi for Rest {
     }
 
     async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::board_project(self, board_id).await;
+        }
         // Two endpoints answer this, one per deployment, and neither answers on
         // both: `location` in the board configuration is a Cloud field that
         // Data Center omits entirely, so Cloud asks that one first and
@@ -627,6 +633,9 @@ impl JiraApi for Rest {
 
     /// Cloud's `filter/search`, a page at a time, or its favourites.
     async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::filters(self, listing).await;
+        }
         let (by, value) = match listing {
             FilterListing::Favourites => {
                 let v = self.get(&routes::FAVOURITE_FILTERS, &[], &[]).await?;
@@ -1018,6 +1027,9 @@ impl JiraApi for Rest {
     }
 
     async fn move_subtask_parent(&self, key: &str, parent: &str) -> Result<()> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::move_subtask_parent(self, key, parent).await;
+        }
         // Cloud grew a REST route for this and Data Center never did, so
         // Cloud's is the ordinary field edit every other field takes; the Move
         // wizard `datacenter::client` drives instead is the other half of this.
@@ -1026,6 +1038,9 @@ impl JiraApi for Rest {
     }
 
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::worklogs(self, key).await;
+        }
         let values = self.worklog_values(key).await?;
         Ok(normalize::worklogs_from(Some(&json!(values)), self.markup()).0)
     }
@@ -1349,6 +1364,9 @@ impl JiraApi for Rest {
     }
 
     async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::search_users(self, query, scope).await;
+        }
         let v = self
             .http
             .get_json(&cloud_user_search(self.api(), query, scope))
