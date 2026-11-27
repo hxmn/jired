@@ -180,9 +180,7 @@ pub fn run(g: &GlobalArgs, args: &SearchArgs, out: Out) -> Result<ExitCode> {
         })?;
 
     let mut ctx = Context::open(g, out)?;
-    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
-    let account = session.require_account()?;
-    let client = crate::api::build_client(&mut ctx, &account)?;
+    let client = ctx.client()?;
     answer(client.as_ref(), &jql, &args.view, out)
 }
 

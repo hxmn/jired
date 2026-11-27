@@ -34,9 +34,7 @@ pub struct SprintsArgs {
 
 pub fn run_projects(g: &GlobalArgs, _args: &ProjectsArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
-    let account = session.require_account()?;
-    let client = crate::api::build_client(&mut ctx, &account)?;
+    let client = ctx.client()?;
     let projects = crate::api::block_on(client.projects())?;
     if projects.is_empty() {
         out.say("this account cannot see any projects");
@@ -62,9 +60,7 @@ pub(crate) fn column(widths: impl Iterator<Item = usize>, cap: usize) -> usize {
 
 pub fn run_boards(g: &GlobalArgs, args: &BoardsArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
-    let account = session.require_account()?;
-    let client = crate::api::build_client(&mut ctx, &account)?;
+    let client = ctx.client()?;
     let project = match &args.project {
         Some(p) => Some(p.clone()),
         None => ctx.resolver.get_quiet("workspace.project")?,
@@ -201,9 +197,7 @@ pub(crate) fn board_names(boards: &[crate::api::Board]) -> String {
 
 pub fn run_sprints(g: &GlobalArgs, args: &SprintsArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
-    let account = session.require_account()?;
-    let client = crate::api::build_client(&mut ctx, &account)?;
+    let client = ctx.client()?;
     // An id is what the sprint endpoint takes and may name a board outside this
     // project, so it goes straight through. Anything else — a name, or nothing
     // at all — only means something against the project's own boards, and that

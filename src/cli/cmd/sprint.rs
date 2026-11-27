@@ -759,9 +759,7 @@ fn carry_target(
 
 /// The client every one of these commands needs, opened the one way.
 pub(crate) fn api_client(ctx: &mut Context) -> Result<Box<dyn JiraApi>> {
-    let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
-    let account = session.require_account()?;
-    crate::api::build_client(ctx, &account)
+    ctx.client()
 }
 
 /// The sprint a name or an id points at, as the server holds it *now*.

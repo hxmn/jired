@@ -166,9 +166,7 @@ fn issues(g: &GlobalArgs, args: &IssuesArgs, out: Out) -> Result<ExitCode> {
         // The server, for the issues the workspace does not hold: every sprint
         // the project has had, not only the ones somebody pulled.
         Some(jql) => {
-            let session = crate::store::session::SessionStore::open(&ctx.workspace)?;
-            let account = session.require_account()?;
-            let client = crate::api::build_client(&mut ctx, &account)?;
+            let client = ctx.client()?;
             let progress = crate::sync::progress::Progress::spinner(out, "searching");
             let found = crate::api::block_on(crate::api::client::search_all(
                 client.as_ref(),

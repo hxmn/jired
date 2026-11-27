@@ -192,6 +192,14 @@ impl Context {
         Ok(())
     }
 
+    /// The client for this workspace's account: the one way a command gets
+    /// one, where each had opened the session store and built it by hand.
+    pub fn client(&mut self) -> Result<Box<dyn crate::api::JiraApi>> {
+        let session = crate::store::session::SessionStore::open(&self.workspace)?;
+        let account = session.require_account()?;
+        crate::api::build_client(self, &account)
+    }
+
     pub fn local_config(&self) -> Result<ConfigFile> {
         ConfigFile::load(&self.workspace.config_path())
     }
