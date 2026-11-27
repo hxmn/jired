@@ -73,7 +73,7 @@ pub struct ListArgs {
 
 /// A field `--columns` can ask for.
 ///
-/// Deliberately the fields of a [`Match`] and nothing else: what the human
+/// Deliberately the fields of a `Match` and nothing else: what the human
 /// listing can show is what `--json` already carries, so the two never disagree
 /// about what an issue is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]

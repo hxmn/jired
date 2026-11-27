@@ -2980,7 +2980,7 @@ pub enum Mapped {
 /// handled in one was simply absent from the other, and nothing said so, which
 /// is the failure mode a silent success is made of.
 ///
-/// Every name in [`frontmatter::EDITABLE`] is answered here; the test below
+/// Every name in [`crate::doc::frontmatter::EDITABLE`] is answered here; the test below
 /// proves it, so a field added to the format cannot quietly go nowhere.
 pub fn issue_field(
     name: &str,

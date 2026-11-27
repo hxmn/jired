@@ -5,7 +5,7 @@
 //!
 //! What each file here is for: [`routes`] is the table of every REST route
 //! jired calls, named by the id the server's own API description gives it;
-//! [`client`] is the [`crate::api::JiraApi`] implementation built on it; and
+//! [`client()`] is the [`crate::api::JiraApi`] implementation built on it; and
 //! [`wizard`] drives the one operation Data Center offers as a web action
 //! rather than a route.
 

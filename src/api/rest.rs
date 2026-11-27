@@ -4,7 +4,7 @@
 //! identifiers and a handful of routes. The first three are data — the API
 //! prefix, [`Markup`], the user payload shape — and stay here, parameterized,
 //! so a fix lands on both products at once. The routes are not, and they live
-//! in [`crate::api::datacenter::client`], which wraps this and overrides them:
+//! in [`crate::api::datacenter::client()`], which wraps this and overrides them:
 //! this type is what a Cloud site gets, and the base a Data Center one is
 //! built on.
 //!
@@ -202,7 +202,7 @@ impl Rest {
     /// Every comment on an issue as the server sent it, paged.
     ///
     /// Raw values rather than parsed ones because the completed page has to go
-    /// back into [`RemoteIssue::raw`] — see [`crate::api::complete_from`].
+    /// back into [`RemoteIssue::raw`] — see [`crate::api::set_comments`].
     pub(crate) async fn comment_values(&self, key: &str) -> Result<Vec<Value>> {
         let mut out: Vec<Value> = Vec::new();
         let mut start = 0usize;

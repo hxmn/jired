@@ -27,7 +27,7 @@ pub struct FieldMap {
     pub checklist_progress: Option<String>,
     pub names: BTreeMap<String, String>,
     /// Field ids kept out of issue files: the ones `ignored_custom_fields`
-    /// names, and every field of a [`COMPUTED_TYPES`] type.
+    /// names, and every field of a `COMPUTED_TYPES` type.
     pub ignored: std::collections::BTreeSet<String>,
 }
 

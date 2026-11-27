@@ -3,7 +3,7 @@
 //!
 //! Deliberately line-based rather than a full TUI: this rung must work over ssh,
 //! inside `git rebase --exec`, and anywhere the alternate screen is unavailable.
-//! The richer wizard screens live in the TUI layer [M4].
+//! The richer wizard screens live in the TUI layer (M4).
 //!
 //! Everything here writes to stderr. stdout belongs to results — the JSON
 //! document in `--json` mode, the summary otherwise — so a wizard can run in
