@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.8] — 2026-11-27
+
+### Fixed
+
+- **A fetch that comes back incomplete does not mark issues deleted.** When
+  the server returned fewer issues per page than jired asked for, or a
+  response broke off part way, a full fetch stopped early and marked
+  everything it had not reached as deleted on the server; `pull` reported
+  them gone and `jired clean` offered to remove them. Pages are now read
+  until the server's total, and a search or a response that ends short is
+  an error.
+
 ## [0.28.7] — 2026-11-27
 
 ### Fixed
