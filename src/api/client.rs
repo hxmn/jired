@@ -301,6 +301,13 @@ pub trait JiraApi: Send + Sync {
 }
 
 /// Walk every page of a search, respecting both pagination styles.
+///
+/// It ends when the server says there is no more — no page token, and as
+/// many issues as its `total` — and never on a short page alone: a server
+/// that clamps `maxResults` below what was asked answers every page short,
+/// and stopping at the first one read as a project of a hundred issues
+/// fewer, which `fetch` then marked deleted. A walk that runs out before the
+/// total is an error rather than a smaller answer, for the same reason.
 pub async fn search_all(
     api: &dyn JiraApi,
     mut query: SearchQuery,
@@ -313,20 +320,77 @@ pub async fn search_all(
         on_page(&page);
         let count = page.issues.len();
         all.extend(page.issues);
-        if count == 0 || page.next_page_token.is_none() && all.len() >= page.total {
-            break;
-        }
-        match &page.next_page_token {
-            Some(next) if Some(next) == token.as_ref() => break, // server not advancing
-            Some(next) => {
-                token = Some(next.clone());
+        match next_page(count, all.len(), page.total, page.next_page_token, &token) {
+            Page::Next(next) => {
+                token = next;
                 query.start_at += count;
             }
-            None => query.start_at += count,
-        }
-        if count < query.max_results && page.next_page_token.is_none() {
-            break;
+            Page::Done => return Ok(all),
+            Page::Short => {
+                return Err(crate::error::JiredError::network(format!(
+                    "the search stopped after {} of the {} issues it matched",
+                    all.len(),
+                    page.total
+                ))
+                .with_detail("jql", query.jql.clone())
+                .with_hint("run the command again; if it keeps stopping, `-vv` shows the pages"));
+            }
         }
     }
-    Ok(all)
+}
+
+#[derive(Debug, PartialEq)]
+enum Page {
+    /// Ask again, with this token if the server gave one.
+    Next(Option<String>),
+    Done,
+    /// The server has no more to give and has not given what it counted.
+    Short,
+}
+
+/// What follows a page of `count` issues, with `seen` read so far.
+fn next_page(
+    count: usize,
+    seen: usize,
+    total: usize,
+    next_token: Option<String>,
+    last_token: &Option<String>,
+) -> Page {
+    match next_token {
+        // A token the server already gave is a walk that is not advancing.
+        Some(next) if Some(&next) == last_token.as_ref() => Page::Short,
+        Some(_) if count == 0 => Page::Short,
+        Some(next) => Page::Next(Some(next)),
+        None if seen >= total => Page::Done,
+        None if count == 0 => Page::Short,
+        None => Page::Next(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A server that clamps the page size answers short pages until the
+    /// total is reached; each one is a reason to ask again, not to stop.
+    #[test]
+    fn a_short_page_is_not_the_last_one() {
+        assert_eq!(next_page(50, 50, 120, None, &None), Page::Next(None));
+        assert_eq!(next_page(20, 120, 120, None, &None), Page::Done);
+        assert_eq!(next_page(0, 0, 0, None, &None), Page::Done);
+    }
+
+    /// Running out before the total, or a token that does not move, is a
+    /// walk that did not cover the search.
+    #[test]
+    fn a_walk_that_runs_out_early_is_short() {
+        assert_eq!(next_page(0, 50, 120, None, &None), Page::Short);
+        let t = Some("t1".to_string());
+        assert_eq!(
+            next_page(10, 10, 0, t.clone(), &None),
+            Page::Next(t.clone())
+        );
+        assert_eq!(next_page(10, 20, 0, t.clone(), &t), Page::Short);
+        assert_eq!(next_page(0, 20, 0, Some("t2".into()), &t), Page::Short);
+    }
 }
