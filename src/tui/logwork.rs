@@ -10,13 +10,14 @@
 //! that is not one are both mistakes worth catching with the cursor still on
 //! the field that caused them.
 
+use crate::tui::controller::{FormController, Step};
 use crate::tui::field::Field;
 use crate::tui::form::{self, Card};
-use crate::tui::picker::{self, Item, Picker};
+use crate::tui::picker::Item;
 use crate::tui::when::ago;
 use crate::tui::{theme, Flow, Screen};
 use chrono::{DateTime, Duration, Utc};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
@@ -60,28 +61,13 @@ const TIME: usize = 1;
 const STARTED: usize = 2;
 const NOTE: usize = 3;
 
-enum Overlay {
-    Pick {
-        field: usize,
-        picker: Picker,
-    },
-    Help,
-    /// Esc with something typed; confirm before throwing it away.
-    Discard,
-}
-
 pub struct LogworkScreen {
-    fields: Vec<Field>,
-    focus: usize,
-    overlay: Option<Overlay>,
-    /// A validation failure, cleared as soon as anything is typed.
-    error: Option<String>,
+    form: FormController,
     /// Right-aligned in the border: the workspace's project.
     project: String,
     /// When the screen opened, which is what the start-time presets count back
     /// from and what an empty Started field means.
     now: DateTime<Utc>,
-    body_scroll: usize,
 }
 
 impl LogworkScreen {
@@ -134,29 +120,30 @@ impl LogworkScreen {
                 .as_str(),
         ));
 
+        // Tab completes the issue before it moves on: on a field whose values
+        // are keys nobody remembers in full, finishing what was typed is what
+        // tab is for.
+        let mut form = FormController::new(fields, Some(NOTE)).completing();
+        // Start on the first thing still missing: with the issue already named
+        // on the command line, the duration is what is being asked for and the
+        // first keystroke should land there.
+        form.focus = if seed.issue.is_some() { TIME } else { ISSUE };
         Self {
-            // Start on the first thing still missing: with the issue already
-            // named on the command line, the duration is what is being asked
-            // for and the first keystroke should land there.
-            focus: if seed.issue.is_some() { TIME } else { ISSUE },
-            fields,
-            overlay: None,
-            error: None,
+            form,
             project: project.to_string(),
             now,
-            body_scroll: 0,
         }
     }
 
     fn booking(&self) -> Booking {
         Booking {
-            issue: self.fields[ISSUE].text().trim().to_string(),
-            time: self.fields[TIME].text().trim().to_string(),
-            started: self.fields[STARTED]
+            issue: self.form.fields[ISSUE].text().trim().to_string(),
+            time: self.form.fields[TIME].text().trim().to_string(),
+            started: self.form.fields[STARTED]
                 .filled()
                 .map(str::to_string)
                 .unwrap_or_else(|| crate::api::model::format_local_iso(&self.now)),
-            note: self.fields[NOTE].text().trim().to_string(),
+            note: self.form.fields[NOTE].text().trim().to_string(),
         }
     }
 
@@ -169,15 +156,15 @@ impl LogworkScreen {
         // Enter on a half-typed key takes the suggestion that is on screen
         // rather than refusing it: the completion was already being offered,
         // and refusing what the form just proposed is only annoying.
-        self.fields[ISSUE].complete();
+        self.form.fields[ISSUE].complete();
 
         for (index, what) in [(ISSUE, "an issue"), (TIME, "a length of time")] {
-            if self.fields[index].filled().is_none() {
+            if self.form.fields[index].filled().is_none() {
                 return self.refuse(index, format!("{what} is required"));
             }
         }
 
-        let time = self.fields[TIME].text().trim().to_string();
+        let time = self.form.fields[TIME].text().trim().to_string();
         if crate::doc::parse_duration(&time).is_none() {
             return self.refuse(TIME, format!("`{time}` is not a length of time"));
         }
@@ -187,13 +174,13 @@ impl LogworkScreen {
         // spelled out so the issue file names one instant rather than one per
         // machine. A time that already says which zone it is in is left in the
         // words it was typed in.
-        if let Some(started) = self.fields[STARTED].filled() {
+        if let Some(started) = self.form.fields[STARTED].filled() {
             let named_a_zone = crate::api::model::names_a_zone(started);
             match crate::api::model::parse_local_timestamp(started) {
                 None => return self.refuse(STARTED, format!("`{started}` is not a timestamp")),
                 Some(t) if !named_a_zone => {
                     let spelled_out = crate::api::model::format_local_iso(&t);
-                    self.fields[STARTED].set(Some(&spelled_out));
+                    self.form.fields[STARTED].set(Some(&spelled_out));
                 }
                 Some(_) => {}
             }
@@ -201,8 +188,8 @@ impl LogworkScreen {
 
         // The workspace's own issues are the only ones with a file to stage
         // this in, so a key that names none of them is a typo, not a discovery.
-        let issue = self.fields[ISSUE].text().trim().to_string();
-        if !self.fields[ISSUE].items.is_empty() && self.known(&issue).is_none() {
+        let issue = self.form.fields[ISSUE].text().trim().to_string();
+        if !self.form.fields[ISSUE].items.is_empty() && self.known(&issue).is_none() {
             return self.refuse(ISSUE, format!("`{issue}` is not in this workspace"));
         }
 
@@ -210,14 +197,14 @@ impl LogworkScreen {
     }
 
     fn refuse(&mut self, field: usize, complaint: String) -> Flow<Booking> {
-        self.focus = field;
-        self.error = Some(complaint);
+        self.form.focus = field;
+        self.form.error = Some(complaint);
         Flow::Continue
     }
 
     /// The issue item a key names, matched the way a key is typed.
     fn known(&self, key: &str) -> Option<&Item> {
-        self.fields[ISSUE]
+        self.form.fields[ISSUE]
             .items
             .iter()
             .find(|i| i.value.eq_ignore_ascii_case(key))
@@ -229,55 +216,7 @@ impl LogworkScreen {
     fn dirty(&self) -> bool {
         [ISSUE, TIME, NOTE]
             .iter()
-            .any(|&i| self.fields[i].filled().is_some())
-    }
-
-    fn move_focus(&mut self, forward: bool) {
-        let len = self.fields.len();
-        self.focus = if forward {
-            (self.focus + 1) % len
-        } else {
-            (self.focus + len - 1) % len
-        };
-    }
-
-    fn open_list(&mut self) {
-        let field = &self.fields[self.focus];
-        if !field.openable() {
-            return;
-        }
-        let mut picker = Picker::new(field.label, field.items.clone(), field.optional);
-        if let Some(current) = field.filled() {
-            picker.select(current);
-        }
-        self.overlay = Some(Overlay::Pick {
-            field: self.focus,
-            picker,
-        });
-    }
-
-    fn handle_overlay(&mut self, key: KeyEvent, overlay: Overlay) -> Flow<Booking> {
-        match overlay {
-            // Any key closes help; it is a reference card, not a mode.
-            Overlay::Help => self.overlay = None,
-            Overlay::Discard => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => return Flow::Cancel,
-                _ => self.overlay = None,
-            },
-            Overlay::Pick { field, mut picker } => match picker.handle(key) {
-                picker::Outcome::Continue => {
-                    self.overlay = Some(Overlay::Pick { field, picker });
-                }
-                // No field here takes several values, so this cannot arrive.
-                picker::Outcome::Cancel | picker::Outcome::ChoseMany(_) => self.overlay = None,
-                picker::Outcome::Chose(value) => {
-                    self.fields[field].set(value.as_deref());
-                    self.error = None;
-                    self.overlay = None;
-                }
-            },
-        }
-        Flow::Continue
+            .any(|&i| self.form.fields[i].filled().is_some())
     }
 }
 
@@ -285,75 +224,19 @@ impl Screen for LogworkScreen {
     type Output = Booking;
 
     fn handle(&mut self, key: KeyEvent) -> Flow<Booking> {
-        if let Some(overlay) = self.overlay.take() {
-            return self.handle_overlay(key, overlay);
+        let dirty = self.dirty();
+        match self.form.handle(key, dirty) {
+            Step::Continue => Flow::Continue,
+            Step::Cancel => Flow::Cancel,
+            Step::Submit => self.submit(),
         }
-
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            // Always a way out, even mid-edit: this is the key people reach for.
-            KeyCode::Char('c') if ctrl => return Flow::Cancel,
-            KeyCode::Char('s') if ctrl => return self.submit(),
-            KeyCode::Char('l') if ctrl => {
-                self.open_list();
-                return Flow::Continue;
-            }
-            KeyCode::F(2) => {
-                self.open_list();
-                return Flow::Continue;
-            }
-            KeyCode::F(1) => {
-                self.overlay = Some(Overlay::Help);
-                return Flow::Continue;
-            }
-            KeyCode::Esc => {
-                return if self.dirty() {
-                    self.overlay = Some(Overlay::Discard);
-                    Flow::Continue
-                } else {
-                    Flow::Cancel
-                }
-            }
-            // Tab completes the issue before it moves on: on a field whose
-            // values are keys nobody remembers in full, finishing what was
-            // typed is what tab is for.
-            KeyCode::Tab if self.fields[self.focus].complete() => {
-                self.error = None;
-                return Flow::Continue;
-            }
-            KeyCode::Tab => {
-                self.move_focus(true);
-                return Flow::Continue;
-            }
-            KeyCode::BackTab => {
-                self.move_focus(false);
-                return Flow::Continue;
-            }
-            // Enter finishes the form. The note claims it first, below, because
-            // a paragraph needs a way to hold more than one line.
-            KeyCode::Enter if self.focus != NOTE => return self.submit(),
-            _ => {}
-        }
-
-        if self.fields[self.focus].handle(key) {
-            // Any edit invalidates the complaint that produced the error.
-            self.error = None;
-            return Flow::Continue;
-        }
-
-        match key.code {
-            KeyCode::Down => self.move_focus(true),
-            KeyCode::Up => self.move_focus(false),
-            _ => {}
-        }
-        Flow::Continue
     }
 
     fn render(&mut self, frame: &mut Frame) {
         // Each field says what it points at, which is the check the user
         // actually wants: the right issue, and the time they meant.
-        self.fields[ISSUE].detail = self.issue_detail();
-        self.fields[STARTED].detail = self.started_detail();
+        self.form.fields[ISSUE].detail = self.issue_detail();
+        self.form.fields[STARTED].detail = self.started_detail();
 
         let card = Card {
             title: "Log work",
@@ -363,15 +246,16 @@ impl Screen for LogworkScreen {
             status: self.status_line(),
             keys: self.key_hints(),
         };
-        let focus = self.overlay.is_none().then_some(self.focus);
-        let area = form::render(frame, &card, &mut self.fields, focus, &mut self.body_scroll);
-
-        match &mut self.overlay {
-            Some(Overlay::Pick { picker, .. }) => form::render_picker(frame, area, picker),
-            Some(Overlay::Help) => form::render_help(frame, area, HELP),
-            Some(Overlay::Discard) => form::render_confirm(frame, area, "Discard this entry?"),
-            None => {}
-        }
+        let focus = self.form.visible_focus();
+        let area = form::render(
+            frame,
+            &card,
+            &mut self.form.fields,
+            focus,
+            &mut self.form.body_scroll,
+        );
+        self.form
+            .render_overlay(frame, area, HELP, "Discard this entry?");
     }
 }
 
@@ -399,10 +283,10 @@ impl LogworkScreen {
     /// this, then move on — visible rather than something to discover by having
     /// the next word land in the wrong field.
     fn issue_detail(&self) -> Option<String> {
-        if let Some(item) = self.fields[ISSUE].suggestion() {
+        if let Some(item) = self.form.fields[ISSUE].suggestion() {
             return Some(format!("→ {}  {}   tab", item.label, item.detail));
         }
-        let key = self.fields[ISSUE].filled()?;
+        let key = self.form.fields[ISSUE].filled()?;
         Some(match self.known(key) {
             Some(item) => item.detail.clone(),
             None => "not in this workspace".to_string(),
@@ -412,7 +296,7 @@ impl LogworkScreen {
     /// The start time in words, because nobody reads an ISO timestamp for
     /// whether it says this morning or last Tuesday.
     fn started_detail(&self) -> Option<String> {
-        let started = self.fields[STARTED].filled()?;
+        let started = self.form.fields[STARTED].filled()?;
         match crate::api::model::parse_timestamp(started) {
             Some(when) => Some(ago(self.now, when)),
             None => Some("not a timestamp".to_string()),
@@ -422,11 +306,13 @@ impl LogworkScreen {
     /// Whichever is most useful right now: a complaint, then what the form
     /// would book, then help for the field under the cursor.
     fn status_line(&self) -> Line<'static> {
-        if let Some(error) = &self.error {
+        if let Some(error) = &self.form.error {
             return Line::from(Span::styled(format!("✗ {error}"), theme::error()));
         }
-        if let (Some(issue), Some(time)) = (self.fields[ISSUE].filled(), self.fields[TIME].filled())
-        {
+        if let (Some(issue), Some(time)) = (
+            self.form.fields[ISSUE].filled(),
+            self.form.fields[TIME].filled(),
+        ) {
             if crate::doc::parse_duration(time).is_some() {
                 return Line::from(vec![
                     Span::styled("books ", theme::dim()),
@@ -437,22 +323,22 @@ impl LogworkScreen {
             }
         }
         Line::from(Span::styled(
-            self.fields[self.focus].hint.clone(),
+            self.form.fields[self.form.focus].hint.clone(),
             theme::dim(),
         ))
     }
 
     fn key_hints(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = vec![("tab", "field")];
-        if self.focus == NOTE {
+        if self.form.focus == NOTE {
             keys.push(("^s", "log"));
         } else {
             keys.push(("⏎", "log"));
         }
-        if self.fields[self.focus].suggestion().is_some() {
+        if self.form.fields[self.form.focus].suggestion().is_some() {
             keys.push(("tab", "complete"));
         }
-        if self.fields[self.focus].openable() {
+        if self.form.fields[self.form.focus].openable() {
             keys.push(("^l", "list"));
         }
         keys.push(("esc", "cancel"));
@@ -478,7 +364,11 @@ fn start_presets(now: DateTime<Utc>) -> Vec<Item> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::controller::keys::{ctrl, key, typed};
+    #[allow(unused_imports)]
+    use crate::tui::controller::Overlay;
     use crate::tui::render_lines;
+    use crossterm::event::KeyCode;
 
     fn now() -> DateTime<Utc> {
         crate::api::model::parse_timestamp("2026-08-21T13:00:00Z").expect("a fixed clock")
@@ -514,20 +404,6 @@ mod tests {
         LogworkScreen::new("PROJ", &issues(), now(), &Seed::default())
     }
 
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-    }
-
-    fn typed(screen: &mut LogworkScreen, text: &str) {
-        for c in text.chars() {
-            screen.handle(key(KeyCode::Char(c)));
-        }
-    }
-
     fn done(flow: Flow<Booking>) -> Booking {
         match flow {
             Flow::Done(booking) => booking,
@@ -538,8 +414,8 @@ mod tests {
     #[test]
     fn the_form_starts_on_the_issue_with_the_clock_already_filled_in() {
         let screen = screen();
-        assert_eq!(screen.focus, ISSUE);
-        assert_eq!(screen.fields[STARTED].text(), shown(now()));
+        assert_eq!(screen.form.focus, ISSUE);
+        assert_eq!(screen.form.fields[STARTED].text(), shown(now()));
     }
 
     /// With the issue already named, the duration is what is being asked for.
@@ -550,7 +426,7 @@ mod tests {
             ..Seed::default()
         };
         let mut screen = LogworkScreen::new("PROJ", &issues(), now(), &seed);
-        assert_eq!(screen.focus, TIME);
+        assert_eq!(screen.form.focus, TIME);
 
         typed(&mut screen, "2h 30m");
         let booking = done(screen.handle(key(KeyCode::Enter)));
@@ -566,7 +442,7 @@ mod tests {
         typed(&mut screen, "PROJ-142");
         screen.handle(key(KeyCode::Tab));
         typed(&mut screen, "45m");
-        screen.focus = NOTE;
+        screen.form.focus = NOTE;
         typed(&mut screen, "Traced the redirect loop.");
 
         // The note keeps Enter for itself, so ^s is the way out from it.
@@ -594,14 +470,14 @@ mod tests {
         assert!(screen.key_hints().contains(&("tab", "complete")));
 
         screen.handle(key(KeyCode::Tab));
-        assert_eq!(screen.fields[ISSUE].text(), "PROJ-142");
-        assert_eq!(screen.focus, ISSUE, "completing is not moving on");
+        assert_eq!(screen.form.fields[ISSUE].text(), "PROJ-142");
+        assert_eq!(screen.form.focus, ISSUE, "completing is not moving on");
 
         // With nothing left to complete, tab is a tab again — and the hint that
         // said so is gone with it.
         assert!(!screen.key_hints().contains(&("tab", "complete")));
         screen.handle(key(KeyCode::Tab));
-        assert_eq!(screen.focus, TIME);
+        assert_eq!(screen.form.focus, TIME);
     }
 
     /// Enter takes the suggestion that is on screen rather than refusing the
@@ -610,7 +486,7 @@ mod tests {
     fn submitting_a_half_typed_key_takes_the_completion() {
         let mut screen = screen();
         typed(&mut screen, "142");
-        screen.fields[TIME].set(Some("1h"));
+        screen.form.fields[TIME].set(Some("1h"));
         let booking = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(booking.issue, "PROJ-142");
     }
@@ -622,43 +498,43 @@ mod tests {
         let mut screen = screen();
 
         assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
-        assert_eq!(screen.focus, ISSUE);
-        assert_eq!(screen.error.as_deref(), Some("an issue is required"));
+        assert_eq!(screen.form.focus, ISSUE);
+        assert_eq!(screen.form.error.as_deref(), Some("an issue is required"));
 
         typed(&mut screen, "PROJ-142");
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.focus, TIME);
+        assert_eq!(screen.form.focus, TIME);
         assert_eq!(
-            screen.error.as_deref(),
+            screen.form.error.as_deref(),
             Some("a length of time is required")
         );
 
         typed(&mut screen, "a while");
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.focus, TIME);
+        assert_eq!(screen.form.focus, TIME);
         assert_eq!(
-            screen.error.as_deref(),
+            screen.form.error.as_deref(),
             Some("`a while` is not a length of time")
         );
 
         // A bare number means minutes only because of an instance setting.
-        screen.fields[TIME].set(Some("90"));
+        screen.form.fields[TIME].set(Some("90"));
         screen.handle(key(KeyCode::Enter));
         assert_eq!(
-            screen.error.as_deref(),
+            screen.form.error.as_deref(),
             Some("`90` is not a length of time")
         );
 
-        screen.fields[TIME].set(Some("90m"));
-        screen.fields[STARTED].set(Some("tuesday"));
+        screen.form.fields[TIME].set(Some("90m"));
+        screen.form.fields[STARTED].set(Some("tuesday"));
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.focus, STARTED);
+        assert_eq!(screen.form.focus, STARTED);
         assert_eq!(
-            screen.error.as_deref(),
+            screen.form.error.as_deref(),
             Some("`tuesday` is not a timestamp")
         );
 
-        screen.fields[STARTED].set(Some("2026-08-21T09:00:00Z"));
+        screen.form.fields[STARTED].set(Some("2026-08-21T09:00:00Z"));
         let booking = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(booking.started, "2026-08-21T09:00:00Z");
     }
@@ -669,17 +545,17 @@ mod tests {
     fn an_issue_the_workspace_does_not_have_is_refused() {
         let mut screen = screen();
         typed(&mut screen, "PROJ-999");
-        screen.fields[TIME].set(Some("1h"));
+        screen.form.fields[TIME].set(Some("1h"));
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.focus, ISSUE);
+        assert_eq!(screen.form.focus, ISSUE);
         assert_eq!(
-            screen.error.as_deref(),
+            screen.form.error.as_deref(),
             Some("`PROJ-999` is not in this workspace")
         );
 
         // Typing clears the complaint rather than leaving it up to argue with.
         typed(&mut screen, "x");
-        assert_eq!(screen.error, None);
+        assert_eq!(screen.form.error, None);
     }
 
     /// A workspace whose issues are unknown to the catalog must not be locked
@@ -688,7 +564,7 @@ mod tests {
     fn with_no_issues_to_check_against_any_key_is_taken_at_face_value() {
         let mut screen = LogworkScreen::new("PROJ", &[], now(), &Seed::default());
         typed(&mut screen, "PROJ-999");
-        screen.fields[TIME].set(Some("1h"));
+        screen.form.fields[TIME].set(Some("1h"));
         let booking = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(booking.issue, "PROJ-999");
     }
@@ -696,23 +572,23 @@ mod tests {
     #[test]
     fn the_duration_list_offers_the_common_bookings() {
         let mut screen = screen();
-        screen.focus = TIME;
+        screen.form.focus = TIME;
         screen.handle(ctrl('l'));
         let lines = render_lines(&mut screen, 80, 24).join("\n");
         assert!(lines.contains("half an hour"), "{lines}");
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.fields[TIME].text(), "15m");
+        assert_eq!(screen.form.fields[TIME].text(), "15m");
     }
 
     #[test]
     fn the_start_time_list_counts_back_from_when_the_screen_opened() {
         let mut screen = screen();
-        screen.focus = STARTED;
+        screen.form.focus = STARTED;
         screen.handle(ctrl('l'));
         screen.handle(key(KeyCode::Down));
         screen.handle(key(KeyCode::Enter));
         assert_eq!(
-            screen.fields[STARTED].text(),
+            screen.form.fields[STARTED].text(),
             shown(now() - Duration::hours(1))
         );
     }
@@ -725,9 +601,9 @@ mod tests {
 
         typed(&mut screen, "PROJ-1");
         assert!(matches!(screen.handle(key(KeyCode::Esc)), Flow::Continue));
-        assert!(matches!(screen.overlay, Some(Overlay::Discard)));
+        assert!(matches!(screen.form.overlay, Some(Overlay::Discard)));
         screen.handle(key(KeyCode::Char('n')));
-        assert!(screen.overlay.is_none());
+        assert!(screen.form.overlay.is_none());
 
         screen.handle(key(KeyCode::Esc));
         assert!(matches!(
@@ -747,7 +623,7 @@ mod tests {
     fn the_screen_draws_its_fields_and_what_it_would_book() {
         let mut screen = screen();
         typed(&mut screen, "PROJ-142");
-        screen.fields[TIME].set(Some("2h 30m"));
+        screen.form.fields[TIME].set(Some("2h 30m"));
         let lines = render_lines(&mut screen, 80, 24).join("\n");
 
         assert!(lines.contains("Log work"), "{lines}");
@@ -783,7 +659,7 @@ mod tests {
         assert!(lines.contains("Keys"), "{lines}");
         assert!(lines.contains("book the time"), "{lines}");
         screen.handle(key(KeyCode::Char('q')));
-        assert!(screen.overlay.is_none());
+        assert!(screen.form.overlay.is_none());
     }
 
     /// Print the screen, its lists and its help, for looking at:
@@ -793,19 +669,19 @@ mod tests {
     fn preview() {
         let mut s = screen();
         typed(&mut s, "PROJ-142");
-        s.fields[TIME].set(Some("2h 30m"));
-        s.fields[STARTED].set(Some("2026-08-21T09:00:00Z"));
-        s.focus = NOTE;
+        s.form.fields[TIME].set(Some("2h 30m"));
+        s.form.fields[STARTED].set(Some("2026-08-21T09:00:00Z"));
+        s.form.focus = NOTE;
         typed(
             &mut s,
             "Traced the redirect loop through the IdP assertion.",
         );
-        s.focus = ISSUE;
+        s.form.focus = ISSUE;
         for l in render_lines(&mut s, 90, 24) {
             println!("|{l}");
         }
         println!();
-        s.focus = STARTED;
+        s.form.focus = STARTED;
         s.handle(ctrl('l'));
         for l in render_lines(&mut s, 90, 24) {
             println!("|{l}");
@@ -827,7 +703,7 @@ mod tests {
             screen.handle(key(KeyCode::F(1)));
             render_lines(&mut screen, w, h);
             screen.handle(key(KeyCode::Esc));
-            screen.focus = STARTED;
+            screen.form.focus = STARTED;
             screen.handle(ctrl('l'));
             render_lines(&mut screen, w, h);
         }

@@ -12,6 +12,7 @@
 //! and callers degrade to prompts and then to exit 7 when it cannot.
 
 pub mod catalog;
+mod controller;
 pub mod create;
 pub mod edit;
 mod field;

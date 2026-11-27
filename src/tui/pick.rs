@@ -837,6 +837,7 @@ fn hint(scope: &Scope) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::controller::keys::{ctrl, key, typed};
     use crate::tui::render_lines;
 
     fn at(text: &str) -> Option<DateTime<Utc>> {
@@ -891,20 +892,6 @@ mod tests {
             Scope::All,
             now(),
         )
-    }
-
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-    }
-
-    fn typed(screen: &mut PickScreen, text: &str) {
-        for c in text.chars() {
-            screen.handle(key(KeyCode::Char(c)));
-        }
     }
 
     fn chose(flow: Flow<String>) -> String {

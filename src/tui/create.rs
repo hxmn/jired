@@ -11,9 +11,10 @@
 //! [`CreateScreen::render`] draws a frame, which is what lets the tests below
 //! drive a whole session through a `TestBackend`.
 
+use crate::tui::controller::{FormController, Step};
 use crate::tui::field::{Field, Value};
 use crate::tui::form::{self, Card};
-use crate::tui::picker::{self, Item, Picker};
+use crate::tui::picker::Item;
 use crate::tui::{theme, Flow, Screen};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::text::{Line, Span};
@@ -63,27 +64,10 @@ const PARENT: usize = 4;
 const PROJECT: usize = 5;
 const DESCRIPTION: usize = 6;
 
-enum Overlay {
-    /// A list open over the field at this index.
-    Pick {
-        field: usize,
-        picker: Picker,
-    },
-    Help,
-    /// Esc was pressed with something typed; confirm before throwing it away.
-    Discard,
-}
-
 pub struct CreateScreen {
-    fields: Vec<Field>,
-    focus: usize,
-    overlay: Option<Overlay>,
-    /// A validation failure, cleared as soon as anything is typed.
-    error: Option<String>,
+    form: FormController,
     /// Temporary key, so the screen can show the filename that will be written.
     key: String,
-    /// First visible row of the description, when it has more than fits.
-    body_scroll: usize,
 }
 
 impl CreateScreen {
@@ -147,28 +131,26 @@ impl CreateScreen {
             fields[PROJECT].set(Some(p));
         }
 
+        // Starting on the summary means the first keystroke goes where the
+        // user was already going to type.
+        let mut form = FormController::new(fields, Some(DESCRIPTION));
+        form.focus = SUMMARY;
         Self {
-            // Starting on the summary means the first keystroke goes where the
-            // user was already going to type.
-            focus: SUMMARY,
-            fields,
-            overlay: None,
-            error: None,
+            form,
             key: key.into(),
-            body_scroll: 0,
         }
     }
 
     /// The form's current contents.
     pub fn draft(&self) -> Draft {
         Draft {
-            project: self.fields[PROJECT].text().trim().to_uppercase(),
-            issue_type: self.fields[TYPE].text().to_string(),
-            summary: self.fields[SUMMARY].text().trim().to_string(),
-            description: self.fields[DESCRIPTION].text().trim().to_string(),
-            priority: self.fields[PRIORITY].filled().map(str::to_string),
-            labels: split_labels(self.fields[LABELS].text()),
-            parent: self.fields[PARENT]
+            project: self.form.fields[PROJECT].text().trim().to_uppercase(),
+            issue_type: self.form.fields[TYPE].text().to_string(),
+            summary: self.form.fields[SUMMARY].text().trim().to_string(),
+            description: self.form.fields[DESCRIPTION].text().trim().to_string(),
+            priority: self.form.fields[PRIORITY].filled().map(str::to_string),
+            labels: split_labels(self.form.fields[LABELS].text()),
+            parent: self.form.fields[PARENT]
                 .filled()
                 .map(|p| p.trim().to_uppercase()),
         }
@@ -176,7 +158,7 @@ impl CreateScreen {
 
     /// The file `create` will write, shown while the summary is being typed.
     fn filename(&self) -> String {
-        let summary = self.fields[SUMMARY].text().trim();
+        let summary = self.form.fields[SUMMARY].text().trim();
         if summary.is_empty() {
             return String::new();
         }
@@ -187,72 +169,16 @@ impl CreateScreen {
     fn dirty(&self) -> bool {
         [SUMMARY, DESCRIPTION, LABELS, PARENT]
             .iter()
-            .any(|&i| self.fields[i].filled().is_some())
+            .any(|&i| self.form.fields[i].filled().is_some())
     }
 
     /// Refuse to finish while something required is missing, and put the
     /// cursor on the field that has to be fixed.
     fn submit(&mut self) -> Flow<Draft> {
-        for (i, label) in [(SUMMARY, "a summary"), (PROJECT, "a project")] {
-            if self.fields[i].filled().is_none() {
-                self.focus = i;
-                self.error = Some(format!("{label} is required"));
-                return Flow::Continue;
-            }
+        if !self.form.require(SUMMARY, "a summary") || !self.form.require(PROJECT, "a project") {
+            return Flow::Continue;
         }
         Flow::Done(self.draft())
-    }
-
-    fn move_focus(&mut self, forward: bool) {
-        let len = self.fields.len();
-        self.focus = if forward {
-            (self.focus + 1) % len
-        } else {
-            (self.focus + len - 1) % len
-        };
-    }
-
-    /// Open the focused field as a list, when it has one.
-    fn open_list(&mut self) {
-        let field = &self.fields[self.focus];
-        if !field.openable() {
-            return;
-        }
-        let mut picker = Picker::new(field.label, field.items.clone(), field.optional);
-        // Start the list on the value the field already holds.
-        if let Some(current) = field.filled() {
-            picker.select(current);
-        }
-        self.overlay = Some(Overlay::Pick {
-            field: self.focus,
-            picker,
-        });
-    }
-
-    fn handle_overlay(&mut self, key: KeyEvent, overlay: Overlay) -> Flow<Draft> {
-        match overlay {
-            Overlay::Help => {
-                // Any key closes help; it is a reference card, not a mode.
-                self.overlay = None;
-            }
-            Overlay::Discard => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => return Flow::Cancel,
-                _ => self.overlay = None,
-            },
-            Overlay::Pick { field, mut picker } => match picker.handle(key) {
-                picker::Outcome::Continue => {
-                    self.overlay = Some(Overlay::Pick { field, picker });
-                }
-                // No field here takes several values, so this cannot arrive.
-                picker::Outcome::Cancel | picker::Outcome::ChoseMany(_) => self.overlay = None,
-                picker::Outcome::Chose(value) => {
-                    self.fields[field].set(value.as_deref());
-                    self.error = None;
-                    self.overlay = None;
-                }
-            },
-        }
-        Flow::Continue
     }
 }
 
@@ -265,7 +191,7 @@ impl Screen for CreateScreen {
         for c in text.chars() {
             let code = match c {
                 '\r' => continue,
-                '\n' if self.focus == DESCRIPTION => KeyCode::Enter,
+                '\n' if self.form.focus == DESCRIPTION => KeyCode::Enter,
                 '\n' => KeyCode::Char(' '),
                 c => KeyCode::Char(c),
             };
@@ -278,86 +204,36 @@ impl Screen for CreateScreen {
     }
 
     fn handle(&mut self, key: KeyEvent) -> Flow<Draft> {
-        if let Some(overlay) = self.overlay.take() {
-            return self.handle_overlay(key, overlay);
+        let dirty = self.dirty();
+        match self.form.handle(key, dirty) {
+            Step::Continue => Flow::Continue,
+            Step::Cancel => Flow::Cancel,
+            Step::Submit => self.submit(),
         }
-
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            // Always a way out, even mid-edit: this is the key people reach for.
-            KeyCode::Char('c') if ctrl => return Flow::Cancel,
-            KeyCode::Char('s') if ctrl => return self.submit(),
-            KeyCode::Char('l') if ctrl => {
-                self.open_list();
-                return Flow::Continue;
-            }
-            KeyCode::F(2) => {
-                self.open_list();
-                return Flow::Continue;
-            }
-            KeyCode::F(1) => {
-                self.overlay = Some(Overlay::Help);
-                return Flow::Continue;
-            }
-            KeyCode::Esc => {
-                return if self.dirty() {
-                    self.overlay = Some(Overlay::Discard);
-                    Flow::Continue
-                } else {
-                    Flow::Cancel
-                }
-            }
-            KeyCode::Tab => {
-                self.move_focus(true);
-                return Flow::Continue;
-            }
-            KeyCode::BackTab => {
-                self.move_focus(false);
-                return Flow::Continue;
-            }
-            // Enter finishes the form. The description claims it first, below,
-            // because a paragraph needs a way to hold more than one line.
-            KeyCode::Enter if self.focus != DESCRIPTION => return self.submit(),
-            _ => {}
-        }
-
-        if self.fields[self.focus].handle(key) {
-            // Any edit invalidates the complaint that produced the error.
-            self.error = None;
-            return Flow::Continue;
-        }
-
-        // Whatever the field did not want moves between fields, so the arrows
-        // work everywhere they are not already doing something.
-        match key.code {
-            KeyCode::Down => self.move_focus(true),
-            KeyCode::Up => self.move_focus(false),
-            _ => {}
-        }
-        Flow::Continue
     }
 
     fn render(&mut self, frame: &mut Frame) {
         // The parent field shows the summary of what it points at, which is the
         // check the user actually wants: did I pick the right issue?
-        self.fields[PARENT].detail = self.parent_detail();
+        self.form.fields[PARENT].detail = self.parent_detail();
         let card = Card {
             title: "New issue",
-            subtitle: self.fields[PROJECT].text().to_string(),
+            subtitle: self.form.fields[PROJECT].text().to_string(),
             gaps: &[TYPE, DESCRIPTION],
             body: Some(DESCRIPTION),
             status: self.status_line(),
             keys: self.key_hints(),
         };
-        let focus = self.overlay.is_none().then_some(self.focus);
-        let area = form::render(frame, &card, &mut self.fields, focus, &mut self.body_scroll);
-
-        match &mut self.overlay {
-            Some(Overlay::Pick { picker, .. }) => form::render_picker(frame, area, picker),
-            Some(Overlay::Help) => form::render_help(frame, area, HELP),
-            Some(Overlay::Discard) => form::render_confirm(frame, area, "Discard this issue?"),
-            None => {}
-        }
+        let focus = self.form.visible_focus();
+        let area = form::render(
+            frame,
+            &card,
+            &mut self.form.fields,
+            focus,
+            &mut self.form.body_scroll,
+        );
+        self.form
+            .render_overlay(frame, area, HELP, "Discard this issue?");
     }
 }
 
@@ -384,8 +260,8 @@ impl CreateScreen {
     /// The summary of the issue the parent field names, when the workspace
     /// knows it.
     fn parent_detail(&self) -> Option<String> {
-        let key = self.fields[PARENT].filled()?.to_uppercase();
-        self.fields[PARENT]
+        let key = self.form.fields[PARENT].filled()?.to_uppercase();
+        self.form.fields[PARENT]
             .items
             .iter()
             .find(|i| i.value.eq_ignore_ascii_case(&key))
@@ -395,7 +271,7 @@ impl CreateScreen {
     /// Whichever is most useful right now: a complaint, then the file that will
     /// be written, then help for this field.
     fn status_line(&self) -> Line<'static> {
-        if let Some(error) = &self.error {
+        if let Some(error) = &self.form.error {
             return Line::from(Span::styled(format!("✗ {error}"), theme::error()));
         }
         if !self.filename().is_empty() {
@@ -405,21 +281,21 @@ impl CreateScreen {
             ]);
         }
         Line::from(Span::styled(
-            self.fields[self.focus].hint.clone(),
+            self.form.fields[self.form.focus].hint.clone(),
             theme::dim(),
         ))
     }
 
     fn key_hints(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = vec![("tab", "field")];
-        if self.focus == DESCRIPTION {
+        if self.form.focus == DESCRIPTION {
             keys.push(("^s", "create"));
         } else {
             keys.push(("⏎", "create"));
         }
-        if self.fields[self.focus].openable() {
+        if self.form.fields[self.form.focus].openable() {
             keys.push(("^l", "list"));
-        } else if matches!(self.fields[self.focus].value, Value::Choice(_)) {
+        } else if matches!(self.form.fields[self.form.focus].value, Value::Choice(_)) {
             keys.push(("←→", "change"));
         }
         keys.push(("esc", "cancel"));
@@ -465,6 +341,8 @@ fn split_labels(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::controller::keys::{ctrl, key, typed};
+    use crate::tui::controller::Overlay;
     use crate::tui::render_lines;
 
     fn catalog() -> Catalog {
@@ -497,20 +375,6 @@ mod tests {
         CreateScreen::new("NEW-a1b2c3", &catalog(), &Seed::default())
     }
 
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-    }
-
-    fn typed(screen: &mut CreateScreen, text: &str) {
-        for c in text.chars() {
-            screen.handle(key(KeyCode::Char(c)));
-        }
-    }
-
     fn done(flow: Flow<Draft>) -> Draft {
         match flow {
             Flow::Done(draft) => draft,
@@ -521,11 +385,11 @@ mod tests {
     #[test]
     fn the_form_starts_on_the_summary_with_the_workspaces_own_defaults() {
         let screen = screen();
-        assert_eq!(screen.focus, SUMMARY);
+        assert_eq!(screen.form.focus, SUMMARY);
         // Most-used first, straight from the catalog rather than a stock list.
-        assert_eq!(screen.fields[TYPE].text(), "Story");
-        assert_eq!(screen.fields[PROJECT].text(), "PROJ");
-        assert_eq!(screen.fields[PRIORITY].filled(), None);
+        assert_eq!(screen.form.fields[TYPE].text(), "Story");
+        assert_eq!(screen.form.fields[PROJECT].text(), "PROJ");
+        assert_eq!(screen.form.fields[PRIORITY].filled(), None);
     }
 
     /// A paste of two lines into the summary is one summary, and the form
@@ -537,9 +401,9 @@ mod tests {
             screen.paste("Fix the\nlogin flow"),
             Flow::Continue
         ));
-        assert_eq!(screen.fields[SUMMARY].text(), "Fix the login flow");
+        assert_eq!(screen.form.fields[SUMMARY].text(), "Fix the login flow");
 
-        screen.focus = DESCRIPTION;
+        screen.form.focus = DESCRIPTION;
         screen.paste("one\r\ntwo");
         let draft = done(screen.handle(ctrl('s')));
         assert_eq!(draft.description, "one\ntwo");
@@ -548,8 +412,8 @@ mod tests {
     #[test]
     fn an_empty_workspace_falls_back_to_jiras_own_types() {
         let screen = CreateScreen::new("NEW-1", &Catalog::default(), &Seed::default());
-        assert_eq!(screen.fields[TYPE].text(), "Task");
-        assert_eq!(screen.fields[PRIORITY].filled(), None);
+        assert_eq!(screen.form.fields[TYPE].text(), "Task");
+        assert_eq!(screen.form.fields[PRIORITY].filled(), None);
     }
 
     #[test]
@@ -589,19 +453,19 @@ mod tests {
         let mut screen = screen();
         screen.handle(key(KeyCode::Tab));
         assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
-        assert_eq!(screen.focus, SUMMARY);
-        assert_eq!(screen.error.as_deref(), Some("a summary is required"));
+        assert_eq!(screen.form.focus, SUMMARY);
+        assert_eq!(screen.form.error.as_deref(), Some("a summary is required"));
 
         // Typing clears the complaint rather than leaving it up to argue with.
         typed(&mut screen, "x");
-        assert_eq!(screen.error, None);
+        assert_eq!(screen.form.error, None);
     }
 
     #[test]
     fn the_description_keeps_enter_for_itself() {
         let mut screen = screen();
         typed(&mut screen, "Summary");
-        screen.focus = DESCRIPTION;
+        screen.form.focus = DESCRIPTION;
         typed(&mut screen, "one");
         assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
         typed(&mut screen, "two");
@@ -614,16 +478,16 @@ mod tests {
     fn arrows_change_a_choice_and_tab_moves_on() {
         let mut screen = screen();
         screen.handle(key(KeyCode::Tab));
-        assert_eq!(screen.focus, TYPE);
+        assert_eq!(screen.form.focus, TYPE);
         screen.handle(key(KeyCode::Right));
-        assert_eq!(screen.fields[TYPE].text(), "Bug");
+        assert_eq!(screen.form.fields[TYPE].text(), "Bug");
         screen.handle(key(KeyCode::Left));
-        assert_eq!(screen.fields[TYPE].text(), "Story");
+        assert_eq!(screen.form.fields[TYPE].text(), "Story");
         // Down is not a choice's key, so it falls through to the next field.
         screen.handle(key(KeyCode::Down));
-        assert_eq!(screen.focus, PRIORITY);
+        assert_eq!(screen.form.focus, PRIORITY);
         screen.handle(key(KeyCode::BackTab));
-        assert_eq!(screen.focus, TYPE);
+        assert_eq!(screen.form.focus, TYPE);
     }
 
     #[test]
@@ -637,13 +501,13 @@ mod tests {
     fn a_parent_is_chosen_from_the_workspaces_own_issues() {
         let mut screen = screen();
         typed(&mut screen, "Summary");
-        screen.focus = PARENT;
+        screen.form.focus = PARENT;
         screen.handle(ctrl('l'));
-        assert!(matches!(screen.overlay, Some(Overlay::Pick { .. })));
+        assert!(matches!(screen.form.overlay, Some(Overlay::Pick { .. })));
         typed(&mut screen, "100");
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.fields[PARENT].text(), "PROJ-100");
-        assert!(screen.overlay.is_none());
+        assert_eq!(screen.form.fields[PARENT].text(), "PROJ-100");
+        assert!(screen.form.overlay.is_none());
 
         let draft = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(draft.parent.as_deref(), Some("PROJ-100"));
@@ -657,10 +521,10 @@ mod tests {
 
         typed(&mut screen, "half an idea");
         assert!(matches!(screen.handle(key(KeyCode::Esc)), Flow::Continue));
-        assert!(matches!(screen.overlay, Some(Overlay::Discard)));
+        assert!(matches!(screen.form.overlay, Some(Overlay::Discard)));
         // Anything but y goes back to editing.
         screen.handle(key(KeyCode::Char('n')));
-        assert!(screen.overlay.is_none());
+        assert!(screen.form.overlay.is_none());
 
         screen.handle(key(KeyCode::Esc));
         assert!(matches!(
@@ -705,7 +569,7 @@ mod tests {
     #[test]
     fn the_open_list_draws_over_the_form() {
         let mut screen = screen();
-        screen.focus = PARENT;
+        screen.form.focus = PARENT;
         screen.handle(ctrl('l'));
         let lines = render_lines(&mut screen, 80, 24).join("\n");
         assert!(lines.contains("PROJ-100"), "{lines}");
@@ -721,7 +585,7 @@ mod tests {
         assert!(lines.contains("Keys"), "{lines}");
         assert!(lines.contains("create the issue"), "{lines}");
         screen.handle(key(KeyCode::Char('q')));
-        assert!(screen.overlay.is_none());
+        assert!(screen.form.overlay.is_none());
     }
 
     /// Print the screen, its list and its help, for looking at.
@@ -734,21 +598,21 @@ mod tests {
     fn preview() {
         let mut s = screen();
         typed(&mut s, "Login fails when SSO is enabled");
-        s.focus = DESCRIPTION;
+        s.form.focus = DESCRIPTION;
         typed(
             &mut s,
             "Repro: sign in with the corporate IdP while the assertion is stale.",
         );
-        s.focus = LABELS;
+        s.form.focus = LABELS;
         typed(&mut s, "auth, backend");
-        s.focus = PARENT;
+        s.form.focus = PARENT;
         typed(&mut s, "PROJ-100");
-        s.focus = SUMMARY;
+        s.form.focus = SUMMARY;
         for l in render_lines(&mut s, 90, 26) {
             println!("|{l}");
         }
         println!();
-        s.focus = PARENT;
+        s.form.focus = PARENT;
         s.handle(ctrl('l'));
         for l in render_lines(&mut s, 90, 26) {
             println!("|{l}");
@@ -772,7 +636,7 @@ mod tests {
             screen.handle(key(KeyCode::F(1)));
             render_lines(&mut screen, w, h);
             screen.handle(key(KeyCode::Esc));
-            screen.focus = PARENT;
+            screen.form.focus = PARENT;
             screen.handle(ctrl('l'));
             render_lines(&mut screen, w, h);
         }

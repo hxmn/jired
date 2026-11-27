@@ -13,11 +13,12 @@
 //! it: the screen edits a document the caller loaded and hands it back.
 
 use crate::tui::catalog::Catalog;
+use crate::tui::controller::{split_list, FormController, Step};
 use crate::tui::field::{Field, Value};
 use crate::tui::form::{self, Card};
-use crate::tui::picker::{self, Item, Picker};
+use crate::tui::picker::Item;
 use crate::tui::{theme, Flow, Screen};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
@@ -123,26 +124,12 @@ const HELP: &[(&str, &str)] = &[
     ("esc", "cancel"),
 ];
 
-enum Overlay {
-    Pick {
-        field: usize,
-        picker: Picker,
-    },
-    Help,
-    /// Esc with unsaved changes; confirm before throwing them away.
-    Discard,
-}
-
 pub struct EditScreen {
     key: String,
-    fields: Vec<Field>,
-    focus: usize,
-    overlay: Option<Overlay>,
-    error: Option<String>,
+    form: FormController,
     /// What was loaded, to mark what has moved since and to answer "anything
     /// to save?" without comparing rendered text.
     original: Edits,
-    body_scroll: usize,
 }
 
 impl EditScreen {
@@ -196,11 +183,15 @@ impl EditScreen {
                 .with_items(people)
                 .suggesting()
                 .with_hint("type a name — tab completes it — or ^l for the list"),
+            // A list of several values adds to what is there rather than
+            // replacing it: picking two labels should give two.
             Field::line(LABELS_LABEL, "none")
                 .with_items(catalog.labels.iter().map(Item::new).collect())
+                .accumulating()
                 .with_hint("comma-separated"),
             Field::line(COMPONENTS_LABEL, "none")
                 .with_items(catalog.components.iter().map(Item::new).collect())
+                .accumulating()
                 .with_hint("comma-separated"),
             Field::line(SPRINT_LABEL, BACKLOG)
                 .with_items(sprints)
@@ -230,31 +221,31 @@ impl EditScreen {
         fields[PARENT].set(current.parent.as_deref());
         fields[DESCRIPTION].set(Some(&current.description));
 
+        // Tab completes what is being typed before it moves on, the way a
+        // shell does; with nothing to complete it is just the next field.
+        let mut form = FormController::new(fields, Some(DESCRIPTION)).completing();
+        form.focus = SUMMARY;
         Self {
             key: key.into(),
-            fields,
-            focus: SUMMARY,
-            overlay: None,
-            error: None,
+            form,
             original: current.clone(),
-            body_scroll: 0,
         }
     }
 
     /// The form's current contents.
     pub fn edits(&self) -> Edits {
         Edits {
-            summary: self.fields[SUMMARY].text().trim().to_string(),
-            status: self.fields[STATUS].text().to_string(),
-            issue_type: self.fields[TYPE].text().to_string(),
-            priority: self.fields[PRIORITY].filled().map(str::to_string),
-            assignee: self.fields[ASSIGNEE].filled().map(str::to_string),
-            labels: split_list(self.fields[LABELS].text()),
-            components: split_list(self.fields[COMPONENTS].text()),
-            sprint: split_list(self.fields[SPRINT].text()),
-            story_points: parse_points(self.fields[POINTS].text()),
-            parent: self.fields[PARENT].filled().map(|p| p.to_uppercase()),
-            description: self.fields[DESCRIPTION].text().trim_end().to_string(),
+            summary: self.form.fields[SUMMARY].text().trim().to_string(),
+            status: self.form.fields[STATUS].text().to_string(),
+            issue_type: self.form.fields[TYPE].text().to_string(),
+            priority: self.form.fields[PRIORITY].filled().map(str::to_string),
+            assignee: self.form.fields[ASSIGNEE].filled().map(str::to_string),
+            labels: split_list(self.form.fields[LABELS].text()),
+            components: split_list(self.form.fields[COMPONENTS].text()),
+            sprint: split_list(self.form.fields[SPRINT].text()),
+            story_points: parse_points(self.form.fields[POINTS].text()),
+            parent: self.form.fields[PARENT].filled().map(|p| p.to_uppercase()),
+            description: self.form.fields[DESCRIPTION].text().trim_end().to_string(),
         }
     }
 
@@ -281,7 +272,7 @@ impl EditScreen {
             now.parent != before.parent,
             now.description != before.description,
         ];
-        for (field, changed) in self.fields.iter_mut().zip(moved) {
+        for (field, changed) in self.form.fields.iter_mut().zip(moved) {
             field.changed = changed;
         }
         moved.iter().filter(|m| **m).count()
@@ -290,27 +281,27 @@ impl EditScreen {
     /// Refuse to finish while something required is missing, and put the cursor
     /// on the field that has to be fixed.
     fn submit(&mut self) -> Flow<Edits> {
-        if self.fields[SUMMARY].filled().is_none() {
-            self.focus = SUMMARY;
-            self.error = Some("a summary is required".into());
+        if self.form.fields[SUMMARY].filled().is_none() {
+            self.form.focus = SUMMARY;
+            self.form.error = Some("a summary is required".into());
             return Flow::Continue;
         }
         // A half-typed name is not an assignee: Jira wants the id inside the
         // mention, so what is on screen has to become one before it is saved.
         // The suggestion is right there next to the field, so taking it is what
         // the user was looking at when they pressed enter.
-        if !self.fields[ASSIGNEE].complete() && !self.assignee_is_resolved() {
-            self.focus = ASSIGNEE;
-            self.error = Some(format!(
+        if !self.form.fields[ASSIGNEE].complete() && !self.assignee_is_resolved() {
+            self.form.focus = ASSIGNEE;
+            self.form.error = Some(format!(
                 "nobody here matches `{}` — ^l to pick, or clear it",
-                self.fields[ASSIGNEE].text().trim()
+                self.form.fields[ASSIGNEE].text().trim()
             ));
             return Flow::Continue;
         }
-        let points = self.fields[POINTS].text().trim().to_string();
+        let points = self.form.fields[POINTS].text().trim().to_string();
         if !points.is_empty() && parse_points(&points).is_none() {
-            self.focus = POINTS;
-            self.error = Some(format!("`{points}` is not a number"));
+            self.form.focus = POINTS;
+            self.form.error = Some(format!("`{points}` is not a number"));
             return Flow::Continue;
         }
         Flow::Done(self.edits())
@@ -319,94 +310,23 @@ impl EditScreen {
     /// Whether the assignee field holds something a push could send: a mention,
     /// or nothing at all.
     fn assignee_is_resolved(&self) -> bool {
-        let Some(text) = self.fields[ASSIGNEE].filled() else {
+        let Some(text) = self.form.fields[ASSIGNEE].filled() else {
             return true;
         };
         // A mention that came from the file names someone this workspace may
         // never have seen in any other issue, so its own value counts too.
         text.starts_with("@[")
             || self.original.assignee.as_deref() == Some(text)
-            || self.fields[ASSIGNEE]
+            || self.form.fields[ASSIGNEE]
                 .items
                 .iter()
                 .any(|i| i.value.eq_ignore_ascii_case(text))
     }
 
-    fn move_focus(&mut self, forward: bool) {
-        let len = self.fields.len();
-        self.focus = if forward {
-            (self.focus + 1) % len
-        } else {
-            (self.focus + len - 1) % len
-        };
-    }
-
-    fn open_list(&mut self) {
-        let field = &self.fields[self.focus];
-        if !field.openable() {
-            return;
-        }
-        let mut picker = if field.multiple {
-            Picker::multi(field.label, field.items.clone(), split_list(field.text()))
-        } else {
-            Picker::new(field.label, field.items.clone(), field.optional)
-        };
-        if !field.multiple {
-            if let Some(current) = field.filled() {
-                picker.select(current);
-            }
-        }
-        self.overlay = Some(Overlay::Pick {
-            field: self.focus,
-            picker,
-        });
-    }
-
-    fn handle_overlay(&mut self, key: KeyEvent, overlay: Overlay) -> Flow<Edits> {
-        match overlay {
-            Overlay::Help => self.overlay = None,
-            Overlay::Discard => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => return Flow::Cancel,
-                _ => self.overlay = None,
-            },
-            Overlay::Pick { field, mut picker } => match picker.handle(key) {
-                picker::Outcome::Continue => {
-                    self.overlay = Some(Overlay::Pick { field, picker });
-                }
-                picker::Outcome::Cancel => self.overlay = None,
-                picker::Outcome::ChoseMany(values) => {
-                    self.fields[field].set(Some(&values.join(", ")));
-                    self.error = None;
-                    self.overlay = None;
-                }
-                picker::Outcome::Chose(value) => {
-                    // A list of several values adds to what is there rather
-                    // than replacing it: picking two labels should give two.
-                    if matches!(field, LABELS | COMPONENTS) {
-                        let mut current = split_list(self.fields[field].text());
-                        match value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-                            Some(v) if !current.iter().any(|c| c == v) => {
-                                current.push(v.to_string());
-                            }
-                            Some(_) => {}
-                            None => current.clear(),
-                        }
-                        self.fields[field].set(Some(&current.join(", ")));
-                    } else {
-                        self.fields[field].set(value.as_deref());
-                    }
-                    self.error = None;
-                    self.overlay = None;
-                }
-            },
-        }
-        Flow::Continue
-    }
-
     /// Whichever is most useful right now: a complaint, then what would be
     /// saved, then help for this field.
     fn status_line(&self, changed: usize) -> Line<'static> {
-        if let Some(error) = &self.error {
+        if let Some(error) = &self.form.error {
             return Line::from(Span::styled(format!("✗ {error}"), theme::error()));
         }
         if changed > 0 {
@@ -422,24 +342,24 @@ impl EditScreen {
             ]);
         }
         Line::from(Span::styled(
-            self.fields[self.focus].hint.clone(),
+            self.form.fields[self.form.focus].hint.clone(),
             theme::dim(),
         ))
     }
 
     fn key_hints(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = vec![("tab", "field")];
-        if self.focus == DESCRIPTION {
+        if self.form.focus == DESCRIPTION {
             keys.push(("^s", "save"));
         } else {
             keys.push(("⏎", "save"));
         }
-        if self.fields[self.focus].suggestion().is_some() {
+        if self.form.fields[self.form.focus].suggestion().is_some() {
             keys.push(("tab", "complete"));
         }
-        if self.fields[self.focus].openable() {
+        if self.form.fields[self.form.focus].openable() {
             keys.push(("^l", "list"));
-        } else if matches!(self.fields[self.focus].value, Value::Choice(_)) {
+        } else if matches!(self.form.fields[self.form.focus].value, Value::Choice(_)) {
             keys.push(("←→", "change"));
         }
         keys.push(("esc", "cancel"));
@@ -450,11 +370,11 @@ impl EditScreen {
     /// The summary of the issue the parent field names, when the workspace
     /// knows it.
     fn parent_detail(&self) -> Option<String> {
-        if let Some(item) = self.fields[PARENT].suggestion() {
+        if let Some(item) = self.form.fields[PARENT].suggestion() {
             return Some(format!("→ {}  {}   tab", item.label, item.detail));
         }
-        let key = self.fields[PARENT].filled()?.to_uppercase();
-        self.fields[PARENT]
+        let key = self.form.fields[PARENT].filled()?.to_uppercase();
+        self.form.fields[PARENT]
             .items
             .iter()
             .find(|i| i.value.eq_ignore_ascii_case(&key))
@@ -464,11 +384,11 @@ impl EditScreen {
     /// What sits dim after the assignee: who the mention names once one is
     /// chosen, and what tab would complete to before that.
     fn assignee_detail(&self) -> Option<String> {
-        if let Some(item) = self.fields[ASSIGNEE].suggestion() {
+        if let Some(item) = self.form.fields[ASSIGNEE].suggestion() {
             return Some(format!("→ {}   tab", item.detail));
         }
-        let value = self.fields[ASSIGNEE].filled()?;
-        self.fields[ASSIGNEE]
+        let value = self.form.fields[ASSIGNEE].filled()?;
+        self.form.fields[ASSIGNEE]
             .items
             .iter()
             .find(|i| i.value == value)
@@ -480,69 +400,18 @@ impl Screen for EditScreen {
     type Output = Edits;
 
     fn handle(&mut self, key: KeyEvent) -> Flow<Edits> {
-        if let Some(overlay) = self.overlay.take() {
-            return self.handle_overlay(key, overlay);
+        let dirty = self.dirty();
+        match self.form.handle(key, dirty) {
+            Step::Continue => Flow::Continue,
+            Step::Cancel => Flow::Cancel,
+            Step::Submit => self.submit(),
         }
-
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char('c') if ctrl => return Flow::Cancel,
-            KeyCode::Char('s') if ctrl => return self.submit(),
-            KeyCode::Char('l') if ctrl => {
-                self.open_list();
-                return Flow::Continue;
-            }
-            KeyCode::F(2) => {
-                self.open_list();
-                return Flow::Continue;
-            }
-            KeyCode::F(1) => {
-                self.overlay = Some(Overlay::Help);
-                return Flow::Continue;
-            }
-            KeyCode::Esc => {
-                return if self.dirty() {
-                    self.overlay = Some(Overlay::Discard);
-                    Flow::Continue
-                } else {
-                    Flow::Cancel
-                }
-            }
-            // Tab completes what is being typed before it moves on, the way a
-            // shell does; with nothing to complete it is just the next field.
-            KeyCode::Tab => {
-                if !self.fields[self.focus].complete() {
-                    self.move_focus(true);
-                }
-                return Flow::Continue;
-            }
-            KeyCode::BackTab => {
-                self.move_focus(false);
-                return Flow::Continue;
-            }
-            // Enter saves. The description claims it first, below, because a
-            // paragraph needs a way to hold more than one line.
-            KeyCode::Enter if self.focus != DESCRIPTION => return self.submit(),
-            _ => {}
-        }
-
-        if self.fields[self.focus].handle(key) {
-            self.error = None;
-            return Flow::Continue;
-        }
-
-        match key.code {
-            KeyCode::Down => self.move_focus(true),
-            KeyCode::Up => self.move_focus(false),
-            _ => {}
-        }
-        Flow::Continue
     }
 
     fn render(&mut self, frame: &mut Frame) {
         let changed = self.mark_changes();
-        self.fields[PARENT].detail = self.parent_detail();
-        self.fields[ASSIGNEE].detail = self.assignee_detail();
+        self.form.fields[PARENT].detail = self.parent_detail();
+        self.form.fields[ASSIGNEE].detail = self.assignee_detail();
 
         let card = Card {
             title: "Edit issue",
@@ -552,15 +421,16 @@ impl Screen for EditScreen {
             status: self.status_line(changed),
             keys: self.key_hints(),
         };
-        let focus = self.overlay.is_none().then_some(self.focus);
-        let area = form::render(frame, &card, &mut self.fields, focus, &mut self.body_scroll);
-
-        match &mut self.overlay {
-            Some(Overlay::Pick { picker, .. }) => form::render_picker(frame, area, picker),
-            Some(Overlay::Help) => form::render_help(frame, area, HELP),
-            Some(Overlay::Discard) => form::render_confirm(frame, area, "Discard these changes?"),
-            None => {}
-        }
+        let focus = self.form.visible_focus();
+        let area = form::render(
+            frame,
+            &card,
+            &mut self.form.fields,
+            focus,
+            &mut self.form.body_scroll,
+        );
+        self.form
+            .render_overlay(frame, area, HELP, "Discard these changes?");
     }
 }
 
@@ -573,21 +443,6 @@ fn with_current(known: &[String], current: Option<&str>) -> Vec<String> {
         }
     }
     options
-}
-
-/// Split what was typed into labels or components.
-///
-/// Labels cannot contain spaces, so both separators mean the same thing there;
-/// components can, so only a comma separates them.
-fn split_list(text: &str) -> Vec<String> {
-    let mut seen: Vec<String> = Vec::new();
-    for value in text.split(',') {
-        let value = value.trim();
-        if !value.is_empty() && !seen.iter().any(|s| s == value) {
-            seen.push(value.to_string());
-        }
-    }
-    seen
 }
 
 /// Story points as Jira stores them: a number, usually whole.
@@ -611,7 +466,11 @@ fn format_points(points: f64) -> String {
 mod tests {
     use super::*;
     use crate::tui::catalog::{KnownIssue, KnownSprint, KnownUser};
+    use crate::tui::controller::keys::{ctrl, key, typed};
+    #[allow(unused_imports)]
+    use crate::tui::controller::Overlay;
     use crate::tui::render_lines;
+    use crossterm::event::KeyCode;
 
     fn sprint(name: &str, state: &str) -> KnownSprint {
         KnownSprint {
@@ -673,20 +532,6 @@ mod tests {
         EditScreen::new("PROJ-142", &catalog(), &current())
     }
 
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-    }
-
-    fn typed(screen: &mut EditScreen, text: &str) {
-        for c in text.chars() {
-            screen.handle(key(KeyCode::Char(c)));
-        }
-    }
-
     fn done(flow: Flow<Edits>) -> Edits {
         match flow {
             Flow::Done(edits) => edits,
@@ -697,14 +542,14 @@ mod tests {
     #[test]
     fn the_form_opens_on_what_the_file_already_says() {
         let screen = screen();
-        assert_eq!(screen.fields[SUMMARY].text(), "Fix login flow");
-        assert_eq!(screen.fields[STATUS].text(), "In Progress");
-        assert_eq!(screen.fields[TYPE].text(), "Story");
-        assert_eq!(screen.fields[PRIORITY].text(), "High");
-        assert_eq!(screen.fields[ASSIGNEE].text(), "@[Ilya A](5b10a2)");
-        assert_eq!(screen.fields[LABELS].text(), "auth, backend");
-        assert_eq!(screen.fields[POINTS].text(), "5");
-        assert_eq!(screen.fields[PARENT].text(), "PROJ-100");
+        assert_eq!(screen.form.fields[SUMMARY].text(), "Fix login flow");
+        assert_eq!(screen.form.fields[STATUS].text(), "In Progress");
+        assert_eq!(screen.form.fields[TYPE].text(), "Story");
+        assert_eq!(screen.form.fields[PRIORITY].text(), "High");
+        assert_eq!(screen.form.fields[ASSIGNEE].text(), "@[Ilya A](5b10a2)");
+        assert_eq!(screen.form.fields[LABELS].text(), "auth, backend");
+        assert_eq!(screen.form.fields[POINTS].text(), "5");
+        assert_eq!(screen.form.fields[PARENT].text(), "PROJ-100");
     }
 
     /// Opening the form and saving it must be a no-op, or every edit session
@@ -719,11 +564,11 @@ mod tests {
     #[test]
     fn editing_a_field_shows_up_in_the_result() {
         let mut screen = screen();
-        screen.focus = STATUS;
+        screen.form.focus = STATUS;
         screen.handle(key(KeyCode::Right));
-        assert_eq!(screen.fields[STATUS].text(), "Done");
+        assert_eq!(screen.form.fields[STATUS].text(), "Done");
 
-        screen.focus = POINTS;
+        screen.form.focus = POINTS;
         screen.handle(ctrl('u')); // clear the line
         typed(&mut screen, "8");
 
@@ -738,18 +583,18 @@ mod tests {
         let mut current = current();
         current.status = "Awaiting Review".into();
         let screen = EditScreen::new("PROJ-142", &catalog(), &current);
-        assert_eq!(screen.fields[STATUS].text(), "Awaiting Review");
+        assert_eq!(screen.form.fields[STATUS].text(), "Awaiting Review");
     }
 
     #[test]
     fn story_points_have_to_be_a_number() {
         let mut screen = screen();
-        screen.focus = POINTS;
+        screen.form.focus = POINTS;
         screen.handle(ctrl('u'));
         typed(&mut screen, "lots");
         assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
-        assert_eq!(screen.focus, POINTS);
-        assert!(screen.error.is_some());
+        assert_eq!(screen.form.focus, POINTS);
+        assert!(screen.form.error.is_some());
 
         screen.handle(ctrl('u'));
         let edits = done(screen.handle(key(KeyCode::Enter)));
@@ -759,24 +604,24 @@ mod tests {
     #[test]
     fn an_empty_summary_is_refused() {
         let mut screen = screen();
-        screen.focus = SUMMARY;
+        screen.form.focus = SUMMARY;
         screen.handle(ctrl('u'));
         assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
-        assert_eq!(screen.error.as_deref(), Some("a summary is required"));
+        assert_eq!(screen.form.error.as_deref(), Some("a summary is required"));
     }
 
     /// An issue can be in several sprints, so the field is a ticked list.
     #[test]
     fn sprints_are_ticked_from_a_list_and_several_can_be_held_at_once() {
         let mut screen = screen();
-        assert_eq!(screen.fields[SPRINT].text(), "Sprint 42");
+        assert_eq!(screen.form.fields[SPRINT].text(), "Sprint 42");
 
-        screen.focus = SPRINT;
+        screen.form.focus = SPRINT;
         screen.handle(ctrl('l'));
         screen.handle(key(KeyCode::Down));
         screen.handle(key(KeyCode::Char(' ')));
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.fields[SPRINT].text(), "Sprint 42, Sprint 43");
+        assert_eq!(screen.form.fields[SPRINT].text(), "Sprint 42, Sprint 43");
 
         let edits = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(edits.sprint, ["Sprint 42", "Sprint 43"]);
@@ -785,11 +630,11 @@ mod tests {
     #[test]
     fn unticking_every_sprint_puts_the_issue_in_the_backlog() {
         let mut screen = screen();
-        screen.focus = SPRINT;
+        screen.form.focus = SPRINT;
         screen.handle(ctrl('l'));
         screen.handle(key(KeyCode::Char(' '))); // untick the one it is in
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.fields[SPRINT].filled(), None);
+        assert_eq!(screen.form.fields[SPRINT].filled(), None);
 
         let edits = done(screen.handle(key(KeyCode::Enter)));
         assert!(edits.sprint.is_empty(), "the backlog is no sprint at all");
@@ -802,9 +647,9 @@ mod tests {
         let mut current = current();
         current.sprint = vec!["Sprint 7".into(), "Sprint 42".into()];
         let mut screen = EditScreen::new("PROJ-142", &catalog(), &current);
-        assert_eq!(screen.fields[SPRINT].text(), "Sprint 7, Sprint 42");
+        assert_eq!(screen.form.fields[SPRINT].text(), "Sprint 7, Sprint 42");
         assert!(
-            screen.fields[SPRINT]
+            screen.form.fields[SPRINT]
                 .items
                 .iter()
                 .any(|i| i.value == "Sprint 7"),
@@ -822,7 +667,7 @@ mod tests {
     #[test]
     fn closed_sprints_are_offered_and_say_that_they_are_closed() {
         let screen = screen();
-        let rows: Vec<(&str, &str)> = screen.fields[SPRINT]
+        let rows: Vec<(&str, &str)> = screen.form.fields[SPRINT]
             .items
             .iter()
             .map(|i| (i.value.as_str(), i.detail.as_str()))
@@ -842,7 +687,7 @@ mod tests {
         let mut current = current();
         current.sprint = Vec::new();
         let mut screen = EditScreen::new("PROJ-142", &catalog(), &current);
-        assert_eq!(screen.fields[SPRINT].filled(), None);
+        assert_eq!(screen.form.fields[SPRINT].filled(), None);
         let lines = render_lines(&mut screen, 80, 26).join("\n");
         assert!(lines.contains("Backlog"), "{lines}");
     }
@@ -851,11 +696,11 @@ mod tests {
     #[test]
     fn typing_a_name_completes_to_the_mention_that_names_them() {
         let mut screen = screen();
-        screen.focus = ASSIGNEE;
+        screen.form.focus = ASSIGNEE;
         screen.handle(ctrl('u'));
         typed(&mut screen, "jane");
         assert_eq!(
-            screen.fields[ASSIGNEE]
+            screen.form.fields[ASSIGNEE]
                 .suggestion()
                 .map(|i| i.value.as_str()),
             Some("@[Jane D](5b1af9)")
@@ -863,12 +708,12 @@ mod tests {
 
         // Tab takes it, and does not move on while there is something to take.
         screen.handle(key(KeyCode::Tab));
-        assert_eq!(screen.focus, ASSIGNEE);
-        assert_eq!(screen.fields[ASSIGNEE].text(), "@[Jane D](5b1af9)");
+        assert_eq!(screen.form.focus, ASSIGNEE);
+        assert_eq!(screen.form.fields[ASSIGNEE].text(), "@[Jane D](5b1af9)");
 
         // With nothing left to complete, tab is the next field again.
         screen.handle(key(KeyCode::Tab));
-        assert_eq!(screen.focus, LABELS);
+        assert_eq!(screen.form.focus, LABELS);
 
         let edits = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(edits.assignee.as_deref(), Some("@[Jane D](5b1af9)"));
@@ -879,22 +724,27 @@ mod tests {
     #[test]
     fn saving_resolves_a_typed_name_and_refuses_an_unknown_one() {
         let mut screen = screen();
-        screen.focus = ASSIGNEE;
+        screen.form.focus = ASSIGNEE;
         screen.handle(ctrl('u'));
         typed(&mut screen, "jane");
         let edits = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(edits.assignee.as_deref(), Some("@[Jane D](5b1af9)"));
 
         let mut screen = self::tests::screen();
-        screen.focus = ASSIGNEE;
+        screen.form.focus = ASSIGNEE;
         screen.handle(ctrl('u'));
         typed(&mut screen, "somebody else");
         assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
-        assert_eq!(screen.focus, ASSIGNEE);
+        assert_eq!(screen.form.focus, ASSIGNEE);
         assert!(
-            screen.error.as_deref().unwrap().contains("somebody else"),
+            screen
+                .form
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("somebody else"),
             "{:?}",
-            screen.error
+            screen.form.error
         );
 
         // Clearing it is always allowed: nobody assigned is a valid answer.
@@ -917,7 +767,7 @@ mod tests {
     #[test]
     fn the_suggestion_is_shown_next_to_the_field() {
         let mut screen = screen();
-        screen.focus = ASSIGNEE;
+        screen.form.focus = ASSIGNEE;
         screen.handle(ctrl('u'));
         typed(&mut screen, "jane");
         let lines = render_lines(&mut screen, 80, 26).join("\n");
@@ -928,17 +778,17 @@ mod tests {
     #[test]
     fn picking_a_label_adds_to_the_list_rather_than_replacing_it() {
         let mut screen = screen();
-        screen.focus = LABELS;
+        screen.form.focus = LABELS;
         screen.handle(ctrl('l'));
         typed(&mut screen, "sso");
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.fields[LABELS].text(), "auth, backend, sso");
+        assert_eq!(screen.form.fields[LABELS].text(), "auth, backend, sso");
 
         // And picking the same one twice does not duplicate it.
         screen.handle(ctrl('l'));
         typed(&mut screen, "sso");
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.fields[LABELS].text(), "auth, backend, sso");
+        assert_eq!(screen.form.fields[LABELS].text(), "auth, backend, sso");
     }
 
     #[test]
@@ -949,7 +799,7 @@ mod tests {
         let mut screen = screen();
         typed(&mut screen, "!");
         assert!(matches!(screen.handle(key(KeyCode::Esc)), Flow::Continue));
-        assert!(matches!(screen.overlay, Some(Overlay::Discard)));
+        assert!(matches!(screen.form.overlay, Some(Overlay::Discard)));
         assert!(matches!(
             screen.handle(key(KeyCode::Char('y'))),
             Flow::Cancel
@@ -969,7 +819,7 @@ mod tests {
             "the mention resolves to a name:\n{lines}"
         );
 
-        screen.focus = SUMMARY;
+        screen.form.focus = SUMMARY;
         typed(&mut screen, "!");
         let lines = render_lines(&mut screen, 80, 26).join("\n");
         assert!(
@@ -984,7 +834,7 @@ mod tests {
         for (w, h) in [(20u16, 6u16), (40, 8), (80, 12), (200, 60)] {
             let mut screen = screen();
             render_lines(&mut screen, w, h);
-            screen.focus = DESCRIPTION;
+            screen.form.focus = DESCRIPTION;
             let lines = render_lines(&mut screen, w, h).join("\n");
             if w >= 40 && h >= 12 {
                 assert!(
@@ -995,7 +845,7 @@ mod tests {
             screen.handle(key(KeyCode::F(1)));
             render_lines(&mut screen, w, h);
             screen.handle(key(KeyCode::Esc));
-            screen.focus = PARENT;
+            screen.form.focus = PARENT;
             screen.handle(ctrl('l'));
             render_lines(&mut screen, w, h);
         }
@@ -1087,7 +937,7 @@ mod tests {
             println!("|{l}");
         }
         println!();
-        s.focus = SPRINT;
+        s.form.focus = SPRINT;
         s.handle(ctrl('l'));
         for l in render_lines(&mut s, 90, 26) {
             println!("|{l}");

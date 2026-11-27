@@ -11,9 +11,10 @@
 //! sprint is `Sprint 42` gets `Sprint 43` offered, and picking a different
 //! board renumbers it — until someone types over it, after which it is theirs.
 
+use crate::tui::controller::{FormController, Step};
 use crate::tui::field::{Field, Value};
 use crate::tui::form::{self, Card};
-use crate::tui::picker::{self, Item, Picker};
+use crate::tui::picker::Item;
 use crate::tui::when::span;
 use crate::tui::{theme, Flow, Screen};
 use chrono::{DateTime, Datelike, Duration, Local, Utc};
@@ -71,22 +72,8 @@ const START: usize = 2;
 const END: usize = 3;
 const GOAL: usize = 4;
 
-enum Overlay {
-    Pick {
-        field: usize,
-        picker: Picker,
-    },
-    Help,
-    /// Esc with something typed; confirm before throwing it away.
-    Discard,
-}
-
 pub struct SprintScreen {
-    fields: Vec<Field>,
-    focus: usize,
-    overlay: Option<Overlay>,
-    /// A validation failure, cleared as soon as anything is typed.
-    error: Option<String>,
+    form: FormController,
     boards: Vec<KnownBoard>,
     sprints: Vec<BoardSprint>,
     /// Right-aligned in the border: the workspace's project.
@@ -96,7 +83,6 @@ pub struct SprintScreen {
     offered_name: String,
     /// When the screen opened, which is what the date presets count from.
     now: DateTime<Utc>,
-    body_scroll: usize,
 }
 
 impl SprintScreen {
@@ -140,19 +126,17 @@ impl SprintScreen {
             fields[BOARD].set(Some(b));
         }
 
+        let mut form = FormController::new(fields, Some(GOAL));
+        // Start on the first thing still missing: with the name already on the
+        // command line, the board is what is being asked for.
+        form.focus = if seed.name.is_some() { BOARD } else { NAME };
         let mut screen = Self {
-            // Start on the first thing still missing: with the name already on
-            // the command line, the board is what is being asked for.
-            focus: if seed.name.is_some() { BOARD } else { NAME },
-            fields,
-            overlay: None,
-            error: None,
+            form,
             boards: boards.to_vec(),
             sprints: sprints.to_vec(),
             project: project.to_string(),
             offered_name: String::new(),
             now,
-            body_scroll: 0,
         };
         // Prefilled rather than left empty, so the name that will be created is
         // on screen: for the usual sprint after the last one it is also right,
@@ -165,17 +149,17 @@ impl SprintScreen {
 
     fn new_sprint(&self) -> NewSprint {
         NewSprint {
-            name: self.fields[NAME].text().trim().to_string(),
-            board: self.fields[BOARD].text().trim().to_string(),
-            start: self.fields[START].filled().map(str::to_string),
-            end: self.fields[END].filled().map(str::to_string),
-            goal: self.fields[GOAL].text().trim().to_string(),
+            name: self.form.fields[NAME].text().trim().to_string(),
+            board: self.form.fields[BOARD].text().trim().to_string(),
+            start: self.form.fields[START].filled().map(str::to_string),
+            end: self.form.fields[END].filled().map(str::to_string),
+            goal: self.form.fields[GOAL].text().trim().to_string(),
         }
     }
 
     /// The board the form is pointing at, when it names one this project has.
     fn board(&self) -> Option<&KnownBoard> {
-        let name = self.fields[BOARD].filled()?;
+        let name = self.form.fields[BOARD].filled()?;
         self.boards.iter().find(|b| b.name == name)
     }
 
@@ -193,12 +177,12 @@ impl SprintScreen {
     /// Put the name this board is due in the Name field, while it is still the
     /// one the form offered rather than one somebody typed.
     fn offer_name(&mut self) {
-        if self.fields[NAME].text() != self.offered_name {
+        if self.form.fields[NAME].text() != self.offered_name {
             return;
         }
         let names: Vec<&str> = self.on_board().iter().map(|s| s.name.as_str()).collect();
         let offered = next_name(&names).unwrap_or_default();
-        self.fields[NAME].set(Some(&offered));
+        self.form.fields[NAME].set(Some(&offered));
         self.offered_name = offered;
     }
 
@@ -209,7 +193,7 @@ impl SprintScreen {
     /// screen had already closed.
     fn submit(&mut self) -> Flow<NewSprint> {
         for (index, what) in [(NAME, "a name"), (BOARD, "a board")] {
-            if self.fields[index].filled().is_none() {
+            if self.form.fields[index].filled().is_none() {
                 return self.refuse(index, format!("{what} is required"));
             }
         }
@@ -219,14 +203,14 @@ impl SprintScreen {
         // spelled out so what goes to the server names one instant rather than
         // one per machine.
         for index in [START, END] {
-            let Some(typed) = self.fields[index].filled().map(str::to_string) else {
+            let Some(typed) = self.form.fields[index].filled().map(str::to_string) else {
                 continue;
             };
             match crate::api::model::parse_local_timestamp(&typed) {
                 None => return self.refuse(index, format!("`{typed}` is not a date")),
                 Some(t) if !crate::api::model::names_a_zone(&typed) => {
                     let spelled_out = crate::api::model::format_local_iso(&t);
-                    self.fields[index].set(Some(&spelled_out));
+                    self.form.fields[index].set(Some(&spelled_out));
                 }
                 Some(_) => {}
             }
@@ -249,12 +233,12 @@ impl SprintScreen {
 
     /// A date field as an instant, when it holds one.
     fn at(&self, index: usize) -> Option<DateTime<Utc>> {
-        crate::api::model::parse_local_timestamp(self.fields[index].filled()?)
+        crate::api::model::parse_local_timestamp(self.form.fields[index].filled()?)
     }
 
     fn refuse(&mut self, field: usize, complaint: String) -> Flow<NewSprint> {
-        self.focus = field;
-        self.error = Some(complaint);
+        self.form.focus = field;
+        self.form.error = Some(complaint);
         Flow::Continue
     }
 
@@ -262,124 +246,28 @@ impl SprintScreen {
     ///
     /// The offered name does not count: nobody typed it.
     fn dirty(&self) -> bool {
-        self.fields[NAME].text() != self.offered_name
+        self.form.fields[NAME].text() != self.offered_name
             || [START, END, GOAL]
                 .iter()
-                .any(|&i| self.fields[i].filled().is_some())
-    }
-
-    fn move_focus(&mut self, forward: bool) {
-        let len = self.fields.len();
-        self.focus = if forward {
-            (self.focus + 1) % len
-        } else {
-            (self.focus + len - 1) % len
-        };
-    }
-
-    fn open_list(&mut self) {
-        // The end dates worth offering depend on the start, which may have been
-        // typed since the screen opened, so they are built as the list opens.
-        if self.focus == END {
-            let from = self.at(START).unwrap_or(self.now);
-            self.fields[END].items = end_presets(from);
-        }
-        let field = &self.fields[self.focus];
-        if !field.openable() {
-            return;
-        }
-        let mut picker = Picker::new(field.label, field.items.clone(), field.optional);
-        if let Some(current) = field.filled() {
-            picker.select(current);
-        }
-        self.overlay = Some(Overlay::Pick {
-            field: self.focus,
-            picker,
-        });
-    }
-
-    fn handle_overlay(&mut self, key: KeyEvent, overlay: Overlay) -> Flow<NewSprint> {
-        match overlay {
-            // Any key closes help; it is a reference card, not a mode.
-            Overlay::Help => self.overlay = None,
-            Overlay::Discard => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => return Flow::Cancel,
-                _ => self.overlay = None,
-            },
-            Overlay::Pick { field, mut picker } => match picker.handle(key) {
-                picker::Outcome::Continue => {
-                    self.overlay = Some(Overlay::Pick { field, picker });
-                }
-                // No field here takes several values, so this cannot arrive.
-                picker::Outcome::Cancel | picker::Outcome::ChoseMany(_) => self.overlay = None,
-                picker::Outcome::Chose(value) => {
-                    self.fields[field].set(value.as_deref());
-                    self.error = None;
-                    self.overlay = None;
-                }
-            },
-        }
-        Flow::Continue
+                .any(|&i| self.form.fields[i].filled().is_some())
     }
 
     fn dispatch(&mut self, key: KeyEvent) -> Flow<NewSprint> {
-        if let Some(overlay) = self.overlay.take() {
-            return self.handle_overlay(key, overlay);
+        // The end dates worth offering depend on the start, which may have
+        // been typed since the screen opened, so they are built as the list
+        // is asked for.
+        let asks_for_list = key.code == KeyCode::F(2)
+            || (key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL));
+        if asks_for_list && self.form.overlay.is_none() && self.form.focus == END {
+            let from = self.at(START).unwrap_or(self.now);
+            self.form.fields[END].items = end_presets(from);
         }
-
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            // Always a way out, even mid-edit: this is the key people reach for.
-            KeyCode::Char('c') if ctrl => return Flow::Cancel,
-            KeyCode::Char('s') if ctrl => return self.submit(),
-            KeyCode::Char('l') if ctrl => {
-                self.open_list();
-                return Flow::Continue;
-            }
-            KeyCode::F(2) => {
-                self.open_list();
-                return Flow::Continue;
-            }
-            KeyCode::F(1) => {
-                self.overlay = Some(Overlay::Help);
-                return Flow::Continue;
-            }
-            KeyCode::Esc => {
-                return if self.dirty() {
-                    self.overlay = Some(Overlay::Discard);
-                    Flow::Continue
-                } else {
-                    Flow::Cancel
-                }
-            }
-            KeyCode::Tab => {
-                self.move_focus(true);
-                return Flow::Continue;
-            }
-            KeyCode::BackTab => {
-                self.move_focus(false);
-                return Flow::Continue;
-            }
-            // Enter finishes the form. The goal claims it first, below, because
-            // a paragraph needs a way to hold more than one line.
-            KeyCode::Enter if self.focus != GOAL => return self.submit(),
-            _ => {}
+        let dirty = self.dirty();
+        match self.form.handle(key, dirty) {
+            Step::Continue => Flow::Continue,
+            Step::Cancel => Flow::Cancel,
+            Step::Submit => self.submit(),
         }
-
-        if self.fields[self.focus].handle(key) {
-            // Any edit invalidates the complaint that produced the error.
-            self.error = None;
-            return Flow::Continue;
-        }
-
-        // Whatever the field did not want moves between fields, so the arrows
-        // work everywhere they are not already doing something.
-        match key.code {
-            KeyCode::Down => self.move_focus(true),
-            KeyCode::Up => self.move_focus(false),
-            _ => {}
-        }
-        Flow::Continue
     }
 }
 
@@ -399,10 +287,10 @@ impl Screen for SprintScreen {
     fn render(&mut self, frame: &mut Frame) {
         // Each field says what it points at, which is the check the user
         // actually wants: the right board, and the dates they meant.
-        self.fields[NAME].detail = self.name_detail();
-        self.fields[BOARD].detail = self.board_detail();
-        self.fields[START].detail = self.date_detail(START);
-        self.fields[END].detail = self.date_detail(END);
+        self.form.fields[NAME].detail = self.name_detail();
+        self.form.fields[BOARD].detail = self.board_detail();
+        self.form.fields[START].detail = self.date_detail(START);
+        self.form.fields[END].detail = self.date_detail(END);
 
         let card = Card {
             title: "New sprint",
@@ -412,15 +300,16 @@ impl Screen for SprintScreen {
             status: self.status_line(),
             keys: self.key_hints(),
         };
-        let focus = self.overlay.is_none().then_some(self.focus);
-        let area = form::render(frame, &card, &mut self.fields, focus, &mut self.body_scroll);
-
-        match &mut self.overlay {
-            Some(Overlay::Pick { picker, .. }) => form::render_picker(frame, area, picker),
-            Some(Overlay::Help) => form::render_help(frame, area, HELP),
-            Some(Overlay::Discard) => form::render_confirm(frame, area, "Discard this sprint?"),
-            None => {}
-        }
+        let focus = self.form.visible_focus();
+        let area = form::render(
+            frame,
+            &card,
+            &mut self.form.fields,
+            focus,
+            &mut self.form.body_scroll,
+        );
+        self.form
+            .render_overlay(frame, area, HELP, "Discard this sprint?");
     }
 }
 
@@ -448,7 +337,7 @@ impl SprintScreen {
     /// an issue's `sprint:` by name and two sprints called the same thing make
     /// that ambiguous.
     fn name_taken(&self) -> bool {
-        let Some(name) = self.fields[NAME].filled() else {
+        let Some(name) = self.form.fields[NAME].filled() else {
             return false;
         };
         self.on_board()
@@ -479,7 +368,7 @@ impl SprintScreen {
     /// A date in the words that let it be checked: nobody reads `2026-09-07`
     /// for whether it is a Monday.
     fn date_detail(&self, index: usize) -> Option<String> {
-        let typed = self.fields[index].filled()?;
+        let typed = self.form.fields[index].filled()?;
         let Some(when) = crate::api::model::parse_local_timestamp(typed) else {
             return Some("not a date".to_string());
         };
@@ -493,11 +382,13 @@ impl SprintScreen {
     /// Whichever is most useful right now: a complaint, then what the form
     /// would create, then help for the field under the cursor.
     fn status_line(&self) -> Line<'static> {
-        if let Some(error) = &self.error {
+        if let Some(error) = &self.form.error {
             return Line::from(Span::styled(format!("✗ {error}"), theme::error()));
         }
-        if let (Some(name), Some(board)) = (self.fields[NAME].filled(), self.fields[BOARD].filled())
-        {
+        if let (Some(name), Some(board)) = (
+            self.form.fields[NAME].filled(),
+            self.form.fields[BOARD].filled(),
+        ) {
             let mut line = vec![
                 Span::styled("creates ", theme::dim()),
                 Span::styled(name.to_string(), theme::value()),
@@ -513,23 +404,23 @@ impl SprintScreen {
             return Line::from(line);
         }
         Line::from(Span::styled(
-            self.fields[self.focus].hint.clone(),
+            self.form.fields[self.form.focus].hint.clone(),
             theme::dim(),
         ))
     }
 
     fn key_hints(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = vec![("tab", "field")];
-        if self.focus == GOAL {
+        if self.form.focus == GOAL {
             keys.push(("^s", "create"));
         } else {
             keys.push(("⏎", "create"));
         }
         // The end dates are built when the list opens, so this field offers one
         // even before it has any items to show.
-        if self.fields[self.focus].openable() || self.focus == END {
+        if self.form.fields[self.form.focus].openable() || self.form.focus == END {
             keys.push(("^l", "list"));
-        } else if matches!(self.fields[self.focus].value, Value::Choice(_)) {
+        } else if matches!(self.form.fields[self.form.focus].value, Value::Choice(_)) {
             keys.push(("←→", "change"));
         }
         keys.push(("esc", "cancel"));
@@ -601,6 +492,9 @@ fn at_nine(when: DateTime<Utc>) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::controller::keys::{ctrl, key, typed};
+    #[allow(unused_imports)]
+    use crate::tui::controller::Overlay;
     use crate::tui::render_lines;
 
     fn now() -> DateTime<Utc> {
@@ -654,20 +548,6 @@ mod tests {
         SprintScreen::new("PROJ", &boards(), &sprints(), now(), &Seed::default())
     }
 
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-    }
-
-    fn typed(screen: &mut SprintScreen, text: &str) {
-        for c in text.chars() {
-            screen.handle(key(KeyCode::Char(c)));
-        }
-    }
-
     fn done(flow: Flow<NewSprint>) -> NewSprint {
         match flow {
             Flow::Done(sprint) => sprint,
@@ -680,9 +560,9 @@ mod tests {
     #[test]
     fn the_form_opens_on_the_name_the_board_is_due() {
         let screen = screen();
-        assert_eq!(screen.focus, NAME);
-        assert_eq!(screen.fields[NAME].text(), "Sprint 43");
-        assert_eq!(screen.fields[BOARD].text(), "Platform Board");
+        assert_eq!(screen.form.focus, NAME);
+        assert_eq!(screen.form.fields[NAME].text(), "Sprint 43");
+        assert_eq!(screen.form.fields[BOARD].text(), "Platform Board");
     }
 
     /// Which board it is decides what the next sprint is called, so changing
@@ -690,26 +570,26 @@ mod tests {
     #[test]
     fn changing_the_board_renumbers_the_offered_name() {
         let mut screen = screen();
-        screen.focus = BOARD;
+        screen.form.focus = BOARD;
         screen.handle(key(KeyCode::Right));
-        assert_eq!(screen.fields[BOARD].text(), "Support Board");
-        assert_eq!(screen.fields[NAME].text(), "Support 8");
+        assert_eq!(screen.form.fields[BOARD].text(), "Support Board");
+        assert_eq!(screen.form.fields[NAME].text(), "Support 8");
 
         // Once it has been typed over it is the user's, not the form's.
-        screen.focus = NAME;
-        screen.fields[NAME].set(Some("Hardening week"));
-        screen.focus = BOARD;
+        screen.form.focus = NAME;
+        screen.form.fields[NAME].set(Some("Hardening week"));
+        screen.form.focus = BOARD;
         screen.handle(key(KeyCode::Left));
-        assert_eq!(screen.fields[NAME].text(), "Hardening week");
+        assert_eq!(screen.form.fields[NAME].text(), "Hardening week");
     }
 
     #[test]
     fn a_whole_sprint_can_be_typed_from_an_empty_form() {
         let mut screen = screen();
-        screen.fields[NAME].set(Some("Sprint 43"));
-        screen.fields[START].set(Some("2026-09-01T09:00:00Z"));
-        screen.fields[END].set(Some("2026-09-15T09:00:00Z"));
-        screen.focus = GOAL;
+        screen.form.fields[NAME].set(Some("Sprint 43"));
+        screen.form.fields[START].set(Some("2026-09-01T09:00:00Z"));
+        screen.form.fields[END].set(Some("2026-09-15T09:00:00Z"));
+        screen.form.focus = GOAL;
         typed(&mut screen, "Ship SSO.");
 
         // The goal keeps Enter for itself, so ^s is the way out from it.
@@ -731,8 +611,8 @@ mod tests {
             ..Seed::default()
         };
         let mut screen = SprintScreen::new("PROJ", &boards(), &sprints(), now(), &seed);
-        assert_eq!(screen.focus, BOARD);
-        assert_eq!(screen.fields[NAME].text(), "Hardening week");
+        assert_eq!(screen.form.focus, BOARD);
+        assert_eq!(screen.form.fields[NAME].text(), "Hardening week");
 
         let sprint = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(sprint.name, "Hardening week");
@@ -746,36 +626,39 @@ mod tests {
     fn a_bad_value_is_refused_with_the_cursor_on_the_field_that_caused_it() {
         let mut screen = screen();
 
-        screen.fields[NAME].set(None);
+        screen.form.fields[NAME].set(None);
         assert!(matches!(screen.handle(key(KeyCode::Enter)), Flow::Continue));
-        assert_eq!(screen.focus, NAME);
-        assert_eq!(screen.error.as_deref(), Some("a name is required"));
+        assert_eq!(screen.form.focus, NAME);
+        assert_eq!(screen.form.error.as_deref(), Some("a name is required"));
 
-        screen.fields[NAME].set(Some("Sprint 43"));
-        screen.fields[END].set(Some("tuesday"));
+        screen.form.fields[NAME].set(Some("Sprint 43"));
+        screen.form.fields[END].set(Some("tuesday"));
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.focus, END);
-        assert_eq!(screen.error.as_deref(), Some("`tuesday` is not a date"));
+        assert_eq!(screen.form.focus, END);
+        assert_eq!(
+            screen.form.error.as_deref(),
+            Some("`tuesday` is not a date")
+        );
 
         // Jira takes both dates or neither, so an end on its own is asked about
         // rather than sent and silently dropped.
-        screen.fields[END].set(Some("2026-09-15"));
+        screen.form.fields[END].set(Some("2026-09-15"));
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.focus, START);
+        assert_eq!(screen.form.focus, START);
         assert_eq!(
-            screen.error.as_deref(),
+            screen.form.error.as_deref(),
             Some("an end date needs a start date")
         );
 
-        screen.fields[START].set(Some("2026-09-22"));
+        screen.form.fields[START].set(Some("2026-09-22"));
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.focus, END);
+        assert_eq!(screen.form.focus, END);
         assert_eq!(
-            screen.error.as_deref(),
+            screen.form.error.as_deref(),
             Some("the sprint ends before it starts")
         );
 
-        screen.fields[START].set(Some("2026-09-01"));
+        screen.form.fields[START].set(Some("2026-09-01"));
         let sprint = done(screen.handle(key(KeyCode::Enter)));
         // A date with no zone is read in the reader's own and written back with
         // the offset spelled out, so what goes to Jira names one instant.
@@ -785,10 +668,10 @@ mod tests {
         );
 
         // Typing clears the complaint rather than leaving it up to argue with.
-        screen.error = Some("stale".into());
-        screen.focus = NAME;
+        screen.form.error = Some("stale".into());
+        screen.form.focus = NAME;
         typed(&mut screen, "x");
-        assert_eq!(screen.error, None);
+        assert_eq!(screen.form.error, None);
     }
 
     /// Two sprints with the same name make an issue's `sprint:` ambiguous, so
@@ -796,21 +679,21 @@ mod tests {
     #[test]
     fn a_name_the_board_already_uses_is_pointed_out_rather_than_refused() {
         let mut screen = screen();
-        screen.fields[NAME].set(Some("Sprint 42"));
+        screen.form.fields[NAME].set(Some("Sprint 42"));
         assert_eq!(
             screen.name_detail().as_deref(),
             Some("this board already has one by that name")
         );
         assert_eq!(done(screen.handle(key(KeyCode::Enter))).name, "Sprint 42");
 
-        screen.fields[NAME].set(Some("Support 7"));
+        screen.form.fields[NAME].set(Some("Support 7"));
         assert_eq!(screen.name_detail(), None, "that one is on the other board");
     }
 
     #[test]
     fn the_start_list_offers_the_days_a_sprint_starts_on() {
         let mut screen = screen();
-        screen.focus = START;
+        screen.form.focus = START;
         screen.handle(ctrl('l'));
         let lines = render_lines(&mut screen, 80, 24).join("\n");
         assert!(lines.contains("next Monday"), "{lines}");
@@ -818,7 +701,7 @@ mod tests {
         // A date is optional, so the list leads with the row that clears it.
         screen.handle(key(KeyCode::Down));
         screen.handle(key(KeyCode::Enter));
-        assert_eq!(screen.fields[START].text(), shown(now()));
+        assert_eq!(screen.form.fields[START].text(), shown(now()));
     }
 
     /// The end dates are the ones that make sense for the start on screen, so
@@ -826,8 +709,8 @@ mod tests {
     #[test]
     fn the_end_list_counts_from_whatever_the_start_says() {
         let mut screen = screen();
-        screen.fields[START].set(Some("2026-09-01T09:00:00Z"));
-        screen.focus = END;
+        screen.form.fields[START].set(Some("2026-09-01T09:00:00Z"));
+        screen.form.focus = END;
         screen.handle(ctrl('l'));
         let lines = render_lines(&mut screen, 80, 24).join("\n");
         assert!(lines.contains("two weeks"), "{lines}");
@@ -839,7 +722,7 @@ mod tests {
         screen.handle(key(KeyCode::Enter));
         let expected = crate::api::model::parse_timestamp("2026-09-01T09:00:00Z").unwrap()
             + Duration::weeks(2);
-        assert_eq!(screen.fields[END].text(), shown(expected));
+        assert_eq!(screen.form.fields[END].text(), shown(expected));
     }
 
     #[test]
@@ -850,9 +733,9 @@ mod tests {
 
         typed(&mut screen, "x");
         assert!(matches!(screen.handle(key(KeyCode::Esc)), Flow::Continue));
-        assert!(matches!(screen.overlay, Some(Overlay::Discard)));
+        assert!(matches!(screen.form.overlay, Some(Overlay::Discard)));
         screen.handle(key(KeyCode::Char('n')));
-        assert!(screen.overlay.is_none());
+        assert!(screen.form.overlay.is_none());
 
         screen.handle(key(KeyCode::Esc));
         assert!(matches!(
@@ -871,8 +754,8 @@ mod tests {
     #[test]
     fn the_screen_draws_its_fields_and_what_it_would_create() {
         let mut screen = screen();
-        screen.fields[START].set(Some("2026-09-01T09:00:00Z"));
-        screen.fields[END].set(Some("2026-09-15T09:00:00Z"));
+        screen.form.fields[START].set(Some("2026-09-01T09:00:00Z"));
+        screen.form.fields[END].set(Some("2026-09-15T09:00:00Z"));
         let lines = render_lines(&mut screen, 90, 24).join("\n");
 
         assert!(lines.contains("New sprint"), "{lines}");
@@ -894,9 +777,9 @@ mod tests {
     #[test]
     fn with_no_boards_to_choose_from_the_board_is_typed() {
         let mut screen = SprintScreen::new("PROJ", &[], &[], now(), &Seed::default());
-        assert_eq!(screen.fields[NAME].text(), "");
-        screen.fields[NAME].set(Some("Sprint 1"));
-        screen.fields[BOARD].set(Some("12"));
+        assert_eq!(screen.form.fields[NAME].text(), "");
+        screen.form.fields[NAME].set(Some("Sprint 1"));
+        screen.form.fields[BOARD].set(Some("12"));
         let sprint = done(screen.handle(key(KeyCode::Enter)));
         assert_eq!(sprint.board, "12");
     }
@@ -928,7 +811,7 @@ mod tests {
         assert!(lines.contains("Keys"), "{lines}");
         assert!(lines.contains("create the sprint"), "{lines}");
         screen.handle(key(KeyCode::Char('q')));
-        assert!(screen.overlay.is_none());
+        assert!(screen.form.overlay.is_none());
     }
 
     /// Print the screen, its lists and its help, for looking at:
@@ -937,16 +820,16 @@ mod tests {
     #[ignore]
     fn preview() {
         let mut s = screen();
-        s.fields[START].set(Some("2026-09-01T09:00:00Z"));
-        s.fields[END].set(Some("2026-09-15T09:00:00Z"));
-        s.focus = GOAL;
+        s.form.fields[START].set(Some("2026-09-01T09:00:00Z"));
+        s.form.fields[END].set(Some("2026-09-15T09:00:00Z"));
+        s.form.focus = GOAL;
         typed(&mut s, "Get SSO in front of the pilot customers.");
-        s.focus = NAME;
+        s.form.focus = NAME;
         for l in render_lines(&mut s, 90, 24) {
             println!("|{l}");
         }
         println!();
-        s.focus = END;
+        s.form.focus = END;
         s.handle(ctrl('l'));
         for l in render_lines(&mut s, 90, 24) {
             println!("|{l}");
@@ -967,7 +850,7 @@ mod tests {
             screen.handle(key(KeyCode::F(1)));
             render_lines(&mut screen, w, h);
             screen.handle(key(KeyCode::Esc));
-            screen.focus = END;
+            screen.form.focus = END;
             screen.handle(ctrl('l'));
             render_lines(&mut screen, w, h);
         }

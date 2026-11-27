@@ -693,6 +693,7 @@ impl ReportScreen<'_> {
 mod tests {
     use super::*;
     use crate::doc::{IssueDoc, WorklogEntry, WorklogId};
+    use crate::tui::controller::keys::{key, typed};
     use crate::tui::render_lines;
 
     fn issue(key: &str, summary: &str, worklogs: Vec<WorklogEntry>) -> IssueDoc {
@@ -749,16 +750,6 @@ mod tests {
             project: Some("PROJ".into()),
             last_fetch: None,
             last_fetch_age_seconds: None,
-        }
-    }
-
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    fn typed(screen: &mut ReportScreen, keys: &str) {
-        for c in keys.chars() {
-            screen.handle(key(KeyCode::Char(c)));
         }
     }
 

@@ -335,14 +335,7 @@ fn fill(value: &str, start: usize, limit: usize, width: usize) -> (usize, Option
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-    }
+    use crate::tui::controller::keys::{ctrl, key};
 
     #[test]
     fn typing_and_erasing_track_the_caret() {

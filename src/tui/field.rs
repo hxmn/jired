@@ -110,6 +110,9 @@ pub struct Field {
     /// `@[Ilya A](5b10a2)`, an id nobody can type — this is what makes the
     /// keyboard usable at all without opening the list.
     pub suggest: bool,
+    /// Whether a value picked from the list is added to a comma-separated
+    /// list rather than replacing it: picking two labels gives two.
+    pub accumulate: bool,
 }
 
 impl Field {
@@ -126,6 +129,7 @@ impl Field {
             changed: false,
             multiple: false,
             suggest: false,
+            accumulate: false,
         }
     }
 
@@ -142,6 +146,7 @@ impl Field {
             changed: false,
             multiple: false,
             suggest: false,
+            accumulate: false,
         }
     }
 
@@ -159,6 +164,7 @@ impl Field {
             changed: false,
             multiple: false,
             suggest: false,
+            accumulate: false,
         }
     }
 
@@ -180,6 +186,12 @@ impl Field {
     /// Hold several of the field's items rather than one of them.
     pub fn multiple(mut self) -> Self {
         self.multiple = true;
+        self
+    }
+
+    /// Add a picked item to the comma-separated values already there.
+    pub fn accumulating(mut self) -> Self {
+        self.accumulate = true;
         self
     }
 
@@ -304,11 +316,8 @@ impl Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyModifiers};
-
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
+    use crate::tui::controller::keys::key;
+    use crossterm::event::KeyCode;
 
     #[test]
     fn a_required_choice_starts_on_its_first_option_and_cycles() {
