@@ -106,6 +106,18 @@ fn leaf_block() -> impl Strategy<Value = Block> {
     prop_oneof![
         6 => inlines().prop_map(Block::Paragraph),
         2 => (1u8..=6, inlines()).prop_map(|(level, content)| Block::Heading { level, content }),
+        // Named like the issue file's own sections, which is what a Jira
+        // template's headings often are.
+        1 => (
+            1u8..=3,
+            prop::sample::select(vec![
+                "Description", "Checklist", "Children", "Comments", "Worklogs", "Attachments",
+            ]),
+        )
+            .prop_map(|(level, name)| Block::Heading {
+                level,
+                content: vec![Inline::Text(name.to_string())],
+            }),
         2 => (prop::option::of("[a-z]{2,6}"), code())
             .prop_map(|(language, code)| Block::CodeBlock { language, code }),
         1 => Just(Block::Rule),

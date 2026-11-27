@@ -378,6 +378,14 @@ fn render_block(block: &Block, store: &RawStore, ctx: Ctx<'_>) -> Option<String>
             let hashes = "#".repeat((*level).clamp(1, 6) as usize);
             let mut body = render_inlines(content, store, ctx.one_line());
             protect_trailing_hash(&mut body);
+            // The issue file ends a description or a comment at a `## ` heading
+            // named like one of its own sections, so a Jira heading called
+            // `Attachments` would cut the text there and the next push would
+            // send what was left. A closing `##` is not part of the heading's
+            // text in Markdown, but it is to the file's reader.
+            if *level == 2 && crate::doc::is_file_section(&body) {
+                body.push_str(" ##");
+            }
             if body.is_empty() {
                 hashes
             } else {
@@ -1872,6 +1880,25 @@ mod tests {
                 "{md}"
             );
         }
+    }
+
+    /// The file reader ends rich text at a `## ` named like one of its
+    /// sections; a closing `##` keeps Jira's own heading of that name in the
+    /// text, and Markdown reads it as the same heading.
+    #[test]
+    fn a_heading_named_like_a_file_section_is_written_with_a_closing_sequence() {
+        let store = RawStore::new();
+        let doc = Document::new(vec![Block::Heading {
+            level: 2,
+            content: vec![Inline::Text("Attachments".into())],
+        }]);
+        assert_eq!(round_trip(&doc, &store).trim(), "## Attachments ##");
+
+        let doc = Document::new(vec![Block::Heading {
+            level: 3,
+            content: vec![Inline::Text("Attachments".into())],
+        }]);
+        assert_eq!(round_trip(&doc, &store).trim(), "### Attachments");
     }
 
     #[test]

@@ -655,7 +655,9 @@ pub fn render() -> String {
          `## Worklogs`, `## Attachments`. Keep the section order and heading \
          text intact. A description, comment or worklog can hold headings of its \
          own — Jira's `h2.` is a `## ` here — and they are part of that text: \
-         inside one, only those section names end it.\n\n",
+         inside one, only those section names end it. A heading of the text's own \
+         that has one of those names is written with a closing `##` \
+         (`## Attachments ##`); keep it, or the text ends there.\n\n",
     );
     // Rendered from the same constants the parser enforces. A hand-copied list
     // silently becomes a lie the first time a field is added, and an agent that

@@ -71,9 +71,11 @@ Frontmatter `summary` is the source of truth over the `#` heading (D6).
 Rich text keeps its own headings at their own levels — Jira's `h2.` is `## ` in
 the file too. Inside `## Description`, and inside a comment or a worklog body,
 only one of the section names above ends the text; anywhere else a `## ` heading
-opens a section. The +2 demotion this plan first called for was never built, and
-is not wanted: it cannot represent h5 and h6, and without it a file reads as the
-issue does.
+opens a section. A level-2 heading of the text's own with one of those names is
+written with a closing sequence, `## Attachments ##`: Markdown reads the same
+heading, and the file reader does not take it for a section. The +2 demotion
+this plan first called for was never built, and is not wanted: it cannot
+represent h5 and h6, and without it a file reads as the issue does.
 
 ## Conversion pipeline
 

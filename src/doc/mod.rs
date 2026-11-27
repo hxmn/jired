@@ -394,7 +394,7 @@ impl Sections {
 }
 
 /// The sections jired renders, by name.
-fn is_file_section(name: &str) -> bool {
+pub(crate) fn is_file_section(name: &str) -> bool {
     matches!(
         name,
         SECTION_DESCRIPTION
