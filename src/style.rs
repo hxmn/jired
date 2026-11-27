@@ -26,7 +26,7 @@ static STDERR_COLOR: AtomicU8 = AtomicU8::new(0);
 
 /// Decide colour for both streams. Called once, from `cli::run`.
 pub fn init(choice: ColorChoice) {
-    use is_terminal::IsTerminal;
+    use std::io::IsTerminal;
     let (out, err) = match choice {
         ColorChoice::Always => (true, true),
         ColorChoice::Never => (false, false),

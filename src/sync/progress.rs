@@ -46,7 +46,7 @@ impl Progress {
     }
 
     fn visible(out: Out) -> bool {
-        use is_terminal::IsTerminal;
+        use std::io::IsTerminal;
         !out.json && !out.quiet && std::io::stderr().is_terminal()
     }
 

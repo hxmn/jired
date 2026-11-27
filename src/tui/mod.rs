@@ -82,7 +82,7 @@ pub trait Screen {
 /// terminal; `TERM=dumb` and `NO_COLOR`-style opt-outs are honoured because a
 /// caller that cannot render escape sequences is better served by prompts.
 pub fn available() -> bool {
-    use is_terminal::IsTerminal;
+    use std::io::IsTerminal;
     if std::env::var_os("JIRED_NO_TUI").is_some_and(|v| !v.is_empty()) {
         return false;
     }

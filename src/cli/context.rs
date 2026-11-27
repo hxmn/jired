@@ -210,6 +210,6 @@ impl Context {
 
 /// Interaction requires a terminal on both ends: a piped stdin means a script.
 pub fn is_interactive() -> bool {
-    use is_terminal::IsTerminal;
+    use std::io::IsTerminal;
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }

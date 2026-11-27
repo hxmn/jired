@@ -208,7 +208,7 @@ pub fn run(g: &GlobalArgs, args: &ListArgs, out: Out) -> Result<ExitCode> {
 /// on the other end of the pipe. Neither caller should have to say which they
 /// are, and the padding that helps the first breaks the second.
 pub(crate) fn tab_separated() -> bool {
-    use is_terminal::IsTerminal;
+    use std::io::IsTerminal;
     !std::io::stdout().is_terminal()
 }
 
