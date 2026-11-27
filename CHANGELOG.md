@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.38.1] — 2026-11-27
+
+### Fixed
+
+- **Dependencies with security fixes.** rustls, tokio, url and cookie are at
+  the releases that fix their published advisories, and the bundled SQLite
+  is the one that fixes CVE-2026-119375.
+
 ## [0.38.0] — 2026-11-27
 
 ### Breaking
