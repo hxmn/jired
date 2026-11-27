@@ -8,8 +8,11 @@
 
 use std::path::PathBuf;
 
+/// A file of the repository, with Windows' checkout line endings undone.
 fn read(name: &str) -> String {
-    std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap()
+    std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name))
+        .unwrap()
+        .replace("\r\n", "\n")
 }
 
 /// The `version = "…"` of the package, from `Cargo.toml`.
