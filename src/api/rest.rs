@@ -727,7 +727,7 @@ impl JiraApi for Rest {
 
         let v = self
             .http
-            .post_json(&self.url(&routes::SEARCH, &[], &[]), body)
+            .post_json_repeatable(&self.url(&routes::SEARCH, &[], &[]), body)
             .await?;
 
         let mut issues = v
@@ -949,7 +949,7 @@ impl JiraApi for Rest {
             None => self.url(&routes::BACKLOG_ISSUES, &[], &[]),
         };
         self.http
-            .post_json(&path, json!({ "issues": keys }))
+            .post_json_repeatable(&path, json!({ "issues": keys }))
             .await
             .map(|_| ())
     }
@@ -1301,7 +1301,7 @@ impl JiraApi for Rest {
     /// with a field in it, which is what every other write here sends.
     async fn watch(&self, key: &str, user_id: &str) -> Result<()> {
         self.http
-            .post_json(
+            .post_json_repeatable(
                 &self.url(&routes::ADD_WATCHER, &[("issueIdOrKey", key)], &[]),
                 json!(user_id),
             )

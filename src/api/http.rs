@@ -187,7 +187,20 @@ impl HttpClient {
         path: &str,
         body: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        self.request_json(Method::POST, path, Some(body)).await
+        self.send_json(Method::POST, path, Some(body), Repeat::Unsafe)
+            .await
+    }
+
+    /// A POST that reads, or that sets something to a state rather than adding
+    /// to it — a search, a move to a sprint, a watch — so sending it twice
+    /// does what sending it once does, and a lost answer can be asked again.
+    pub async fn post_json_repeatable(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.send_json(Method::POST, path, Some(body), Repeat::Safe)
+            .await
     }
 
     pub async fn put_json(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value> {
@@ -205,6 +218,21 @@ impl HttpClient {
         method: Method,
         path: &str,
         body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let repeat = if method == Method::POST {
+            Repeat::Unsafe
+        } else {
+            Repeat::Safe
+        };
+        self.send_json(method, path, body, repeat).await
+    }
+
+    async fn send_json(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        repeat: Repeat,
     ) -> Result<serde_json::Value> {
         let url = self.url(path);
         let mut attempt = 0u32;
@@ -245,7 +273,7 @@ impl HttpClient {
                         });
                     }
 
-                    if should_retry_status(status) && attempt < MAX_RETRIES {
+                    if repeat.may_retry_status(status) && attempt < MAX_RETRIES {
                         let wait = retry_after(&resp).unwrap_or_else(|| backoff(attempt));
                         tracing::warn!(
                             "{method} {path} returned {status}; retrying in {:.1}s \
@@ -257,10 +285,15 @@ impl HttpClient {
                         attempt += 1;
                         continue;
                     }
-                    return Err(self.status_error(status, &method, path, resp).await);
+                    let err = self.status_error(status, &method, path, resp).await;
+                    return Err(if should_retry_status(status) {
+                        repeat.unsettled(err)
+                    } else {
+                        err
+                    });
                 }
                 Err(e) => {
-                    if (e.is_timeout() || e.is_connect()) && attempt < MAX_RETRIES {
+                    if repeat.may_retry_error(&e) && attempt < MAX_RETRIES {
                         let wait = backoff(attempt);
                         tracing::warn!(
                             "{method} {path}: {e}; retrying in {:.1}s",
@@ -270,7 +303,12 @@ impl HttpClient {
                         attempt += 1;
                         continue;
                     }
-                    return Err(network_error(&e, &method, path));
+                    let err = network_error(&e, &method, path);
+                    return Err(if e.is_timeout() {
+                        repeat.unsettled(err)
+                    } else {
+                        err
+                    });
                 }
             }
         }
@@ -581,6 +619,45 @@ fn form_encode(fields: &[(String, String)]) -> String {
         .join("&")
 }
 
+/// Whether a request may be sent again when its answer is lost.
+///
+/// A POST that creates something — an issue, a comment, a worklog — may
+/// already have been carried out when it times out or a proxy answers 502:
+/// sending it again made a second issue, booked the time twice. Such a
+/// request is retried only when the server cannot have acted on it: the
+/// connection never opened, or Jira answered 429 before doing anything.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Repeat {
+    Safe,
+    Unsafe,
+}
+
+impl Repeat {
+    fn may_retry_status(self, status: StatusCode) -> bool {
+        match self {
+            Repeat::Safe => should_retry_status(status),
+            Repeat::Unsafe => status == StatusCode::TOO_MANY_REQUESTS,
+        }
+    }
+
+    fn may_retry_error(self, e: &reqwest::Error) -> bool {
+        e.is_connect() || (self == Repeat::Safe && e.is_timeout())
+    }
+
+    /// The error for a failure that leaves it open whether the server acted.
+    fn unsettled(self, err: JiredError) -> JiredError {
+        match self {
+            Repeat::Safe => err,
+            Repeat::Unsafe => err
+                .with_hint(
+                    "the server may have done it anyway: check the issue (`jired pull`) \
+                     before trying again, or it may happen twice",
+                )
+                .with_detail("outcome", "unknown"),
+        }
+    }
+}
+
 fn should_retry_status(status: StatusCode) -> bool {
     status == StatusCode::TOO_MANY_REQUESTS || matches!(status.as_u16(), 502..=504)
 }
@@ -598,8 +675,9 @@ fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
 
 fn backoff(attempt: u32) -> Duration {
     let base = 2f64.powi(attempt as i32).min(30.0);
-    // Jitter avoids synchronized retries when several issues fail at once.
-    let jitter = (attempt as f64 * 0.37).fract() * 0.5;
+    // Jitter keeps clients that failed together from retrying together, which
+    // a fixed function of the attempt number cannot do.
+    let jitter = rand::random::<f64>() * 0.5;
     Duration::from_secs_f64(base * (1.0 + jitter))
 }
 
@@ -764,6 +842,108 @@ mod tests {
             start.elapsed() >= Duration::from_millis(300),
             "expected throttling, took {:?}",
             start.elapsed()
+        );
+    }
+
+    /// A server on a loopback port that answers every request with `reply`
+    /// and counts them.
+    fn counting_server(reply: &'static str) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = count.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        (url, count)
+    }
+
+    fn client(url: String) -> HttpClient {
+        HttpClient::new(Connection {
+            base_url: url,
+            deployment: Deployment::DataCenter,
+            auth_kind: AuthKind::Pat,
+            identity: None,
+            token: "t".to_string().into(),
+            tls: TlsOptions::default(),
+        })
+        .unwrap()
+    }
+
+    const BAD_GATEWAY: &str = "HTTP/1.1 502 Bad Gateway\r\nRetry-After: 0\r\n\
+                               Content-Length: 0\r\nConnection: close\r\n\r\n";
+
+    /// A proxy's 502 does not say whether Jira made the comment behind it, so
+    /// a POST that adds something is sent once and the error says the outcome
+    /// is unknown; sending it again posted the comment twice.
+    #[tokio::test]
+    async fn a_post_that_adds_something_is_not_sent_twice() {
+        let (url, count) = counting_server(BAD_GATEWAY);
+        let err = client(url)
+            .post_json(
+                "/rest/api/2/issue/A-1/comment",
+                serde_json::json!({"body": "x"}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(err.to_json()["details"]["outcome"], "unknown", "{err:?}");
+    }
+
+    /// Asking again is harmless for a read, so a GET, and a POST that only
+    /// searches, still ride out a proxy's 502.
+    #[tokio::test]
+    async fn a_read_is_retried_through_a_bad_gateway() {
+        let (url, count) = counting_server(BAD_GATEWAY);
+        let http = client(url);
+        assert!(http.get_json("/rest/api/2/myself").await.is_err());
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::SeqCst),
+            1 + MAX_RETRIES as usize
+        );
+
+        assert!(http
+            .post_json_repeatable("/rest/api/2/search", serde_json::json!({}))
+            .await
+            .is_err());
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::SeqCst),
+            2 * (1 + MAX_RETRIES as usize)
+        );
+    }
+
+    /// A POST answered 429 was refused before Jira did anything with it.
+    #[tokio::test]
+    async fn a_post_refused_for_throttling_is_sent_again() {
+        let (url, count) = counting_server(
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        assert!(client(url)
+            .post_json("/rest/api/2/issue", serde_json::json!({}))
+            .await
+            .is_err());
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::SeqCst),
+            1 + MAX_RETRIES as usize
         );
     }
 }
