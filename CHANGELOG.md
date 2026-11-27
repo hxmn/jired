@@ -8,6 +8,22 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.32.0] — 2026-11-27
+
+### Breaking
+
+- **`report time` counts days in your timezone.** Its columns were UTC days,
+  so an evening's work west of UTC showed under the next day. `since` and
+  `until` in `--json` are now your local midnights, still written as UTC
+  instants.
+
+### Fixed
+
+- **`report time` counts booked time as Jira does.** An entry was read from
+  its text with an 8-hour day, so on an instance with a shorter day `1d 30m`
+  was counted too long; Jira's own seconds are used now. Time not pushed yet
+  is still read from its text, and `1.5h` is understood.
+
 ## [0.31.8] — 2026-11-27
 
 ### Fixed
