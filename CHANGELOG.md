@@ -8,6 +8,15 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.7] — 2026-11-27
+
+### Changed
+
+- The exit-code table in the agent docs `jired init-agents` writes is
+  generated from jired's own definitions; code 10 now reads "or a change it
+  accepted and did not apply", as the README does. `jired status` reports
+  existing docs as stale until `jired init-agents` rewrites them.
+
 ## [0.39.6] — 2026-11-27
 
 ### Changed
