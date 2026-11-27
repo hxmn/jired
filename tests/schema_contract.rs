@@ -296,8 +296,9 @@ fn command_output_matches_its_published_schema() {
         // A warning parked beside the payload's own: `status` lists objects,
         // and a parked string among them broke its schema.
         vec!["status", "--insecure"],
+        // `config path` and not `--global` too: Windows, with the
+        // environment cleared, has no user config directory to name.
         vec!["config", "path"],
-        vec!["config", "path", "--global"],
     ];
 
     let mut checked = 0;
