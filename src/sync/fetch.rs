@@ -138,21 +138,26 @@ pub fn run_with(
         tracing::debug!("page: {fetched} of {} issues", page.total);
         progress.set_message(format!("fetched {fetched} of {} issue(s)", page.total));
         let links = web_links(ctx, engine, client, args, &page.issues)?;
-        for (issue, links) in page.issues.into_iter().zip(links) {
-            newest = Some(newest.map_or(issue.updated, |n| n.max(issue.updated)));
-            let key = issue.key.clone();
-            // Once each: an issue edited during the walk moves to its end,
-            // and is met again there.
-            if store(engine, issue, links)? && !changed_keys.contains(&key) {
-                changed_keys.push(key.clone());
+        let resumable = scope_is_whole_project && args.updated_since.is_none();
+        // One commit a page, its issues and how far the walk got together:
+        // interrupted after this, the next fetch asks only for what is newer
+        // than the newest stored.
+        engine.state.write(|state| {
+            for (issue, links) in page.issues.into_iter().zip(links) {
+                newest = Some(newest.map_or(issue.updated, |n| n.max(issue.updated)));
+                let key = issue.key.clone();
+                // Once each: an issue edited during the walk moves to its end,
+                // and is met again there.
+                if store(engine, issue, links)? && !changed_keys.contains(&key) {
+                    changed_keys.push(key.clone());
+                }
+                present.insert(key);
             }
-            present.insert(key);
-        }
-        // Committed page by page: interrupted after this, the next fetch asks
-        // only for what is newer than the newest stored.
-        if scope_is_whole_project && args.updated_since.is_none() {
-            engine.state.set_fetch_resume_at(newest.as_ref())?;
-        }
+            if resumable {
+                state.set_fetch_resume_at(newest.as_ref())?;
+            }
+            Ok(())
+        })?;
         match next_page(count, fetched, page.total, page.next_page_token, &token) {
             Page::Next(next) => {
                 query.page_token = next.clone();

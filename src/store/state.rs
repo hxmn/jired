@@ -277,6 +277,44 @@ pub struct StateStore {
     conn: Connection,
 }
 
+/// A unit of work on `state.db` that nests: a savepoint, released by
+/// [`Scope::commit`] and rolled back if dropped without it. A transaction
+/// cannot open inside another, so every write that wanted one opened its own
+/// and a fetch was some three commits an issue; savepoints let a caller hold
+/// one around many such writes (see [`StateStore::write`]).
+pub struct Scope<'a> {
+    conn: &'a Connection,
+    done: bool,
+}
+
+impl<'a> Scope<'a> {
+    fn open(conn: &'a Connection) -> Result<Self> {
+        conn.execute_batch("SAVEPOINT jired")?;
+        Ok(Self { conn, done: false })
+    }
+
+    pub fn commit(mut self) -> Result<()> {
+        self.done = true;
+        self.conn.execute_batch("RELEASE jired")?;
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for Scope<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.conn
+    }
+}
+
+impl Drop for Scope<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = self.conn.execute_batch("ROLLBACK TO jired; RELEASE jired");
+        }
+    }
+}
+
 /// Where a journalled operation stands. The column holds these three words,
 /// and `status` reports them; typed, so a caller cannot write a fourth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +366,20 @@ impl StateStore {
     }
 
     // ---- workspace key/value -------------------------------------------------
+
+    fn scope(&self) -> Result<Scope<'_>> {
+        Scope::open(&self.conn)
+    }
+
+    /// Run `f` as one unit of work: everything it writes lands together, or
+    /// not at all. What one sync step means — a page of a fetch — is one
+    /// commit rather than several an issue.
+    pub fn write<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        let scope = self.scope()?;
+        let out = f(self)?;
+        scope.commit()?;
+        Ok(out)
+    }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
         Ok(self
@@ -718,7 +770,7 @@ impl StateStore {
     }
 
     pub fn mark_deleted_remote(&self, keys: &[String]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         for key in keys {
             tx.execute("UPDATE issue SET deleted_remote = 1 WHERE key = ?1", [key])?;
         }
@@ -727,7 +779,7 @@ impl StateStore {
     }
 
     pub fn forget_issue(&self, key: &str) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         for table in PER_ISSUE_TABLES {
             tx.execute(&format!("DELETE FROM {table} WHERE issue_key = ?1"), [key])?;
         }
@@ -744,7 +796,7 @@ impl StateStore {
 
     /// Replace a temporary `NEW-*` key with the real one the server assigned.
     pub fn rekey_issue(&self, from: &str, to: &str, new_id: &str) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         tx.execute(
             "UPDATE issue SET key = ?2, id = ?3 WHERE key = ?1",
             params![from, to, new_id],
@@ -775,7 +827,7 @@ impl StateStore {
     // ---- comments ------------------------------------------------------------
 
     fn replace_comments(&self, issue: &RemoteIssue) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         // Comments absent from the payload were deleted on the server; keep the
         // row so a merge can tell "deleted remotely" from "never existed".
         tx.execute(
@@ -863,7 +915,7 @@ impl StateStore {
     // ---- attachments ---------------------------------------------------------
 
     fn replace_attachments(&self, issue: &RemoteIssue) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         // An attachment the server no longer lists is gone: kept, pull went on
         // trying to download it, and a local file of the same name was never
         // offered for upload. Only a payload that carries the list says so; a
@@ -939,7 +991,7 @@ impl StateStore {
     // ---- boards and sprints --------------------------------------------------
 
     pub fn save_boards(&self, boards: &[BoardRow]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         for b in boards {
             tx.execute(
                 "INSERT INTO board (id, name, type, columns_json) VALUES (?1, ?2, ?3, ?4)
@@ -977,7 +1029,7 @@ impl StateStore {
     }
 
     pub fn save_sprints(&self, sprints: &[crate::api::Sprint]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         for s in sprints {
             tx.execute(
                 "INSERT INTO sprint (id, board_id, name, state, raw) VALUES (?1, ?2, ?3, ?4, ?5)
@@ -1032,7 +1084,7 @@ impl StateStore {
     /// marks the list as complete — see [`StateStore::versions_complete`].
     pub fn replace_versions(&self, project: &str, versions: &[crate::api::Version]) -> Result<()> {
         let project = project.to_ascii_uppercase();
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         tx.execute("DELETE FROM version WHERE project = ?1", [&project])?;
         for v in versions {
             tx.execute(
@@ -1055,7 +1107,7 @@ impl StateStore {
     /// rest of the project's list alone.
     pub fn save_versions(&self, project: &str, versions: &[crate::api::Version]) -> Result<()> {
         let project = project.to_ascii_uppercase();
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         for v in versions {
             tx.execute(
                 "INSERT INTO version (id, project, name, raw) VALUES (?1, ?2, ?3, ?4)
@@ -1105,7 +1157,7 @@ impl StateStore {
         issue_key: &str,
         entries: &[crate::api::ChangelogEntry],
     ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         for e in entries {
             tx.execute(
                 "INSERT INTO changelog (issue_key, entry_id, author, created, items_json)
@@ -1174,7 +1226,7 @@ impl StateStore {
     /// re-parses a stored snapshot needs this map. Without it `story_points`,
     /// `epic` and `sprint` would silently degrade into raw `custom:` entries.
     pub fn save_field_meta(&self, fields: &[crate::api::FieldMeta]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         tx.execute("DELETE FROM field_meta", [])?;
         for f in fields {
             // The column has always been called schema_json; it now holds the
@@ -1242,7 +1294,7 @@ impl StateStore {
         container: &str,
         blocks: &[RawBlock],
     ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         tx.execute(
             "DELETE FROM raw_block WHERE issue_key = ?1 AND container = ?2",
             params![issue_key, container],
@@ -1278,7 +1330,7 @@ impl StateStore {
     // ---- push journal --------------------------------------------------------
 
     pub fn journal_ops(&self, issue_key: &str, ops: &[(String, String)]) -> Result<Vec<i64>> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.scope()?;
         let mut ids = Vec::with_capacity(ops.len());
         for (kind, payload) in ops {
             tx.execute(
@@ -1845,6 +1897,25 @@ mod tests {
             .map(|f| f.remove("attachment"));
         s.upsert_remote(&bare).unwrap();
         assert_eq!(s.attachments("PROJ-1").unwrap().len(), 1);
+    }
+
+    /// A unit of work lands whole or not at all, and the writes inside it,
+    /// which open scopes of their own, nest in it.
+    #[test]
+    fn a_unit_of_work_lands_whole_or_not_at_all() {
+        let s = StateStore::in_memory().unwrap();
+        let failed: Result<()> = s.write(|s| {
+            s.upsert_remote(&issue("PROJ-1", "2026-08-16T12:00:00Z"))?;
+            Err(JiredError::generic("stop"))
+        });
+        assert!(failed.is_err());
+        assert!(s.issue("PROJ-1").unwrap().is_none(), "rolled back");
+        s.write(|s| {
+            s.upsert_remote(&issue("PROJ-1", "2026-08-16T12:00:00Z"))?;
+            s.upsert_remote(&issue("PROJ-2", "2026-08-16T12:00:00Z"))
+        })
+        .unwrap();
+        assert!(s.issue("PROJ-2").unwrap().is_some());
     }
 
     #[test]
