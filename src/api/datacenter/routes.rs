@@ -243,7 +243,12 @@ route!(
 route!(
     /// Search is a POST because a JQL naming a few dozen issue keys does not fit in
     /// a query string, and `fetch` builds exactly that.
-    SEARCH, "searchUsingSearchRequest", "POST", Api, "search");
+    SEARCH,
+    "searchUsingSearchRequest",
+    "POST",
+    Api,
+    "search"
+);
 
 route!(
     GET_ISSUE,
@@ -304,7 +309,12 @@ route!(
 route!(
     /// Assigning has a route of its own, and it is not the field edit: an assignee
     /// missing from the edit screen is still assignable through this one.
-    ASSIGN, "assign", "PUT", Api, "issue/{issueIdOrKey}/assignee");
+    ASSIGN,
+    "assign",
+    "PUT",
+    Api,
+    "issue/{issueIdOrKey}/assignee"
+);
 
 route!(
     /// `expand` is not declared here — see the module doc and the contract test's
