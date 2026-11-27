@@ -8,6 +8,20 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.9] — 2026-11-27
+
+### Fixed
+
+- **Deleting `state.db` no longer costs your edits or your new issues.**
+  After `rm .jired/state.db && jired fetch`, the next `pull` wrote every file
+  fresh from the server, replacing anything edited since the last sync. A
+  file that was edited is now a conflict, kept with `--strategy ours` and
+  replaced with `--strategy theirs`; files nobody touched are written as
+  before. Issues created with `jired create` and not yet pushed come back
+  from their `NEW-` files instead of vanishing from `status` and `push`.
+- `jired.content_hash` in a file is now the hash of the server's copy it
+  was written from, so a file a merge kept a local value in reads as edited.
+
 ## [0.28.8] — 2026-11-27
 
 ### Fixed
