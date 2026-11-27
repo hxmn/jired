@@ -8,6 +8,13 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.1] — 2026-11-27
+
+### Fixed
+
+- **Bold, italic or struck-through text that is just `*`, `_` or `-` keeps
+  its mark on Data Center**; it came back as plain text after any edit.
+
 ## [0.39.0] — 2026-11-27
 
 ### Added
