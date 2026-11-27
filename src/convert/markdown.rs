@@ -1088,6 +1088,9 @@ fn indent_item(body: &str, marker: &str, indent: &str) -> String {
 /// A marker region found by the pre-scan.
 struct Region {
     id: String,
+    /// The marker pair as written, approximation and all: what a code span
+    /// or block that holds one has to give back.
+    source: String,
     /// The opening marker ended its line, i.e. the region was rendered from a
     /// [`Block::Raw`] rather than an [`Inline::Raw`].
     block: bool,
@@ -1133,19 +1136,54 @@ fn prescan(md: &str) -> (String, Vec<Region>) {
             None => false,
         };
 
-        out.push_str(&md[pos..open_start]);
+        out.push_str(&escape_literal(&md[pos..open_start]));
         out.push_str(TOKEN_PREFIX);
         out.push_str(&regions.len().to_string());
         out.push_str(TOKEN_SUFFIX);
         regions.push(Region {
             id: id.to_string(),
+            source: md[open_start..close_start + close.len()].to_string(),
             block,
         });
         pos = close_start + close.len();
     }
 
-    out.push_str(&md[pos..]);
+    out.push_str(&escape_literal(&md[pos..]));
     (out, regions)
+}
+
+/// What stands for an escaped [`TOKEN_STEM`] in text that is not a region.
+const TOKEN_ESCAPE: &str = "jiredrawx";
+/// The part of [`TOKEN_PREFIX`] that text of its own could contain.
+const TOKEN_STEM: &str = "jiredraw";
+
+/// Text between regions, with anything that could read as a region's token
+/// made unable to: server text holding `.jiredrawregion0end.` lost it, taken
+/// for the first region of the document.
+fn escape_literal(text: &str) -> String {
+    text.replace(TOKEN_STEM, TOKEN_ESCAPE)
+}
+
+fn unescape_literal(text: &str) -> String {
+    text.replace(TOKEN_ESCAPE, TOKEN_STEM)
+}
+
+/// A code span's, a code block's or a link target's text as it was written,
+/// regions and all. A marker pair inside code is code: it was replaced by a
+/// token before the parser ran, and pushed back as that token.
+fn restore(text: &str, regions: &[Region]) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some((before, index, after)) = split_placeholder(rest) {
+        out.push_str(before);
+        match regions.get(index) {
+            Some(region) => out.push_str(&region.source),
+            None => out.push_str(&rest[before.len()..rest.len() - after.len()]),
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    unescape_literal(&out)
 }
 
 fn convert_blocks<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Block> {
@@ -1176,7 +1214,7 @@ fn convert_blocks<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Block> {
                     .next()
                     .filter(|s| !s.is_empty())
                     .map(str::to_string);
-                let mut code = c.literal.clone();
+                let mut code = restore(&c.literal, regions);
                 // comrak always terminates a fenced block's literal with a
                 // newline; the AST stores code without it.
                 if code.ends_with('\n') {
@@ -1305,7 +1343,7 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline>
             // must not change what gets pushed.
             NodeValue::SoftBreak => out.push(Inline::Text(" ".to_string())),
             NodeValue::LineBreak => out.push(Inline::LineBreak),
-            NodeValue::Code(code) => out.push(Inline::Code(code.literal.clone())),
+            NodeValue::Code(code) => out.push(Inline::Code(restore(&code.literal, regions))),
             NodeValue::Emph => out.push(Inline::Emphasis(convert_inlines(child, regions))),
             NodeValue::Strong => out.push(Inline::Strong(convert_inlines(child, regions))),
             NodeValue::Strikethrough => out.push(Inline::Strike(convert_inlines(child, regions))),
@@ -1319,9 +1357,9 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline>
                 std::mem::take(&mut out),
             ))),
             NodeValue::Image(link) => out.push(Inline::Image {
-                src: attachment_name(&link.url)
+                src: attachment_name(&restore(&link.url, regions))
                     .map(str::to_string)
-                    .unwrap_or_else(|| link.url.clone()),
+                    .unwrap_or_else(|| restore(&link.url, regions)),
             }),
             NodeValue::Link(link) => {
                 let text = convert_inlines(child, regions);
@@ -1342,15 +1380,15 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline>
                         out.pop();
                     }
                     out.push(Inline::Mention {
-                        id: link.url.clone(),
+                        id: restore(&link.url, regions),
                         display: inline_text(&normalize_inlines(text)),
                     });
                 } else {
                     out.push(Inline::Link {
                         text,
-                        href: attachment_name(&link.url)
+                        href: attachment_name(&restore(&link.url, regions))
                             .map(|name| format!("^{name}"))
-                            .unwrap_or_else(|| link.url.clone()),
+                            .unwrap_or_else(|| restore(&link.url, regions)),
                     });
                 }
             }
@@ -1384,15 +1422,16 @@ fn is_break_tag(html: &str) -> bool {
 fn push_text(out: &mut Vec<Inline>, text: &str, regions: &[Region]) {
     let mut rest = text;
     while let Some((before, index, after)) = split_placeholder(rest) {
-        push_literal(out, before);
-        if let Some(region) = regions.get(index) {
-            out.push(Inline::Raw(RawRef {
+        push_literal(out, &unescape_literal(before));
+        match regions.get(index) {
+            Some(region) => out.push(Inline::Raw(RawRef {
                 id: region.id.clone(),
-            }));
+            })),
+            None => push_literal(out, &rest[before.len()..rest.len() - after.len()]),
         }
         rest = after;
     }
-    push_literal(out, rest);
+    push_literal(out, &unescape_literal(rest));
 }
 
 /// Text as it stands; keys are split out of it once it is merged.
@@ -1864,6 +1903,37 @@ mod tests {
             }),
         ]);
         round_trip(&doc, &store);
+    }
+
+    /// Marker text inside code is code, and text that reads like the token a
+    /// region is replaced with while parsing is text: both came back changed.
+    #[test]
+    fn marker_text_in_code_and_token_text_in_prose_come_back_as_written() {
+        let store = RawStore::new();
+        let fenced = "```\n<!--jired:raw:rabc-->\nx\n<!--/jired:raw:rabc-->\n```";
+        assert_eq!(
+            parse(fenced, &store).blocks,
+            [Block::CodeBlock {
+                language: None,
+                code: "<!--jired:raw:rabc-->\nx\n<!--/jired:raw:rabc-->".into()
+            }]
+        );
+        let inline = "see `<!--jired:raw:rabc-->x<!--/jired:raw:rabc-->` here";
+        assert_eq!(
+            parse(inline, &store).blocks,
+            [Block::Paragraph(vec![
+                Inline::Text("see ".into()),
+                Inline::Code("<!--jired:raw:rabc-->x<!--/jired:raw:rabc-->".into()),
+                Inline::Text(" here".into()),
+            ])]
+        );
+        let prose = "a .jiredrawregion0end. b <!--jired:raw:rabc-->x<!--/jired:raw:rabc-->";
+        let doc = parse(prose, &store);
+        let Block::Paragraph(inlines) = &doc.blocks[0] else {
+            panic!("{doc:?}")
+        };
+        assert_eq!(inlines[0], Inline::Text("a .jiredrawregion0end. b ".into()));
+        assert!(matches!(inlines[1], Inline::Raw(_)));
     }
 
     #[test]
