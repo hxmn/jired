@@ -97,6 +97,14 @@ jsonschema = { version = "0.49", default-features = false }
 # Jersey 2 Jira writes and the `ns2:`-prefixed ones its predecessor wrote.
 roxmltree = "0.21"
 
+# Drives the interactive screens and prompts through a pseudo-terminal in
+# `tests/interactive.rs`; there is no pty on Windows to drive.
+[target.'cfg(unix)'.dev-dependencies]
+rexpect = "0.6"
+# The pty's terminal settings, to see that echo is back on; the version
+# rexpect itself uses.
+nix = { version = "0.31", features = ["term"] }
+
 [profile.dev]
 # Debug info dominates artifact size here and jired debugs fine without it.
 debug = 0
