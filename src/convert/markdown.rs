@@ -1225,8 +1225,8 @@ fn convert_list<'a>(
                 TaskItem {
                     checked,
                     content: normalize_inlines(first_paragraph_inlines(item, regions)),
-                    // Markdown has nowhere to keep the ADF task id; the write
-                    // path restores it from the base snapshot.
+                    // Markdown has nowhere to keep the ADF task id, and ADF
+                    // requires one: the ADF writer derives it from the list.
                     id: None,
                 }
             })

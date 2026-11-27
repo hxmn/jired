@@ -54,6 +54,13 @@ fn blocks_to_ast(nodes: &[Value], store: &mut RawStore) -> Vec<Block> {
 }
 
 fn block_to_ast(node: &Value, store: &mut RawStore) -> Block {
+    // A node of a known type that carries what the AST has no room for is
+    // kept whole, as an unknown one is: rebuilt from the AST, a centred
+    // paragraph came back left-aligned and a merged table cell split, with
+    // nothing to say so.
+    if !fits_the_ast(node) {
+        return Block::Raw(capture(node, store));
+    }
     match node_type(node) {
         "paragraph" => Block::Paragraph(inlines_to_ast(children(node), store)),
         "heading" => Block::Heading {
@@ -289,13 +296,17 @@ fn block_to_adf(block: &Block, store: &RawStore) -> Option<Value> {
             }
         }
         Block::TaskList(items) => {
+            let seed = format!("{items:?}");
             let content = items
                 .iter()
-                .map(|item| {
+                .enumerate()
+                .map(|(n, item)| {
                     let mut attrs = Map::new();
-                    if let Some(id) = &item.id {
-                        attrs.insert("localId".into(), Value::from(id.as_str()));
-                    }
+                    let id = item
+                        .id
+                        .clone()
+                        .unwrap_or_else(|| local_id(&format!("{seed}/{n}")));
+                    attrs.insert("localId".into(), Value::from(id));
                     attrs.insert(
                         "state".into(),
                         Value::from(if item.checked { "DONE" } else { "TODO" }),
@@ -307,7 +318,9 @@ fn block_to_adf(block: &Block, store: &RawStore) -> Option<Value> {
                     })
                 })
                 .collect();
-            container("taskList", content)
+            let mut list = container("taskList", content);
+            list["attrs"] = json!({ "localId": local_id(&seed) });
+            list
         }
         Block::Table(table) => {
             let mut rows = Vec::new();
@@ -553,6 +566,67 @@ fn scalar(value: Option<&Value>) -> String {
     }
 }
 
+/// Whether the AST can hold everything `node` says.
+///
+/// Marks on a block — alignment, indentation, breakout — have no Markdown
+/// form. Nor have a table's merged cells, a header column, a cell coloured
+/// or holding more than one paragraph, or numbered rows. What is left out
+/// on purpose is presentation Jira fills in again: `localId`, a table's
+/// layout and width, and the column widths a resize leaves.
+fn fits_the_ast(node: &Value) -> bool {
+    let block_marks = node
+        .get("marks")
+        .and_then(Value::as_array)
+        .is_some_and(|m| !m.is_empty());
+    match node_type(node) {
+        "paragraph" | "heading" | "codeBlock" | "blockquote" | "bulletList" | "orderedList" => {
+            !block_marks
+        }
+        "table" => {
+            !block_marks
+                && attr(node, "isNumberColumnEnabled").and_then(Value::as_bool) != Some(true)
+                && table_cells_fit(node)
+        }
+        _ => true,
+    }
+}
+
+fn table_cells_fit(table: &Value) -> bool {
+    let header_row = first_row_is_header(table);
+    children(table).iter().enumerate().all(|(r, row)| {
+        children(row).iter().all(|cell| {
+            let span = |key| attr(cell, key).and_then(Value::as_u64).unwrap_or(1);
+            let blocks = children(cell);
+            // A header cell outside a header row is a header column, which a
+            // Markdown table cannot have.
+            (node_type(cell) == "tableCell" || (r == 0 && header_row))
+                && span("colspan") == 1
+                && span("rowspan") == 1
+                && attr(cell, "background").is_none_or(Value::is_null)
+                && blocks.len() <= 1
+                && blocks
+                    .iter()
+                    .all(|b| node_type(b) == "paragraph" && fits_the_ast(b))
+        })
+    })
+}
+
+/// A `localId` for a task list or item Markdown had nowhere to keep one for.
+/// ADF requires one on both; derived from the content, so the same document
+/// gets the same ids each time it is written.
+fn local_id(seed: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let h = hex::encode(Sha256::digest(seed.as_bytes()));
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
+}
+
 /// Degenerate containers (an empty list, a list holding a foreign node) are kept
 /// verbatim instead of being coerced into a shape that would not survive a push.
 fn all_children_are(node: &Value, ty: &str) -> bool {
@@ -734,7 +808,60 @@ mod tests {
     #[test]
     fn canonical_document_round_trips_unchanged() {
         let value = canonical_document();
-        assert_eq!(round_trip(&value), value);
+        let mut back = round_trip(&value);
+        // ADF requires a task list's `localId`, which the AST does not keep;
+        // the writer derives one, and that is the one difference.
+        let list = &mut back["content"][8];
+        assert_eq!(list["type"], "taskList");
+        assert_eq!(list["attrs"]["localId"].as_str().map(str::len), Some(36));
+        list.as_object_mut().unwrap().remove("attrs");
+        assert_eq!(back, value);
+    }
+
+    /// What the review found rebuilt without a word: a header cell spanning
+    /// two columns, a header column, a cell of two paragraphs and a list, and
+    /// a centred paragraph. Each is kept whole now, as an unknown node is.
+    #[test]
+    fn a_known_node_with_more_than_the_ast_holds_is_kept_whole() {
+        let para = |t: &str| json!({"type": "paragraph", "content": [{"type": "text", "text": t}]});
+        let cell = |ty: &str, content: Value| json!({"type": ty, "content": content});
+        let table = |rows: Value| json!({"type": "table", "content": rows});
+        let row = |cells: Vec<Value>| json!({"type": "tableRow", "content": cells});
+        let colspan =
+            json!({"type": "tableHeader", "attrs": {"colspan": 2}, "content": [para("h")]});
+        let cases = [
+            table(json!([
+                row(vec![colspan]),
+                row(vec![
+                    cell("tableCell", json!([para("a")])),
+                    cell("tableCell", json!([para("b")]))
+                ])
+            ])),
+            table(json!([row(vec![
+                cell("tableHeader", json!([para("h")])),
+                cell("tableCell", json!([para("a")]))
+            ])])),
+            table(json!([row(vec![cell(
+                "tableCell",
+                json!([para("one"), para("two")])
+            )])])),
+            json!({"type": "paragraph", "marks": [{"type": "alignment", "attrs": {"align": "center"}}],
+                   "content": [{"type": "text", "text": "centred"}]}),
+        ];
+        for node in cases {
+            let doc = json!({"type": "doc", "version": 1, "content": [node.clone()]});
+            let mut store = RawStore::new();
+            let ast = to_ast(&doc, &mut store);
+            assert!(matches!(ast.blocks[0], Block::Raw(_)), "{node}");
+            assert_eq!(from_ast(&ast, &store)["content"][0], node);
+        }
+        // A plain table, column widths and all, is still a table to edit.
+        let plain = table(json!([row(vec![
+            json!({"type": "tableCell", "attrs": {"colwidth": [120]}, "content": [para("a")]})
+        ])]));
+        let mut store = RawStore::new();
+        let ast = to_ast(&json!({"type": "doc", "content": [plain]}), &mut store);
+        assert!(matches!(ast.blocks[0], Block::Table(_)));
     }
 
     #[test]

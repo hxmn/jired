@@ -84,8 +84,14 @@ represent h5 and h6, and without it a file reads as the issue does.
 Bidirectionally supported: paragraphs; headings 1–6, at their own levels; bold/italic/strike/code/links;
 bullet/ordered lists; task lists (ADF `taskList`; wiki has none → lossy); code
 blocks with language; blockquotes; GFM tables; rules; mentions `@[Name](id)`
-(accountId on Cloud, username on DC); emoji as unicode; bare issue keys ⇄ Jira
-issue links.
+(accountId on Cloud, username on DC); bare issue keys ⇄ Jira issue links. An
+ADF `emoji` node is a read-only region. A node of a known type that carries
+what the AST cannot hold is read-only too: a paragraph or heading with
+alignment or indentation, a table with merged or coloured cells, a header
+column, numbered rows, or a cell holding more than one paragraph. Left out on
+purpose, and reset by an edit: `localId`, a table's layout and width, and its
+column widths. A task list read back from Markdown gets a `localId` derived
+from its content, since ADF requires one.
 
 Wiki markup marks a span inside a word with braced delimiters, `a{*}b{*}c`,
 because a bare `*` there is text; Jira's editor writes that form wherever a mark

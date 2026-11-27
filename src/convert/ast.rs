@@ -106,7 +106,9 @@ pub struct ListItem {
 pub struct TaskItem {
     pub checked: bool,
     pub content: Vec<Inline>,
-    /// ADF task items carry a stable id that must survive a round trip.
+    /// The ADF task item's `localId`, while the list is the one read from
+    /// the server; a list read back from Markdown has none, and the ADF
+    /// writer derives one.
     pub id: Option<String>,
 }
 
