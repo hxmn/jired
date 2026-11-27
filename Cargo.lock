@@ -1890,6 +1890,7 @@ dependencies = [
  "indicatif",
  "insta",
  "is-terminal",
+ "jired",
  "jsonschema",
  "keyring",
  "mime_guess",

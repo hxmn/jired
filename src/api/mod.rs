@@ -10,6 +10,7 @@ pub mod cloud;
 pub mod custom;
 pub mod datacenter;
 pub mod filter;
+#[cfg(feature = "fixtures")]
 pub mod fixture;
 pub mod http;
 #[cfg(test)]
@@ -259,6 +260,7 @@ fn check_supported(deployment: Deployment, version: Option<&str>) -> Result<()> 
 /// directory. This is how the end-to-end tests exercise the CLI offline.
 pub const FIXTURES_ENV: &str = "JIRED_FIXTURES";
 
+#[cfg(feature = "fixtures")]
 fn fixture_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(FIXTURES_ENV)
         .filter(|v| !v.is_empty())
@@ -267,13 +269,11 @@ fn fixture_dir() -> Option<std::path::PathBuf> {
 
 /// Build a client for a connection, honouring fixture mode.
 pub fn open_client(conn: Connection) -> Result<Box<dyn JiraApi>> {
-    match fixture_dir() {
-        Some(dir) => Ok(Box::new(fixture::FixtureClient::open(
-            &dir,
-            conn.deployment,
-        )?)),
-        None => make_client(conn),
+    #[cfg(feature = "fixtures")]
+    if let Some(dir) = fixture_dir() {
+        return Ok(Box::new(fixture::FixtureClient::open(&dir, conn.deployment)?));
     }
+    make_client(conn)
 }
 
 /// Build the client for an already-authenticated workspace account.
@@ -281,6 +281,7 @@ pub fn build_client(
     ctx: &mut crate::cli::context::Context,
     account: &crate::store::session::Account,
 ) -> Result<Box<dyn JiraApi>> {
+    #[cfg(feature = "fixtures")]
     if let Some(dir) = fixture_dir() {
         return Ok(Box::new(fixture::FixtureClient::open(
             &dir,

@@ -16,6 +16,15 @@ path = "src/main.rs"
 [[bin]]
 name = "jired-record"
 path = "src/bin/record.rs"
+required-features = ["fixtures"]
+
+[features]
+# The recorded-fixture client the tests run against, and the `JIRED_FIXTURES`
+# switch that selects it. Off in what `cargo install` builds: left on, a stray
+# `JIRED_FIXTURES` in someone's shell made `init` accept any token and `push`
+# report success with nothing sent. The tests turn it on through the
+# dev-dependency on this package below.
+fixtures = []
 
 [dependencies]
 async-trait = "0.1"
@@ -73,6 +82,7 @@ x509-parser = "0.18"
 [target.'cfg(unix)'.dependencies]
 
 [dev-dependencies]
+jired = { path = ".", features = ["fixtures"] }
 proptest = "1"
 insta = { version = "1", features = ["json", "yaml", "filters"] }
 assert_cmd = "2"

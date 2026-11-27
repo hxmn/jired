@@ -64,9 +64,10 @@ fn without_custom_status(line: &str) -> String {
 
 /// Every fixture failure points back at the directory that produced it.
 ///
-/// `JIRED_FIXTURES` is a supported escape hatch, not test-only plumbing: it is
-/// how the end-to-end suite runs offline and how a bug can be reproduced from a
-/// recording. Its errors have to be as legible as any other.
+/// `JIRED_FIXTURES` is how the end-to-end suite runs offline and how a bug can
+/// be reproduced from a recording, in a build with the `fixtures` feature —
+/// never in one `cargo install` makes. Its errors have to be as legible as any
+/// other.
 const FIXTURE_HINT: &str = "the fixture directory in JIRED_FIXTURES is incomplete; \
                             re-record it with `jired-record`, or unset the variable \
                             to talk to a real server";

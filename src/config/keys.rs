@@ -390,10 +390,6 @@ pub const ENV_ONLY: &[(&str, &str)] = &[
         "JIRED_LOG",
         "tracing filter for diagnostics, e.g. `jired=debug` (overrides -v)",
     ),
-    (
-        "JIRED_FIXTURES",
-        "Directory of recorded API responses to serve instead of a live server (testing)",
-    ),
 ];
 
 pub fn lookup(key: &str) -> Option<&'static KeyDef> {

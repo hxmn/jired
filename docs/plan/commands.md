@@ -30,7 +30,9 @@ servers; every other command uses the account `init` stored.
 **Env vars:** `JIRED_URL`, `JIRED_EMAIL`, `JIRED_TOKEN`, `JIRED_AUTH`,
 `JIRED_DEPLOYMENT`, `JIRED_PROJECT`, `JIRED_NO_INPUT`, `JIRED_SECRET_KEY`,
 `JIRED_NO_KEYRING`, `JIRED_CREDS_STORAGE`, `JIRED_CA_CERT`, `JIRED_INSECURE`,
-`JIRED_LOG`, `JIRED_FIXTURES`, plus standard `HTTPS_PROXY`/`NO_PROXY`.
+`JIRED_LOG`, plus standard `HTTPS_PROXY`/`NO_PROXY`. `JIRED_FIXTURES` swaps the
+server for a recorded fixture directory only in a build with the `fixtures`
+feature, which the tests turn on and an installed binary does not have.
 `config::keys::KEYS` is the full list of settings and `keys::ENV_ONLY` the
 variables that are not settings; both feed the help text and the agent docs.
 

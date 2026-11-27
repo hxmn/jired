@@ -280,8 +280,8 @@ and exits with the failures' kind; a 300-issue fixture pull shows progress.
    download failure and the comment-delete notice.
 9. Hints for the hintless: `unsupported_server`, crypt errors (`init --force`),
    `no user config directory` (`XDG_CONFIG_HOME`), `cannot find an unused temporary key`.
-10. Gate `JIRED_FIXTURES` behind `cfg(debug_assertions)` or make its errors Usage with
-    the fixture dir named.
+10. ~~Gate `JIRED_FIXTURES`~~ — behind the `fixtures` Cargo feature, which only the
+    tests enable (0.37.2).
 
 Accept: a test per error family asserting message names the thing + has a hint + right
 exit code; no message contains `/rest/api/` at default verbosity.
