@@ -8,6 +8,17 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.3] — 2026-11-27
+
+### Fixed
+
+- **Two edits to the same paragraph conflict, even when one sits inside the
+  other.** When `pull --strategy merge` met a local rewrite of several lines
+  and a server change to one of them, or the other way round, it merged them
+  without markers, and lines one side had deleted came back; the next push
+  sent that text. Such edits are now a conflict, as overlapping edits already
+  were when they started on the same line.
+
 ## [0.28.2] — 2026-11-27
 
 ### Fixed
