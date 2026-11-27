@@ -8,6 +8,15 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.3] — 2026-11-27
+
+### Fixed
+
+- **Two `jired` processes can no longer hold one workspace at once.**
+  Releasing the workspace lock removed `.jired/lock`, so a process already
+  waiting on the old file and one starting fresh could both get the lock.
+  The file now stays in place.
+
 ## [0.31.2] — 2026-11-27
 
 ### Fixed
