@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.2] — 2026-11-27
+
+### Fixed
+
+- **A heading named like a section of the file stays in the text.** A Jira
+  heading called `Attachments`, `Comments`, `Description` or another of the
+  file's own section names ended the description at that heading, and the
+  next push sent it without the rest. It is now written `## Attachments ##`;
+  Markdown reads the same heading, and the file does not take it for a
+  section. A file pulled earlier is rewritten the next time its issue changes
+  on the server.
+
 ## [0.28.1] — 2026-11-27
 
 ### Fixed
