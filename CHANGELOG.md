@@ -8,6 +8,22 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.35.0] — 2026-11-27
+
+### Breaking
+
+- **A database error is exit 9 only when the database is damaged.** Any
+  other SQLite failure is now a generic error, exit 1; "corrupt state" sent
+  people to delete a database that was fine.
+
+### Fixed
+
+- **A `--json` error says what went wrong.** A file that could not be
+  written, or a database that failed, came out as `"i/o error"` or
+  `"database error"` and nothing more. The message now includes the cause,
+  as on a terminal, and `details.cause` carries it alone; `init-agents`
+  names the file it could not write.
+
 ## [0.34.1] — 2026-11-27
 
 ### Fixed
