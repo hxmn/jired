@@ -279,23 +279,33 @@ pub fn dedent_region(body: &str) -> String {
     };
     let rest: Vec<&str> = lines.collect();
     let indent = shared_indent(&rest);
-    if indent == 0 {
+    if indent.is_empty() {
         return body.to_string();
     }
     let mut out = first.to_string();
     for line in rest {
         out.push('\n');
-        out.push_str(&line[indent.min(line.len())..]);
+        // A blank line does not carry the indent, and may hold whitespace of
+        // its own: cut at a byte count, a no-break space there was cut in two
+        // and the conversion panicked. Only as much of the indent as the line
+        // actually begins with comes off.
+        let cut = line
+            .char_indices()
+            .zip(indent.chars())
+            .take_while(|((_, a), b)| a == b)
+            .last()
+            .map_or(0, |((i, a), _)| i + a.len_utf8());
+        out.push_str(&line[cut..]);
     }
     out
 }
 
-/// How many bytes of container indent every non-blank line begins with.
+/// The container indent every non-blank line begins with.
 ///
 /// Only the characters a container can put there count: a list indents with
 /// spaces, a quote with `> `. A blank line carries no indent to compare — a
 /// list writes it as nothing at all — so it does not narrow the answer.
-fn shared_indent(lines: &[&str]) -> usize {
+fn shared_indent<'a>(lines: &[&'a str]) -> &'a str {
     let mut shared: Option<&str> = None;
     for line in lines {
         if line.trim().is_empty() {
@@ -318,7 +328,7 @@ fn shared_indent(lines: &[&str]) -> usize {
             }
         });
     }
-    shared.map_or(0, str::len)
+    shared.unwrap_or("")
 }
 
 /// Could this text be the indent a quote or a list puts in front of a block?
@@ -2053,6 +2063,19 @@ mod tests {
         assert_eq!(unrepresentable("- [ ] one\n  - nested").len(), 1);
         assert_eq!(unrepresentable("- [ ] one\n- plain").len(), 1);
         assert!(unrepresentable("- a\n  - b").is_empty());
+    }
+
+    /// A blank line in a nested region holding a no-break space is cut
+    /// between characters, not inside one.
+    #[test]
+    fn a_blank_line_of_multi_byte_whitespace_does_not_panic_the_dedent() {
+        let body = "first\n   second\n\u{a0}\n   third";
+        assert_eq!(dedent_region(body), "first\nsecond\n\u{a0}\nthird");
+        assert_eq!(dedent_region("first\n  a\n \n  b"), "first\na\n\nb");
+        assert_eq!(
+            dedent_region("first\n second\n\u{a0}\n third"),
+            "first\nsecond\n\u{a0}\nthird"
+        );
     }
 
     #[test]
