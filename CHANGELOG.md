@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.11] — 2026-11-27
+
+### Fixed
+
+- **Your token is sent only to your Jira.** It went with every request
+  jired made, including downloads from whatever URL an attachment named and
+  a form action the server's page gave, so another host, or plain `http://`
+  for an `https://` server, received it too. A request anywhere but the
+  configured server's scheme, host and port now goes without it.
+- **`init` warns when the server is plain `http://`**, unless it is this
+  machine: every request would carry the token unencrypted.
+
 ## [0.28.10] — 2026-11-27
 
 ### Fixed
