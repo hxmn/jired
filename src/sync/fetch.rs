@@ -86,14 +86,22 @@ pub fn run_with(
         Err(e) => tracing::debug!("cannot list the link types: {}", e.message),
     }
 
+    // The watermark says the whole project was read as of then, so only a
+    // fetch that read the whole project may move it: `pull PROJ-1` moved it
+    // to now, and an edit made to PROJ-7 in between was behind every
+    // incremental pull after that, until `--full`. A sprint or a board is a
+    // narrower scope just as a query is.
+    let named = !args.wanted_issues()?.is_empty();
+    let scope_is_whole_project =
+        !named && args.jql.is_none() && args.sprint.is_none() && args.board.is_none();
     let watermark = engine.state.last_fetch_at()?;
-    let incremental = !args.full && args.updated_since.is_none() && watermark.is_some();
+    // Issues asked for by key are read whatever their `updated`: one the
+    // watermark had already passed was otherwise never fetched at all.
+    let incremental = !args.full && !named && args.updated_since.is_none() && watermark.is_some();
     let since = incremental.then(|| skew_adjusted(watermark.expect("checked")));
 
     let jql = build_jql(ctx, args, since.as_ref())?;
     tracing::debug!(%jql, "searching");
-
-    let scope_is_whole_project = args.wanted_issues()?.is_empty() && args.jql.is_none();
 
     // A first fetch of a few hundred issues is several round trips; without
     // this it looks like a hang.
@@ -172,7 +180,11 @@ pub fn run_with(
         0
     };
 
-    engine.state.set_last_fetch_at(&started)?;
+    // `--updated-since` read only what changed after a time of its own
+    // choosing, which may be later than the watermark.
+    if scope_is_whole_project && args.updated_since.is_none() {
+        engine.state.set_last_fetch_at(&started)?;
+    }
 
     Ok(FetchReport {
         jql: Some(jql),

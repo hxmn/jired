@@ -160,6 +160,11 @@ prompts, because each of those used to be learned by trying it.
 Incremental by default (`updated >= last_fetch − 5min` skew buffer); paginated
 (100/page, 4 parallel); 429/`Retry-After` aware (D26). Updates remote snapshot only —
 never touches files. Resumable after network failure.
+`last_fetch` is when the whole project was last read, so only a fetch of the
+whole project moves it — not one of named issues, a query, a sprint, a board or
+`--updated-since`, which read part of it; and issues named by key are read
+whatever their `updated`, not only since `last_fetch`. A sprint or board fetch
+also no longer marks the issues outside it deleted.
 A parent's sub-task list — what `## Children` is rendered from — is then brought
 in line with the sub-tasks stored on their own: Jira does not move a parent's
 `updated` when a sub-task is created under it, moved, renamed or resolved, so an

@@ -2156,6 +2156,76 @@ fn a_comment_made_before_a_failure_is_not_posted_again() {
     assert!(!file.contains("### [new]"), "{file}");
 }
 
+/// Change an issue on the "server" as of `minutes` ago, and say the last
+/// fetch was `watermark` minutes ago: the order of events a scoped pull can
+/// get wrong, without waiting out the five minutes a fetch looks back.
+fn edited_before(ws: &Ws, key: &str, minutes: i64, watermark: i64) {
+    let ago = |m: i64| {
+        (chrono::Utc::now() - chrono::Duration::minutes(m))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    };
+    let at = ago(minutes);
+    ws.mutate_remote(key, |issue| {
+        issue["fields"]["summary"] = "Edited by a colleague".into();
+    });
+    let path = ws.fixtures.join("issues.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut issues: Value = serde_json::from_str(&text).unwrap();
+    for issue in issues.as_array_mut().unwrap() {
+        if issue["key"] == key {
+            issue["fields"]["updated"] = at.clone().into();
+        }
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&issues).unwrap()).unwrap();
+    let db = rusqlite::Connection::open(ws.path().join(".jired/state.db")).unwrap();
+    db.execute(
+        "UPDATE workspace SET value = ?1 WHERE key = 'last_fetch_at'",
+        [ago(watermark)],
+    )
+    .unwrap();
+}
+
+/// A pull of one issue read one issue, so it says nothing about the rest of
+/// the project: moving the watermark hid an edit made to another issue
+/// before it from every incremental pull after.
+#[test]
+fn a_pull_of_one_issue_does_not_hide_an_edit_to_another() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    edited_before(&ws, "PROJ-150", 30, 60);
+
+    ws.json(&["pull", "PROJ-142"]);
+    let report = ws.json(&["pull"]);
+    assert!(report.to_string().contains("PROJ-150"), "{report}");
+    let file = std::fs::read_dir(ws.path())
+        .unwrap()
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().starts_with("PROJ-0150."))
+        .unwrap();
+    assert!(file
+        .file_name()
+        .to_string_lossy()
+        .contains("Edited by a colleague"));
+}
+
+/// An issue asked for by key is read whatever its `updated`: one the
+/// watermark had passed came back as nothing to pull.
+#[test]
+fn an_issue_named_to_pull_is_read_even_behind_the_watermark() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    edited_before(&ws, "PROJ-150", 30, 0);
+
+    let report = ws.json(&["pull", "PROJ-150"]);
+    assert!(report.to_string().contains("PROJ-150"), "{report}");
+    assert!(std::fs::read_dir(ws.path())
+        .unwrap()
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy() == "PROJ-0150. Edited by a colleague.md"));
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();
