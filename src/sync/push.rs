@@ -726,6 +726,23 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             let edited: Vec<String> = touched.iter().map(|(id, _)| id.clone()).collect();
             let labels: Vec<String> = touched.into_iter().map(|(_, label)| label).collect();
 
+            let foreign = foreign_regions(&engine.state, &row.key, &working)?;
+            if !foreign.is_empty() {
+                return Err(JiredError::usage(format!(
+                    "{}: {} holds a read-only region that is not its own",
+                    row.key, foreign[0].0
+                ))
+                .with_detail("issue", row.key.clone())
+                .with_detail(
+                    "regions",
+                    json!(foreign.iter().map(|(_, id)| id).collect::<Vec<_>>()),
+                )
+                .with_hint(
+                    "a region can only go back where it came from: remove its \
+                     `<!--jired:raw:…-->` markers and write the text out instead",
+                ));
+            }
+
             if !edited.is_empty() {
                 if !args.allow_lossy {
                     return Err(JiredError::lossy(format!(
@@ -969,6 +986,51 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
 /// changed. A note nobody touched cannot have had its regions edited, and
 /// checking it anyway would let some later difference in how it renders block a
 /// push that has nothing to do with it.
+/// Regions a text holds that its own store does not: see
+/// [`convert::unknown_regions`]. Each with the text it is in.
+fn foreign_regions(
+    state: &crate::store::state::StateStore,
+    key: &str,
+    working: &IssueDoc,
+) -> Result<Vec<(String, String)>> {
+    let mut texts: Vec<(String, String, &str)> = vec![(
+        "the description".into(),
+        "description".into(),
+        working.description.as_str(),
+    )];
+    for c in &working.comments {
+        let (name, container) = match &c.id {
+            CommentId::Existing(id) => (format!("comment c-{id}"), format!("comment:{id}")),
+            CommentId::New => ("a new comment".into(), String::new()),
+        };
+        texts.push((name, container, c.body.as_str()));
+    }
+    for w in &working.worklogs {
+        let (name, container) = match &w.id {
+            WorklogId::Existing(id) => (format!("worklog w-{id}"), format!("worklog:{id}")),
+            WorklogId::New => ("a new worklog".into(), String::new()),
+        };
+        texts.push((name, container, w.body.as_str()));
+    }
+    let mut out = Vec::new();
+    for (name, container, text) in texts {
+        if !text.contains("<!--jired:raw:") {
+            continue;
+        }
+        let raw = if container.is_empty() {
+            Vec::new()
+        } else {
+            state.raw_blocks(key, &container)?
+        };
+        out.extend(
+            convert::unknown_regions(text, &raw)
+                .into_iter()
+                .map(|id| (name.clone(), id)),
+        );
+    }
+    Ok(out)
+}
+
 pub fn edited_regions(
     state: &crate::store::state::StateStore,
     key: &str,

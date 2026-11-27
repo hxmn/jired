@@ -2394,6 +2394,33 @@ fn a_long_summary_and_a_file_that_cannot_be_written_stop_nothing_else() {
     assert!(long.len() < 255 && long.contains("日本語"), "{long}");
 }
 
+/// A read-only region can only go back where it came from. Quoted into a new
+/// comment it had no original there, and went out as nothing, text and all.
+#[test]
+fn a_region_copied_into_a_new_comment_is_refused_not_dropped() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let text = ws.read(ISSUE_FILE);
+    let start = text.find("<!--jired:raw:").unwrap();
+    let close = text[start..].find("<!--/jired:raw:").unwrap() + start;
+    let end = text[close..].find("-->").unwrap() + close + 3;
+    let region = text[start..end].to_string();
+    let edited = text.replace(
+        "## Comments\n",
+        &format!("## Comments\n\n### [new]\n\nAs the panel says:\n\n{region}\n"),
+    );
+    ws.write(ISSUE_FILE, &edited);
+
+    let report = ws.json_code(&["push"], 2);
+    let result = &report["results"][0];
+    assert_eq!(result["ok"], false, "{report}");
+    assert!(
+        result["error"].as_str().unwrap().contains("a new comment"),
+        "{report}"
+    );
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();

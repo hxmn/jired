@@ -120,6 +120,20 @@ pub fn from_markdown(md: &str, markup: Markup, raw: &[RawBlock]) -> RichText {
     }
 }
 
+/// Regions `md` holds that are not among `raw`: one quoted from another
+/// text — a description's panel copied into a new comment — or whose markers
+/// were typed by hand. Sent, such a region went out as nothing, text and all,
+/// because there is no original to rebuild it from.
+pub fn unknown_regions(md: &str, raw: &[RawBlock]) -> Vec<String> {
+    let store = RawStore::from_blocks(raw.to_vec());
+    let known: std::collections::HashSet<&str> = raw.iter().map(|b| b.id.as_str()).collect();
+    markdown::parse(md, &store)
+        .raw_ids()
+        .into_iter()
+        .filter(|id| !known.contains(id.as_str()))
+        .collect()
+}
+
 /// Regions whose text a user changed since the file was written.
 ///
 /// Compares the current between-marker text against the approximation that was
