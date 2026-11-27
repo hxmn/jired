@@ -183,7 +183,16 @@ impl RawStore {
     /// every pull would show a spurious diff.
     pub fn insert(&mut self, node_json: String, approx_md: String, label: String) -> RawRef {
         let ordinal = self.blocks.len();
-        let id = raw_id(&node_json, ordinal);
+        // Three bytes of the hash, and more only where they clash: a second
+        // region with the first's id was pushed back with the first's
+        // content. Still a function of the document, so the same document
+        // gets the same ids.
+        let mut id = raw_id(&node_json, ordinal);
+        let mut bytes = 3;
+        while self.get(&id).is_some() && bytes < 32 {
+            bytes += 1;
+            id = raw_id_of_len(&node_json, ordinal, bytes);
+        }
         self.blocks.push(RawBlock {
             id: id.clone(),
             ordinal,
@@ -230,11 +239,16 @@ impl RawStore {
 
 /// Content-addressed marker id: stable across runs, short enough to read.
 pub fn raw_id(node_json: &str, ordinal: usize) -> String {
+    raw_id_of_len(node_json, ordinal, 3)
+}
+
+/// [`raw_id`] with `bytes` of the hash rather than three.
+fn raw_id_of_len(node_json: &str, ordinal: usize, bytes: usize) -> String {
     let mut hasher = Sha256::new();
     hasher.update(node_json.as_bytes());
     hasher.update(ordinal.to_le_bytes());
     let digest = hasher.finalize();
-    format!("r{}", hex::encode(&digest[..3]))
+    format!("r{}", hex::encode(&digest[..bytes.min(digest.len())]))
 }
 
 /// Flatten inline content to plain text, for approximations and summaries.
@@ -302,6 +316,27 @@ mod tests {
         assert_ne!(a, raw_id(r#"{"type":"panel"}"#, 1));
         assert_ne!(a, raw_id(r#"{"type":"expand"}"#, 0));
         assert!(a.starts_with('r') && a.len() == 7, "{a}");
+    }
+
+    /// Two regions never share an id: the second's is longer instead.
+    #[test]
+    fn a_clashing_id_is_lengthened() {
+        let taken = raw_id("{\"b\":1}", 1);
+        let mut store = RawStore::from_blocks(vec![RawBlock {
+            id: taken.clone(),
+            ordinal: 0,
+            node_json: "{\"a\":1}".into(),
+            approx_md: String::new(),
+            label: String::new(),
+        }]);
+        let r = store.insert("{\"b\":1}".into(), String::new(), String::new());
+        assert_ne!(r.id, taken);
+        assert!(
+            r.id.starts_with(&taken) && r.id.len() == taken.len() + 2,
+            "{}",
+            r.id
+        );
+        assert_eq!(store.get(&r.id).unwrap().node_json, "{\"b\":1}");
     }
 
     #[test]
