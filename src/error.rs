@@ -2,7 +2,9 @@
 //!
 //! Every failure path in jired maps to exactly one [`ExitCode`]. The mapping is a
 //! public contract documented in `docs/plan/commands.md` and consumed by agents,
-//! so it must never drift silently — see `tests/exit_codes.rs`.
+//! so it must never drift silently: [`ExitCode::ALL`] is the one table, the
+//! generated agent docs are rendered from it, and `tests/exit_codes.rs` holds
+//! the schema, the README and the specification to it.
 
 use std::fmt;
 
@@ -27,6 +29,48 @@ impl ExitCode {
     pub fn as_i32(self) -> i32 {
         self as i32
     }
+
+    /// Every exit code, its error kind (none for success), and what it means
+    /// to whoever reads it. Written once: it was copied by hand into five
+    /// places, and nothing held them to each other.
+    pub const ALL: &'static [(ExitCode, Option<&'static str>, &'static str)] = &[
+        (ExitCode::Success, None, "success"),
+        (ExitCode::Generic, Some("generic"), "generic error"),
+        (ExitCode::Usage, Some("usage"), "usage error"),
+        (ExitCode::Auth, Some("auth"), "authentication failure"),
+        (ExitCode::Network, Some("network"), "network failure"),
+        (
+            ExitCode::Conflict,
+            Some("conflict"),
+            "conflict (`pull` wrote nothing, or `--strategy merge` wrote conflict markers; \
+             `push` refused stale issues)",
+        ),
+        (
+            ExitCode::LossyBlocked,
+            Some("lossy"),
+            "lossy conversion blocked",
+        ),
+        (
+            ExitCode::MissingValue,
+            Some("missing_value"),
+            "required value missing in non-interactive mode",
+        ),
+        (
+            ExitCode::Locked,
+            Some("locked"),
+            "workspace locked by another jired process",
+        ),
+        (
+            ExitCode::CorruptState,
+            Some("corrupt_state"),
+            "local state database corrupt",
+        ),
+        (
+            ExitCode::UnsupportedServer,
+            Some("unsupported_server"),
+            "unsupported Jira server, or a change it accepted and did not apply",
+        ),
+    ];
 }
 
 /// Machine-readable error category, emitted as `kind` in `jired/error/1`.

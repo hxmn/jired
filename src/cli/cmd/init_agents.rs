@@ -1263,27 +1263,8 @@ pub fn render() -> String {
     );
 
     s.push_str("## Exit codes\n\n| Code | Meaning |\n|---|---|\n");
-    for (code, meaning) in [
-        (0, "success"),
-        (1, "generic error"),
-        (2, "usage error"),
-        (3, "authentication failure"),
-        (4, "network failure"),
-        (
-            5,
-            "conflict detected (pull aborted, or `--strategy merge` wrote conflict \
-             markers; push refused stale issues)",
-        ),
-        (6, "lossy conversion blocked"),
-        (7, "required value missing in non-interactive mode"),
-        (8, "workspace locked by another jired process"),
-        (9, "local state database corrupt"),
-        (
-            10,
-            "unsupported Jira server, including a change it accepted and did not apply",
-        ),
-    ] {
-        s.push_str(&format!("| {code} | {meaning} |\n"));
+    for (code, _, meaning) in crate::error::ExitCode::ALL {
+        s.push_str(&format!("| {} | {meaning} |\n", code.as_i32()));
     }
     s.push('\n');
 
@@ -1631,10 +1612,11 @@ mod tests {
     #[test]
     fn generated_docs_cover_every_exit_code() {
         let doc = render();
-        for code in 0..=10 {
+        for (code, _, meaning) in crate::error::ExitCode::ALL {
             assert!(
-                doc.contains(&format!("| {code} |")),
-                "exit code {code} is undocumented"
+                doc.contains(&format!("| {} | {meaning} |", code.as_i32())),
+                "exit code {} is undocumented",
+                code.as_i32()
             );
         }
     }
