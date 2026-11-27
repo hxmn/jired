@@ -277,6 +277,22 @@ pub struct StateStore {
     conn: Connection,
 }
 
+/// Every table keyed by an issue, which forgetting and rekeying an issue
+/// walk. One list, because the two hand-kept lists had drifted: a rekeyed
+/// issue left its changelog and its cached transitions under the `NEW-` key.
+const PER_ISSUE_TABLES: &[&str] = &[
+    "comment",
+    "attachment",
+    "raw_block",
+    "pending_op",
+    "conflict",
+    "changelog",
+    "transition_cache",
+];
+
+/// Prefixes of the per-issue entries in the `workspace` key/value table.
+const PER_ISSUE_META: &[&str] = &["changelog_synced:", "new_issue_project:"];
+
 impl StateStore {
     pub fn open(ws: &Workspace) -> Result<Self> {
         let conn = open_db(&ws.state_db_path())?;
@@ -691,21 +707,16 @@ impl StateStore {
 
     pub fn forget_issue(&self, key: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        for table in [
-            "comment",
-            "attachment",
-            "raw_block",
-            "pending_op",
-            "conflict",
-            "changelog",
-        ] {
+        for table in PER_ISSUE_TABLES {
             tx.execute(&format!("DELETE FROM {table} WHERE issue_key = ?1"), [key])?;
         }
         tx.execute("DELETE FROM issue WHERE key = ?1", [key])?;
-        tx.execute(
-            "DELETE FROM workspace WHERE key = ?1",
-            [format!("changelog_synced:{key}")],
-        )?;
+        for prefix in PER_ISSUE_META {
+            tx.execute(
+                "DELETE FROM workspace WHERE key = ?1",
+                [format!("{prefix}{key}")],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -717,18 +728,25 @@ impl StateStore {
             "UPDATE issue SET key = ?2, id = ?3 WHERE key = ?1",
             params![from, to, new_id],
         )?;
-        for table in [
-            "comment",
-            "attachment",
-            "raw_block",
-            "pending_op",
-            "conflict",
-        ] {
+        for table in PER_ISSUE_TABLES {
             tx.execute(
                 &format!("UPDATE {table} SET issue_key = ?2 WHERE issue_key = ?1"),
                 params![from, to],
             )?;
         }
+        // The changelog's watermark goes with the issue; the project a `NEW-`
+        // issue was made for is spent once the server has made it.
+        tx.execute(
+            "UPDATE workspace SET key = ?2 WHERE key = ?1",
+            params![
+                format!("changelog_synced:{from}"),
+                format!("changelog_synced:{to}")
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM workspace WHERE key = ?1",
+            [format!("new_issue_project:{from}")],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -825,6 +843,19 @@ impl StateStore {
 
     fn replace_attachments(&self, issue: &RemoteIssue) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        // An attachment the server no longer lists is gone: kept, pull went on
+        // trying to download it, and a local file of the same name was never
+        // offered for upload. Only a payload that carries the list says so; a
+        // listing fetched without the field says nothing about attachments.
+        if issue.raw.pointer("/fields/attachment").is_some() {
+            let ids: Vec<&str> = issue.attachments.iter().map(|a| a.id.as_str()).collect();
+            let listed = serde_json::to_string(&ids)?;
+            tx.execute(
+                "DELETE FROM attachment WHERE issue_key = ?1
+                   AND id NOT IN (SELECT value FROM json_each(?2))",
+                params![issue.key, listed],
+            )?;
+        }
         for a in &issue.attachments {
             tx.execute(
                 "INSERT INTO attachment (id, issue_key, filename, size, mime, author,
@@ -1719,6 +1750,80 @@ mod tests {
         let failed = s.pending_ops().unwrap();
         assert_eq!(failed[0].status, "failed");
         assert_eq!(failed[0].error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn rekeying_moves_every_per_issue_row() {
+        let store = StateStore::in_memory().unwrap();
+        store
+            .record_new_issue("NEW-1", "PROJ", "NEW-1. a.md")
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO changelog (issue_key, entry_id, items_json) VALUES ('NEW-1', '1', '[]')",
+                [],
+            )
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO transition_cache (issue_key, tid) VALUES ('NEW-1', '11')",
+                [],
+            )
+            .unwrap();
+        store.rekey_issue("NEW-1", "PROJ-9", "10009").unwrap();
+        for table in PER_ISSUE_TABLES {
+            let left: i64 = store
+                .conn
+                .query_row(
+                    &format!("SELECT count(*) FROM {table} WHERE issue_key = 'NEW-1'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(left, 0, "{table} kept rows under the temporary key");
+        }
+        assert_eq!(store.new_issue_project("NEW-1").unwrap(), None);
+    }
+
+    /// An attachment the server stops listing is forgotten; a payload that
+    /// carries no attachment list says nothing about them.
+    #[test]
+    fn attachments_follow_the_servers_list() {
+        let s = StateStore::in_memory().unwrap();
+        let with = |ids: &[&str]| {
+            let mut i = issue("PROJ-1", "2026-08-16T12:00:00Z");
+            i.attachments = ids
+                .iter()
+                .map(|id| crate::api::RemoteAttachment {
+                    id: id.to_string(),
+                    filename: format!("{id}.txt"),
+                    size: 1,
+                    mime: None,
+                    created: None,
+                    author: None,
+                    content_url: String::new(),
+                })
+                .collect();
+            i.raw["fields"]["attachment"] = serde_json::json!(ids);
+            i
+        };
+        s.upsert_remote(&with(&["1", "2"])).unwrap();
+        s.upsert_remote(&with(&["2"])).unwrap();
+        let left: Vec<String> = s
+            .attachments("PROJ-1")
+            .unwrap()
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(left, ["2"]);
+        let mut bare = issue("PROJ-1", "2026-08-16T13:00:00Z");
+        bare.raw["fields"]
+            .as_object_mut()
+            .map(|f| f.remove("attachment"));
+        s.upsert_remote(&bare).unwrap();
+        assert_eq!(s.attachments("PROJ-1").unwrap().len(), 1);
     }
 
     #[test]

@@ -76,7 +76,8 @@ push(issue):
   its id in the file by then, and an id the base does not know is neither
   created nor updated; the pull that a stale resume calls for takes the
   server's copy of it.
-- Comment updates additionally check the comment's own `base_updated`.
+- Comment updates are checked against the issue's `updated`, as every write is;
+  there is no per-comment check, though the `comment` table could carry one.
 - Known limitation: Jira has no compare-and-set for issue edits, so a GET→PUT race
   window remains (documented; window minimized, PUT response `updated` re-verified).
 
