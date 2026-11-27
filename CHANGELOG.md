@@ -8,6 +8,24 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.30.0] — 2026-11-27
+
+### Breaking
+
+- **Cloud content the file cannot hold is read-only rather than reshaped.**
+  A paragraph or heading with alignment or indentation, and a table with
+  merged or coloured cells, a header column, numbered rows, or a cell of
+  more than one paragraph, now come into the file as read-only regions, and
+  the issue reads `lossy: true`. Before, any edit to the description pushed
+  them back flattened: the alignment gone, merged cells split, a cell's
+  paragraphs and lists run into one line. Plain tables are editable as
+  before; their column widths are reset by an edit.
+
+### Fixed
+
+- **A task list written on Cloud carries the ids ADF requires** for the list
+  and each item.
+
 ## [0.29.0] — 2026-11-27
 
 ### Breaking
