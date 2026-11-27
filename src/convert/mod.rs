@@ -156,6 +156,33 @@ mod tests {
         assert_eq!(guarded(|| 7), Ok(7));
     }
 
+    /// An image in a table cell is a block where a Markdown cell holds one
+    /// line, so the cell rendered it flattened and an untouched file read as
+    /// an edited region, refusing the issue's push. The table now comes in
+    /// whole as one region, and goes back as it came.
+    #[test]
+    fn a_table_with_an_image_in_a_cell_pushes_back_untouched() {
+        let media = serde_json::json!({"type": "mediaSingle", "content": [
+            {"type": "media", "attrs": {"id": "m1", "type": "file", "collection": "c"}}]});
+        let adf = serde_json::json!({"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "before"}]},
+            {"type": "table", "content": [{"type": "tableRow", "content": [
+                {"type": "tableCell", "content": [media]},
+                {"type": "tableCell", "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "x"}]}]}]}]}]});
+        let converted = to_markdown(&RichText::Adf(adf.clone()));
+        assert!(edited_regions(&converted.markdown, &converted.raw).is_empty());
+        let back = from_markdown(&converted.markdown, Markup::Adf, &converted.raw);
+        assert_eq!(back, RichText::Adf(adf));
+
+        // Wiki: a region inside a cell stays in its cell.
+        let wiki = "|{color:red}hot{color}|b|";
+        let converted = to_markdown(&RichText::Wiki(wiki.into()));
+        assert!(edited_regions(&converted.markdown, &converted.raw).is_empty());
+        let back = from_markdown(&converted.markdown, Markup::Wiki, &converted.raw);
+        assert_eq!(back, RichText::Wiki(wiki.into()));
+    }
+
     #[test]
     fn empty_rich_text_converts_to_nothing() {
         let c = to_markdown(&RichText::Empty);
