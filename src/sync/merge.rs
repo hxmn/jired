@@ -204,79 +204,105 @@ pub fn merge_text(base: &str, ours: &str, theirs: &str) -> TextMerge {
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut pending: Vec<String> = Vec::new();
     let mut cursor = 0usize;
-    let mut oi = 0usize;
-    let mut ti = 0usize;
+    let (mut oi, mut ti) = (0usize, 0usize);
 
-    while cursor < base_lines.len() || oi < ours_changes.len() || ti < theirs_changes.len() {
-        let next_ours = ours_changes.get(oi);
-        let next_theirs = theirs_changes.get(ti);
-
-        let ours_here = next_ours.filter(|c| c.start <= cursor);
-        let theirs_here = next_theirs.filter(|c| c.start <= cursor);
-
-        match (ours_here, theirs_here) {
+    loop {
+        // The next change to start, from either side; an insertion goes before
+        // a change that starts at the same line, as it reads in either file.
+        let first = match (ours_changes.get(oi), theirs_changes.get(ti)) {
+            (None, None) => break,
+            (Some(o), None) => o,
+            (None, Some(t)) => t,
             (Some(o), Some(t)) => {
-                // Overlapping base ranges, or two insertions at the same point
-                // with different content: neither side can be applied blindly.
-                let overlap = o.start.max(t.start) < o.end.min(t.end)
-                    || (o.start == t.start && o.end == t.end);
-                if overlap && o.lines != t.lines {
-                    flush(&mut hunks, &mut pending);
-                    hunks.push(Hunk::Conflict {
-                        base: slice_lines(
-                            &base_lines,
-                            o.start.min(t.start),
-                            o.end.max(t.end) - o.start.min(t.start),
-                        ),
-                        ours: o.lines.clone(),
-                        theirs: t.lines.clone(),
-                    });
-                    cursor = o.end.max(t.end);
-                    oi += 1;
-                    ti += 1;
-                } else if o.lines == t.lines {
-                    pending.extend(o.lines.iter().cloned());
-                    cursor = o.end.max(t.end);
-                    oi += 1;
-                    ti += 1;
+                if (o.start, o.end) <= (t.start, t.end) {
+                    o
                 } else {
-                    // Disjoint: apply the earlier one and re-evaluate.
-                    let (change, is_ours) = if o.end <= t.start {
-                        (o, true)
-                    } else {
-                        (t, false)
-                    };
-                    pending.extend(change.lines.iter().cloned());
-                    cursor = change.end;
-                    if is_ours {
-                        oi += 1;
-                    } else {
-                        ti += 1;
-                    }
+                    t
                 }
             }
-            (Some(o), None) => {
-                pending.extend(o.lines.iter().cloned());
-                cursor = o.end;
+        };
+        pending.extend(
+            base_lines[cursor..first.start]
+                .iter()
+                .map(|l| l.to_string()),
+        );
+
+        // Every change from either side that reaches into the region grows it,
+        // until neither side's next change does. Taking one side's change and
+        // then the other's when they only partly overlapped moved the cursor
+        // back, and base lines one side had deleted came back with no conflict.
+        let mut region = Region {
+            start: first.start,
+            end: first.end,
+        };
+        let (o_from, t_from) = (oi, ti);
+        loop {
+            if let Some(o) = ours_changes.get(oi).filter(|c| region.reached_by(c)) {
+                region.grow(o);
                 oi += 1;
-            }
-            (None, Some(t)) => {
-                pending.extend(t.lines.iter().cloned());
-                cursor = t.end;
+            } else if let Some(t) = theirs_changes.get(ti).filter(|c| region.reached_by(c)) {
+                region.grow(t);
                 ti += 1;
-            }
-            (None, None) => {
-                if cursor < base_lines.len() {
-                    pending.push(base_lines[cursor].to_string());
-                    cursor += 1;
-                } else {
-                    break;
-                }
+            } else {
+                break;
             }
         }
+
+        let ours_part = region.apply(&base_lines, &ours_changes[o_from..oi]);
+        let theirs_part = region.apply(&base_lines, &theirs_changes[t_from..ti]);
+        if o_from == oi || t_from == ti || ours_part == theirs_part {
+            pending.extend(if o_from == oi { theirs_part } else { ours_part });
+        } else {
+            flush(&mut hunks, &mut pending);
+            hunks.push(Hunk::Conflict {
+                base: slice_lines(&base_lines, region.start, region.end - region.start),
+                ours: ours_part,
+                theirs: theirs_part,
+            });
+        }
+        cursor = region.end;
     }
+    pending.extend(base_lines[cursor..].iter().map(|l| l.to_string()));
     flush(&mut hunks, &mut pending);
     TextMerge { hunks }
+}
+
+/// The base lines `start..end` that a run of changes from both sides covers.
+struct Region {
+    start: usize,
+    end: usize,
+}
+
+impl Region {
+    /// Whether `c` touches lines this region already changes. Changes that only
+    /// meet at a boundary are applied one after the other, as before; two
+    /// insertions at the same point are one region, whose order nobody chose.
+    fn reached_by(&self, c: &Change) -> bool {
+        match (self.start == self.end, c.start == c.end) {
+            (true, true) => c.start == self.start,
+            (true, false) => c.start < self.start && self.start < c.end,
+            (false, true) => self.start < c.start && c.start < self.end,
+            (false, false) => c.start < self.end && self.start < c.end,
+        }
+    }
+
+    fn grow(&mut self, c: &Change) {
+        self.start = self.start.min(c.start);
+        self.end = self.end.max(c.end);
+    }
+
+    /// The region as one side wrote it: its changes, and base between them.
+    fn apply(&self, base: &[&str], side: &[Change]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut at = self.start;
+        for c in side {
+            out.extend(base[at..c.start].iter().map(|l| l.to_string()));
+            out.extend(c.lines.iter().cloned());
+            at = c.end;
+        }
+        out.extend(base[at..self.end].iter().map(|l| l.to_string()));
+        out
+    }
 }
 
 fn flush(hunks: &mut Vec<Hunk>, pending: &mut Vec<String>) {
@@ -421,6 +447,103 @@ mod tests {
         assert_eq!(take_side_of_markers(&written, false), "a\nours\nc");
         assert_eq!(take_side_of_markers(&written, true), "a\ntheirs\nc");
         assert_eq!(take_side_of_markers("plain\n", true), "plain\n");
+    }
+
+    fn twelve() -> String {
+        (0..12)
+            .map(|i| format!("b{i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn with(base: &str, edit: impl Fn(usize, &str) -> Vec<String>) -> String {
+        let lines: Vec<String> = base
+            .lines()
+            .enumerate()
+            .flat_map(|(i, l)| edit(i, l))
+            .collect();
+        lines.join("\n")
+    }
+
+    /// One side's change spanning lines where the other's starts: both reach
+    /// the same base lines, so it is a conflict, and no line one side deleted
+    /// comes back.
+    #[test]
+    fn a_change_inside_the_other_sides_change_conflicts() {
+        let base = twelve();
+        let rewrite = with(&base, |i, l| match i {
+            2 => vec!["OURS-REWRITE".into()],
+            3..=8 => vec![],
+            _ => vec![l.into()],
+        });
+        let insert = with(&base, |i, l| match i {
+            5 => vec!["THEIRS-INSERT".into(), l.into()],
+            _ => vec![l.into()],
+        });
+        let m = merge_text(&base, &rewrite, &insert);
+        assert!(m.has_conflict(), "{}", m.render("X"));
+        assert_eq!(m.render_side(false), rewrite);
+        assert_eq!(m.render_side(true), insert);
+
+        let delete = with(&base, |i, l| match i {
+            2..=8 => vec![],
+            _ => vec![l.into()],
+        });
+        let change = with(&base, |i, l| match i {
+            5 => vec!["THEIRS-b5".into()],
+            _ => vec![l.into()],
+        });
+        let m = merge_text(&base, &delete, &change);
+        assert!(m.has_conflict(), "{}", m.render("X"));
+        assert_eq!(m.render_side(false), delete);
+        assert_eq!(m.render_side(true), change);
+    }
+
+    /// Changes that only meet at a line boundary are still both applied.
+    #[test]
+    fn changes_that_meet_at_a_boundary_both_apply() {
+        let m = merge_text("a\nb\nc", "a\nNEW\nb\nc", "a\nB\nc");
+        assert!(!m.has_conflict(), "{:?}", m.hunks);
+        assert_eq!(m.render("X"), "a\nNEW\nB\nc");
+    }
+
+    /// One edit of base: per line keep, drop, replace or insert before it.
+    fn side(tag: &'static str) -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::prelude::*;
+        prop::collection::vec(0u8..8, 12).prop_map(move |ops| {
+            let base = twelve();
+            with(&base, |i, l| match ops[i] {
+                0 => vec![],
+                1 => vec![format!("{tag}{i}")],
+                2 => vec![format!("{tag}{i}"), l.into()],
+                _ => vec![l.into()],
+            })
+        })
+    }
+
+    proptest::proptest! {
+        /// Whatever both sides did, neither side's reading of the merge holds
+        /// a base line twice, and which side is "ours" changes nothing but the
+        /// labels.
+        #[test]
+        fn a_merge_repeats_no_base_line_and_is_symmetric(ours in side("o"), theirs in side("t")) {
+            let base = twelve();
+            let m = merge_text(&base, &ours, &theirs);
+            for taken in [m.render_side(false), m.render_side(true)] {
+                for line in base.lines() {
+                    proptest::prop_assert!(
+                        taken.lines().filter(|l| *l == line).count() <= 1,
+                        "{line} twice in\n{taken}"
+                    );
+                }
+            }
+            let flipped = merge_text(&base, &theirs, &ours);
+            proptest::prop_assert_eq!(m.has_conflict(), flipped.has_conflict());
+            proptest::prop_assert_eq!(m.render_side(false), flipped.render_side(true));
+            proptest::prop_assert_eq!(m.render_side(true), flipped.render_side(false));
+            proptest::prop_assert_eq!(merge_text(&base, &ours, &base).render("X"), ours.clone());
+            proptest::prop_assert_eq!(merge_text(&base, &ours, &ours).render("X"), ours);
+        }
     }
 
     #[test]
