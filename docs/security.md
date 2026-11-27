@@ -98,7 +98,13 @@ Three tests enforce this rather than leaving it to review
 (`tests/no_secrets.rs`): a full workflow is run at `trace` verbosity with a
 known token and the output is searched for it; the committed fixtures are
 scanned for credentials, real hostnames and signed URLs; and the guard itself is
-verified by injecting a leak and confirming it fails.
+verified by injecting a leak and confirming it fails. That workflow runs
+against the fixture client, which stands in above the HTTP layer, so the layer
+where an `Authorization` header exists is covered separately: the tests in
+`src/api/http.rs` talk to a server on a loopback port (`src/api/loopback.rs`)
+through the real client, check that the header goes to the configured server
+and nowhere else, and search a `trace`-level log of real requests for the
+token.
 
 ## Recording fixtures from a real instance
 

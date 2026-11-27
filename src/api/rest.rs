@@ -1674,60 +1674,27 @@ mod tests {
         );
     }
 
-    /// A Cloud site on a loopback port: an empty field list, and a search
-    /// that answers in two token-paged pages. Keeps each search body.
-    type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+    use crate::api::loopback::{self, Reply};
 
-    fn cloud_server() -> (String, Seen) {
-        use std::io::{BufRead, BufReader, Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let log = seen.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut first = String::new();
-                reader.read_line(&mut first).unwrap();
-                let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
-                let mut length = 0usize;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
-                    }
-                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = v.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
-                let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                let issue = |key: &str| {
-                    json!({"id": "1", "key": key,
-                           "fields": {"summary": "s", "updated": "2026-01-01T00:00:00.000+0000"}})
-                };
-                let reply = if path.ends_with("/field") {
+    /// A Cloud site: an empty field list, and a search that answers in two
+    /// token-paged pages.
+    fn cloud_server() -> (String, loopback::Seen) {
+        loopback::serve(|r| {
+            let issue = |key: &str| {
+                json!({"id": "1", "key": key,
+                       "fields": {"summary": "s", "updated": "2026-01-01T00:00:00.000+0000"}})
+            };
+            Reply::Json(
+                200,
+                if r.path.ends_with("/field") {
                     json!([])
-                } else if body.get("nextPageToken").is_none() {
+                } else if r.json().get("nextPageToken").is_none() {
                     json!({"issues": [issue("PROJ-1")], "nextPageToken": "p2", "isLast": false})
                 } else {
                     json!({"issues": [issue("PROJ-2")], "isLast": true})
-                };
-                log.lock().unwrap().push((path, body));
-                let text = reply.to_string();
-                let _ = stream.write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                         Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
-                        text.len()
-                    )
-                    .as_bytes(),
-                );
-            }
-        });
-        (url, seen)
+                },
+            )
+        })
     }
 
     /// Cloud's search is `search/jql`, paged by the token each page gives:
@@ -1736,16 +1703,7 @@ mod tests {
     #[tokio::test]
     async fn a_cloud_search_pages_by_token() {
         let (url, seen) = cloud_server();
-        let http = HttpClient::new(crate::api::Connection {
-            base_url: url,
-            deployment: Deployment::Cloud,
-            auth_kind: crate::api::AuthKind::ApiToken,
-            identity: Some("a@example.invalid".into()),
-            token: "t".to_string().into(),
-            tls: Default::default(),
-        })
-        .unwrap();
-        let rest = Rest::new(http);
+        let rest = Rest::new(loopback::client(&url, Deployment::Cloud));
         let all = crate::api::client::search_all(
             &rest,
             SearchQuery {
@@ -1764,15 +1722,38 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(path, _)| !path.ends_with("/field"))
+            .filter(|r| !r.path.ends_with("/field"))
             .cloned()
             .collect();
         assert_eq!(searches.len(), 2, "{searches:?}");
         assert!(
-            searches.iter().all(|(p, _)| p == "/rest/api/3/search/jql"),
+            searches.iter().all(|r| r.path == "/rest/api/3/search/jql"),
             "{searches:?}"
         );
-        assert_eq!(searches[1].1["nextPageToken"], "p2");
-        assert!(searches[0].1.get("startAt").is_none());
+        assert_eq!(searches[1].json()["nextPageToken"], "p2");
+        assert!(searches[0].json().get("startAt").is_none());
+    }
+
+    /// Data Center pages comments by offset, and the walk reads until the
+    /// total the server reports, a page at a time.
+    #[tokio::test]
+    async fn comments_are_read_to_the_total_a_page_at_a_time() {
+        let (url, seen) = loopback::serve(|r| {
+            let start: usize = r
+                .path
+                .split(['?', '&'])
+                .find_map(|q| q.strip_prefix("startAt="))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            // A server that hands out two at a time, whatever was asked.
+            let page: Vec<_> = (start..(start + 2).min(5))
+                .map(|n| json!({"id": n.to_string(), "body": "b"}))
+                .collect();
+            Reply::Json(200, json!({"startAt": start, "total": 5, "comments": page}))
+        });
+        let rest = Rest::new(loopback::client(&url, Deployment::DataCenter));
+        let all = rest.comment_values("PROJ-1").await.unwrap();
+        assert_eq!(all.len(), 5);
+        assert_eq!(seen.lock().unwrap().len(), 3);
     }
 }

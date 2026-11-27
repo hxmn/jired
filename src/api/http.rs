@@ -878,47 +878,15 @@ mod tests {
         );
     }
 
-    /// A server on a loopback port that answers every request with `reply`
-    /// and counts them.
-    fn counting_server(reply: &'static str) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
-        use std::io::{BufRead, BufReader, Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let seen = count.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut length = 0usize;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
-                    }
-                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = v.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
-                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let _ = stream.write_all(reply.as_bytes());
-            }
-        });
-        (url, count)
+    use crate::api::loopback::{self, Reply, TOKEN};
+
+    /// A server that answers every request with `reply` as written.
+    fn replying(reply: &'static str) -> (String, loopback::Seen) {
+        loopback::serve(move |_| Reply::Raw(reply.to_string()))
     }
 
-    fn client(url: String) -> HttpClient {
-        HttpClient::new(Connection {
-            base_url: url,
-            deployment: Deployment::DataCenter,
-            auth_kind: AuthKind::Pat,
-            identity: None,
-            token: "t".to_string().into(),
-            tls: TlsOptions::default(),
-        })
-        .unwrap()
+    fn client(url: &str) -> HttpClient {
+        loopback::client(url, Deployment::DataCenter)
     }
 
     const BAD_GATEWAY: &str = "HTTP/1.1 502 Bad Gateway\r\nRetry-After: 0\r\n\
@@ -929,15 +897,15 @@ mod tests {
     /// is unknown; sending it again posted the comment twice.
     #[tokio::test]
     async fn a_post_that_adds_something_is_not_sent_twice() {
-        let (url, count) = counting_server(BAD_GATEWAY);
-        let err = client(url)
+        let (url, seen) = replying(BAD_GATEWAY);
+        let err = client(&url)
             .post_json(
                 "/rest/api/2/issue/A-1/comment",
                 serde_json::json!({"body": "x"}),
             )
             .await
             .unwrap_err();
-        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(seen.lock().unwrap().len(), 1);
         assert_eq!(err.to_json()["details"]["outcome"], "unknown", "{err:?}");
     }
 
@@ -945,105 +913,172 @@ mod tests {
     /// searches, still ride out a proxy's 502.
     #[tokio::test]
     async fn a_read_is_retried_through_a_bad_gateway() {
-        let (url, count) = counting_server(BAD_GATEWAY);
-        let http = client(url);
+        let (url, seen) = replying(BAD_GATEWAY);
+        let http = client(&url);
         assert!(http.get_json("/rest/api/2/myself").await.is_err());
-        assert_eq!(
-            count.load(std::sync::atomic::Ordering::SeqCst),
-            1 + MAX_RETRIES as usize
-        );
+        assert_eq!(seen.lock().unwrap().len(), 1 + MAX_RETRIES as usize);
 
         assert!(http
             .post_json_repeatable("/rest/api/2/search", serde_json::json!({}))
             .await
             .is_err());
-        assert_eq!(
-            count.load(std::sync::atomic::Ordering::SeqCst),
-            2 * (1 + MAX_RETRIES as usize)
-        );
+        assert_eq!(seen.lock().unwrap().len(), 2 * (1 + MAX_RETRIES as usize));
     }
 
     /// A POST answered 429 was refused before Jira did anything with it.
     #[tokio::test]
     async fn a_post_refused_for_throttling_is_sent_again() {
-        let (url, count) = counting_server(
+        let (url, seen) = replying(
             "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\n\
              Content-Length: 0\r\nConnection: close\r\n\r\n",
         );
-        assert!(client(url)
+        assert!(client(&url)
             .post_json("/rest/api/2/issue", serde_json::json!({}))
             .await
             .is_err());
-        assert_eq!(
-            count.load(std::sync::atomic::Ordering::SeqCst),
-            1 + MAX_RETRIES as usize
-        );
+        assert_eq!(seen.lock().unwrap().len(), 1 + MAX_RETRIES as usize);
     }
 
     /// A 200 whose body breaks off is a failure, not an empty answer.
     #[tokio::test]
     async fn a_body_that_breaks_off_is_an_error() {
-        let (url, _) = counting_server(
+        let (url, _) = replying(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
              Content-Length: 500\r\nConnection: close\r\n\r\n{\"issues\": [",
         );
-        let err = client(url)
+        let err = client(&url)
             .post_json_repeatable("/rest/api/2/search", serde_json::json!({}))
             .await
             .unwrap_err();
         assert_eq!(err.to_json()["kind"], "network", "{err:?}");
     }
 
-    /// A server that answers 200 with no body and keeps each request's
-    /// `Authorization` header, or `None` for a request without one.
-    fn header_server() -> (String, Arc<std::sync::Mutex<Vec<Option<String>>>>) {
-        use std::io::{BufRead, BufReader, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let log = seen.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut auth = None;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
-                    }
-                    if let Some((name, value)) = line.split_once(':') {
-                        if name.eq_ignore_ascii_case("authorization") {
-                            auth = Some(value.trim().to_string());
-                        }
-                    }
-                }
-                log.lock().unwrap().push(auth);
-                let _ = stream.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                );
-            }
-        });
-        (url, seen)
-    }
-
     /// An attachment URL is whatever the issue payload names; the token goes
     /// only to the configured server, not to another host or port.
     #[tokio::test]
     async fn the_credential_goes_only_to_the_configured_server() {
-        let (home, home_seen) = header_server();
-        let (elsewhere, elsewhere_seen) = header_server();
-        let http = client(home.clone());
+        let ok = || Reply::With(200, vec![], String::new());
+        let (home, home_seen) = loopback::serve(move |_| ok());
+        let (elsewhere, elsewhere_seen) = loopback::serve(move |_| ok());
+        let http = client(&home);
         http.get_bytes(&format!("{home}/secure/attachment/1/a.txt"))
             .await
             .unwrap();
         http.get_bytes(&format!("{elsewhere}/secure/attachment/1/a.txt"))
             .await
             .unwrap();
+        let auth = |seen: &loopback::Seen| {
+            seen.lock()
+                .unwrap()
+                .iter()
+                .map(|r| r.header("authorization").map(str::to_string))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(auth(&home_seen), [Some(format!("Bearer {TOKEN}"))]);
+        assert_eq!(auth(&elsewhere_seen), [None]);
+    }
+
+    /// What a caller acts on is the kind: a refused credential is `auth` and
+    /// exit 3, an issue that is not there is the user's input, a server that
+    /// failed is `network`; and Jira's own words reach the message.
+    #[tokio::test]
+    async fn a_status_becomes_the_kind_a_caller_acts_on() {
+        let (url, _) = loopback::serve(|r| {
+            let status = r
+                .path
+                .rsplit('/')
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(500);
+            Reply::Json(
+                status,
+                serde_json::json!({"errorMessages": ["said the server"], "errors": {}}),
+            )
+        });
+        let http = client(&url);
+        for (status, kind) in [
+            (401, "auth"),
+            (403, "auth"),
+            (404, "usage"),
+            (500, "network"),
+            (400, "generic"),
+        ] {
+            let err = http
+                .get_json(&format!("/rest/api/2/issue/A-1/x/{status}"))
+                .await
+                .unwrap_err();
+            let json = err.to_json();
+            assert_eq!(json["kind"], kind, "{status}: {json}");
+            assert_eq!(json["details"]["status"], status, "{json}");
+            assert!(
+                err.message.contains("said the server"),
+                "{status}: {}",
+                err.message
+            );
+        }
+    }
+
+    /// An upload goes as multipart with the header Jira wants before it
+    /// accepts one, and the credential with it.
+    #[tokio::test]
+    async fn an_upload_is_multipart_with_the_token_check_header() {
+        let (url, seen) = loopback::serve(|_| Reply::Json(200, serde_json::json!([{"id": "1"}])));
+        client(&url)
+            .post_multipart(
+                "/rest/api/2/issue/A-1/attachments",
+                "a.txt",
+                b"hello".to_vec(),
+            )
+            .await
+            .unwrap();
+        let seen = seen.lock().unwrap();
+        let r = &seen[0];
+        assert_eq!(r.method, "POST");
+        assert!(r
+            .header("content-type")
+            .unwrap_or("")
+            .starts_with("multipart/form-data"));
+        assert_eq!(r.header("x-atlassian-token"), Some("no-check"));
         assert_eq!(
-            home_seen.lock().unwrap().as_slice(),
-            [Some("Bearer t".to_string())]
+            r.header("authorization"),
+            Some(format!("Bearer {TOKEN}").as_str())
         );
-        assert_eq!(elsewhere_seen.lock().unwrap().as_slice(), [None]);
+        assert!(String::from_utf8_lossy(&r.body).contains("hello"));
+    }
+
+    /// The token never reaches the log, at the level that logs request bodies.
+    #[tokio::test]
+    async fn the_trace_log_holds_no_token() {
+        #[derive(Clone, Default)]
+        struct Buf(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buf = Buf::default();
+        let sink = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || sink.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let (url, _) = loopback::serve(|_| Reply::Json(401, serde_json::json!({})));
+        let http = client(&url);
+        let _ = http
+            .post_json("/rest/api/2/issue", serde_json::json!({"fields": {}}))
+            .await;
+        let _ = http.get_json("/rest/api/2/myself").await;
+        let log = String::from_utf8_lossy(&buf.0.lock().unwrap()).into_owned();
+        assert!(
+            log.contains("/rest/api/2/issue"),
+            "nothing was logged:\n{log}"
+        );
+        assert!(!log.contains(TOKEN), "{log}");
     }
 }

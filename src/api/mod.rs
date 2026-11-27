@@ -12,6 +12,8 @@ pub mod datacenter;
 pub mod filter;
 pub mod fixture;
 pub mod http;
+#[cfg(test)]
+pub(crate) mod loopback;
 pub mod model;
 pub mod normalize;
 pub mod rest;
