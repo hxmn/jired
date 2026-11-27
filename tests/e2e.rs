@@ -2445,6 +2445,33 @@ fn a_task_item_with_a_list_under_it_is_not_sent_short() {
     assert_eq!(report["results"][0]["ok"], true, "{report}");
 }
 
+/// In `--json` mode stderr is the structured error and nothing else: a bad
+/// flag printed clap's prose there, and a log warning went out beside a
+/// successful document.
+#[test]
+fn json_mode_keeps_stderr_to_the_structured_error() {
+    let ws = Ws::new();
+    ws.init();
+    let err = ws.json_err(&["pull", "--nonsense"], 2);
+    assert_eq!(err["schema"], "jired/error/1", "{err}");
+    assert_eq!(err["kind"], "usage", "{err}");
+
+    std::fs::remove_file(ws.fixtures.join("versions.json")).unwrap();
+    let out = ws.cmd(&["fetch", "--json"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(doc["warnings"].to_string().contains("versions"), "{doc}");
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();

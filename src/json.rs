@@ -207,6 +207,36 @@ pub fn set_verbose(on: bool) {
     VERBOSE.store(on, Ordering::Relaxed);
 }
 
+/// Whether this run is in `--json` mode, for what has no [`Out`] to ask.
+static JSON_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_json_mode(on: bool) {
+    JSON_MODE.store(on, Ordering::Relaxed);
+}
+
+pub fn json_mode() -> bool {
+    JSON_MODE.load(Ordering::Relaxed)
+}
+
+/// Keep a warning for the result document, as [`Out::warn`] does in `--json`
+/// mode; for code that has a warning and no `Out` to give it to.
+pub fn park(msg: impl Into<String>) {
+    if let Ok(mut parked) = PARKED_WARNINGS.lock() {
+        parked.push(msg.into());
+    }
+}
+
+/// A warning from code with no [`Out`]: parked in `--json` mode, printed on
+/// stderr otherwise. A bare `eprintln!` broke the promise that stderr holds
+/// only the structured error.
+pub fn warn(msg: impl AsRef<str>) {
+    if json_mode() {
+        park(msg.as_ref());
+    } else {
+        eprintln!("{} {}", style::err(YELLOW, "warning:"), msg.as_ref());
+    }
+}
+
 /// Output sink shared by every command handler.
 ///
 /// Keeping stdout behind this type is what guarantees the TUI and progress

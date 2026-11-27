@@ -251,11 +251,11 @@ fn seal(
             Ok((blob, Some(kdf)))
         }
         _ if allow_plaintext => {
-            eprintln!(
-                "warning: storing the credential UNENCRYPTED in {} \
-                 (--insecure-store). Anyone who can read it gets your token.",
+            crate::json::warn(format!(
+                "storing the credential UNENCRYPTED in {} (--insecure-store). \
+                 Anyone who can read it gets your token.",
                 into.describe()
-            );
+            ));
             Ok((token.expose_secret().as_bytes().to_vec(), None))
         }
         _ => Err(JiredError::auth(format!(

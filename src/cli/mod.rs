@@ -328,7 +328,11 @@ pub fn run(cli: Cli) -> ExitCode {
         compact: cli.global.json_compact,
     });
     crate::json::set_verbose(cli.global.verbose > 0);
-    init_tracing(cli.global.verbose, cli.global.silent);
+    crate::json::set_json_mode(cli.global.json);
+    init_tracing(cli.global.verbose, cli.global.silent, cli.global.json);
+    if cli.global.json {
+        json_panic_hook();
+    }
 
     // Warned here as well as in `Context` so it still appears when the command
     // fails before a context exists. `Context` covers the other half: the same
@@ -407,8 +411,22 @@ fn dispatch(cli: &Cli, out: Out) -> crate::Result<ExitCode> {
     }
 }
 
-fn init_tracing(verbose: u8, silent: bool) {
+fn init_tracing(verbose: u8, silent: bool, json: bool) {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::EnvFilter;
+    // In `--json` mode stderr is the structured error and nothing else, so a
+    // warning — the retry on a 429 is the common one — goes into the
+    // document's `warnings` instead. Asked for by `-v` or `JIRED_LOG`, logs
+    // are what was asked for, and go to stderr as ever.
+    let asked = verbose > 0 || std::env::var_os("JIRED_LOG").is_some();
+    if json && !asked {
+        let _ = tracing_subscriber::registry()
+            .with(Parked)
+            .with(EnvFilter::new(if silent { "error" } else { "warn" }))
+            .try_init();
+        return;
+    }
     let default = log_filter(verbose, silent);
     // `JIRED_LOG` still wins: somebody who set it asked for those logs by name,
     // and a flag about chatter should not overrule an instruction about logging.
@@ -419,6 +437,57 @@ fn init_tracing(verbose: u8, silent: bool) {
         .with_writer(std::io::stderr)
         .with_target(false)
         .try_init();
+}
+
+/// A tracing layer that keeps each event's message as a parked warning.
+struct Parked;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Parked {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "message" {
+                    self.0 = value.to_string();
+                }
+            }
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        if !message.0.is_empty() {
+            crate::json::park(message.0);
+        }
+    }
+}
+
+/// In `--json` mode a panic is a `jired/error/1` on stderr and exit 1, as
+/// any other failure is: the default hook printed prose and exited 101, a
+/// code outside the documented table. The hook installed before it (the
+/// terminal restore a screen sets) runs first.
+fn json_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        previous(info);
+        let place = info
+            .location()
+            .map(|l| format!(" at {}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let what = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "a panic with no message".into());
+        let err = JiredError::generic(format!("jired crashed: {what}{place}"))
+            .with_hint("this is a bug in jired; please report it with the command that caused it");
+        eprintln!("{}", err.to_json());
+        std::process::exit(err.exit_code().as_i32());
+    }));
 }
 
 /// The log level each verbosity means.
