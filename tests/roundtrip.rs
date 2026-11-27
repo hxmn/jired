@@ -449,6 +449,21 @@ proptest! {
         let _ = adf::from_ast(&doc, &store);
     }
 
+    /// Wiki text as a Data Center holds it, read and written back with no
+    /// edit, has to mean what it meant: whatever the writer cannot say the
+    /// same way is a read-only region, and goes back byte for byte. The
+    /// review found tables, colour spans and `{code}` tags that came back as
+    /// something else — and an edit anywhere sent that.
+    #[test]
+    fn untouched_wiki_text_means_the_same_written_back(text in server_text()) {
+        let mut store = RawStore::default();
+        let doc = wiki::to_ast(&text, &mut store);
+        let written = wiki::from_ast(&doc, &store);
+        let mut again = RawStore::default();
+        let reread = wiki::to_ast(&written, &mut again);
+        prop_assert_eq!(&reread, &doc, "\n--- text ---\n{}\n--- written ---\n{}", text, written);
+    }
+
     /// The same for what someone types into an issue file.
     #[test]
     fn no_markdown_text_panics_the_conversion(text in server_text()) {

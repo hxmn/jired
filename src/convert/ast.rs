@@ -194,6 +194,19 @@ impl RawStore {
         RawRef { id }
     }
 
+    /// How many regions are stored; with [`RawStore::truncate`], a parser
+    /// can take back the regions of a block it then keeps whole instead.
+    pub fn len(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// Forget every region after the first `len`. A region left behind by a
+    /// block that was then captured whole would be one no file shows, and
+    /// push would read it as deleted.
+    pub fn truncate(&mut self, len: usize) {
+        self.blocks.truncate(len);
+    }
+
     pub fn blocks(&self) -> &[RawBlock] {
         &self.blocks
     }

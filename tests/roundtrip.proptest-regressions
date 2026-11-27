@@ -23,3 +23,4 @@ cc 96f3fb7e71b82e76ebe823a974f147623705fad1b9dad2fe9428c9fb8c04ed1c # shrinks to
 cc d8059eaf5f3f311451b6f6d269a3f88748ce6d9ae20692efc6433b6c7175bec6 # shrinks to doc = Document { blocks: [BulletList([ListItem { content: [Paragraph([Strong([Text("a")]), Text("*a"), Strike([Text("A")])])] }])] }
 cc 433693aa39fda6f6050615753afb5a83f9e8db7b2dfbc7d3f905644e64886bc6 # shrinks to text = "|Ф"
 cc 63b02d3648583558e161f68c6c448315de6a6298fe2fe4a6ef29f68a9cab3fcb # shrinks to doc = Document { blocks: [Heading { level: 2, content: [Text("Description")] }] }
+cc 20d813aad84e6098be40f929cde63d942a736329c355b7d6f0ecba2c25df9cdd # shrinks to text = "[~]"

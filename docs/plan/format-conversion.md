@@ -93,6 +93,13 @@ purpose, and reset by an edit: `localId`, a table's layout and width, and its
 column widths. A task list read back from Markdown gets a `localId` derived
 from its content, since ADF requires one.
 
+On Data Center a `{code}` that names no language is read as Java, as Jira draws
+it, and goes back as `{code:java}`; `{noformat}` is a fence with none. A
+`{code}` with any parameter but the language, an inline `{code}`, a table with
+a row of mixed header and plain cells or a cell over several lines, and any
+block that the writer would give back meaning something else, are read-only
+regions.
+
 Wiki markup marks a span inside a word with braced delimiters, `a{*}b{*}c`,
 because a bare `*` there is text; Jira's editor writes that form wherever a mark
 touches a letter, and pads a code span the same way with `{}`, an empty token

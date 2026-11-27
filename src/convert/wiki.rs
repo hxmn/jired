@@ -15,7 +15,11 @@
 //! color, expand or unknown macro — is captured verbatim into the [`RawStore`]
 //! and referenced by a [`Block::Raw`] or [`Inline::Raw`], so an untouched region
 //! pushes back byte-identical by construction. So is every phrase mark Markdown
-//! has no spelling for: underline, superscript, subscript, citation.
+//! has no spelling for: underline, superscript, subscript, citation; a `{code}`
+//! with a parameter besides its language, or one in the middle of a line; and
+//! a table no Markdown table can be, with mixed header and plain cells or a
+//! cell running over lines. Every other block is written back and read again
+//! as it is parsed, and one that does not read the same is kept whole too.
 //!
 //! The other direction has the opposite duty: what is literal text in the file
 //! has to reach Jira as text, so the writer escapes any delimiter Jira would
@@ -42,7 +46,12 @@ pub fn from_ast(doc: &Document, store: &RawStore) -> String {
 // ---------------------------------------------------------------------------
 
 fn parse_blocks(text: &str, store: &mut RawStore) -> Vec<Block> {
-    let mut out = Vec::new();
+    parse_blocks_checked(text, store, true)
+}
+
+/// `check`: hold each block to the writer, see [`written_back_the_same`].
+fn parse_blocks_checked(text: &str, store: &mut RawStore, check: bool) -> Vec<Block> {
+    let mut out: Vec<Block> = Vec::new();
     let mut pos = 0usize;
 
     while pos < text.len() {
@@ -51,62 +60,102 @@ fn parse_blocks(text: &str, store: &mut RawStore) -> Vec<Block> {
             pos = next;
             continue;
         }
-
-        if let Some(m) = macro_at(text, pos) {
-            let (block, end) = parse_macro(text, &m, store);
-            if let Some(block) = block {
-                out.push(block);
-            }
-            pos = end;
-            continue;
+        let (start, regions, parsed) = (pos, store.len(), out.len());
+        pos = parse_block(text, pos, store, &mut out);
+        if check && out.len() == parsed + 1 && !written_back_the_same(&out[parsed], store, regions)
+        {
+            let source = text[start..pos].trim_end();
+            store.truncate(regions);
+            let approx = format!("**[jired: Jira markup — read-only]**\n{source}");
+            out[parsed] = Block::Raw(store.insert(source.to_string(), approx, "markup".into()));
         }
-
-        let trimmed = line.trim_start();
-
-        if trimmed.trim_end() == "----" {
-            out.push(Block::Rule);
-            pos = next;
-            continue;
-        }
-
-        if let Some((level, rest)) = heading_at(trimmed) {
-            out.push(Block::Heading {
-                level,
-                content: parse_inlines(rest.trim_end(), store),
-            });
-            pos = next;
-            continue;
-        }
-
-        if let Some(rest) = trimmed.strip_prefix("bq.") {
-            out.push(Block::BlockQuote(vec![Block::Paragraph(parse_inlines(
-                rest.trim(),
-                store,
-            ))]));
-            pos = next;
-            continue;
-        }
-
-        if list_marker(trimmed).is_some() {
-            let (block, end) = parse_list(text, pos, store);
-            out.push(block);
-            pos = end;
-            continue;
-        }
-
-        if trimmed.starts_with('|') {
-            let (block, end) = parse_table(text, pos, store);
-            out.push(block);
-            pos = end;
-            continue;
-        }
-
-        let (block, end) = parse_paragraph(text, pos, store);
-        out.push(block);
-        pos = end;
     }
 
     out
+}
+
+/// Whether `block`, written back as wiki markup, reads as the same block.
+///
+/// What does not is kept whole as a read-only region: read as the AST and
+/// written back, a table cell holding a link came out a cell longer, an empty
+/// cell went missing, a list in a cell broke the table apart, and an edit
+/// anywhere in the description sent that to Jira. Compared as what it means
+/// rather than byte for byte, so the writer's own spelling — an escape, a
+/// braced mark, a `{code}` tag on its own line — is not a reason to freeze a
+/// paragraph. The regions the block made are read again from where they
+/// started, so their ids line up.
+fn written_back_the_same(block: &Block, store: &RawStore, regions: usize) -> bool {
+    if matches!(block, Block::Raw(_)) {
+        return true;
+    }
+    let Some(written) = render_block(block, store, Ctx::default()) else {
+        return false;
+    };
+    let mut again = store.clone();
+    again.truncate(regions);
+    parse_blocks_checked(&written, &mut again, false) == [block.clone()]
+}
+
+/// Parse the one block that starts at `pos` onto `out`; the position after it.
+fn parse_block(text: &str, pos: usize, store: &mut RawStore, out: &mut Vec<Block>) -> usize {
+    let (line, next) = read_line(text, pos);
+
+    if let Some(m) = block_macro_at(text, pos) {
+        let (block, end) = parse_macro(text, &m, store);
+        if let Some(block) = block {
+            out.push(block);
+        }
+        return end;
+    }
+
+    let trimmed = line.trim_start();
+
+    if trimmed.trim_end() == "----" {
+        out.push(Block::Rule);
+        return next;
+    }
+
+    if let Some((level, rest)) = heading_at(trimmed) {
+        out.push(Block::Heading {
+            level,
+            content: parse_inlines(rest.trim_end(), store),
+        });
+        return next;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("bq.") {
+        out.push(Block::BlockQuote(vec![Block::Paragraph(parse_inlines(
+            rest.trim(),
+            store,
+        ))]));
+        return next;
+    }
+
+    if list_marker(trimmed).is_some() {
+        let (block, end) = parse_list(text, pos, store);
+        out.push(block);
+        return end;
+    }
+
+    if trimmed.starts_with('|') {
+        if let Some(end) = irregular_table(text, pos) {
+            let source = text[pos..end].trim_end();
+            let approx = format!("**[jired: Jira table — read-only]**\n{source}");
+            out.push(Block::Raw(store.insert(
+                source.to_string(),
+                approx,
+                "table".into(),
+            )));
+            return end;
+        }
+        let (block, end) = parse_table(text, pos, store);
+        out.push(block);
+        return end;
+    }
+
+    let (block, end) = parse_paragraph(text, pos, store);
+    out.push(block);
+    end
 }
 
 /// Turn a macro region into a block; returns the position just past it.
@@ -119,7 +168,9 @@ fn parse_macro(text: &str, m: &MacroSpan, store: &mut RawStore) -> (Option<Block
 
     if m.closed {
         match name.as_str() {
-            "code" => {
+            // A parameter other than the language — a title, line numbers, a
+            // border — has no place in a fence, so such a block is kept whole.
+            "code" if code_params_fit(&m.params) => {
                 return (
                     Some(Block::CodeBlock {
                         language: code_language(&m.params),
@@ -305,7 +356,81 @@ fn starts_block(text: &str, pos: usize, line: &str) -> bool {
         || trimmed.starts_with("bq.")
         || trimmed.starts_with('|')
         || list_marker(trimmed).is_some()
-        || macro_at(text, pos).is_some()
+        || block_macro_at(text, pos).is_some()
+}
+
+/// A macro that is a block of its own: `{code}`, `{noformat}`, `{quote}`, or
+/// one with nothing after it on the line where it ends. One with text after
+/// it is part of a paragraph: `{color:red}Warning:{color} do not deploy` was
+/// taken for a block, and written back as two paragraphs.
+fn block_macro_at(text: &str, pos: usize) -> Option<MacroSpan> {
+    let m = macro_at(text, pos)?;
+    let rest = read_line(text, m.end).0;
+    (is_structural_macro(&m.name) || m.end >= text.len() || rest.trim().is_empty()).then_some(m)
+}
+
+/// Where a table that a Markdown table cannot hold ends, if this is one: a
+/// row that mixes header and plain cells (`||h|a|`), or a cell that runs on
+/// to the next line, as a list in a cell does. Read line by line, the first
+/// gained header cells and the second broke the table apart.
+fn irregular_table(text: &str, start: usize) -> Option<usize> {
+    let mut pos = start;
+    let mut irregular = false;
+    while pos < text.len() {
+        let (line, next) = read_line(text, pos);
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            break;
+        }
+        let header = trimmed.starts_with("||");
+        let (singles, doubles) = separators(trimmed);
+        irregular |= if header { singles > 0 } else { doubles > 0 };
+        pos = next;
+        if !trimmed.ends_with('|') || trimmed == "|" {
+            // The cell goes on: up to the line that closes it.
+            irregular = true;
+            while pos < text.len() {
+                let (line, next) = read_line(text, pos);
+                pos = next;
+                if line.trim_end().ends_with('|') {
+                    break;
+                }
+            }
+        }
+    }
+    irregular.then_some(pos)
+}
+
+/// The lone `|` and the `||` separating a row's cells, past its first,
+/// outside links, code spans and escapes.
+fn separators(line: &str) -> (usize, usize) {
+    let lead = if line.starts_with("||") { 2 } else { 1 };
+    let inner = &line[lead.min(line.len())..];
+    let inner = inner
+        .strip_suffix("||")
+        .or_else(|| inner.strip_suffix('|'))
+        .unwrap_or(inner);
+    let b = inner.as_bytes();
+    let (mut singles, mut doubles, mut i) = (0, 0, 0);
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 1 + inner[i + 1..].chars().next().map_or(0, char::len_utf8),
+            b'[' => i = bracket_end(inner, i).map_or(i + 1, |close| close + 1),
+            b'{' if inner[i..].starts_with("{{") => {
+                i = code_span(inner, i).map_or(i + 2, |(_, _, end)| end)
+            }
+            b'|' if inner[i..].starts_with("||") => {
+                doubles += 1;
+                i += 2;
+            }
+            b'|' => {
+                singles += 1;
+                i += 1;
+            }
+            _ => i += inner[i..].chars().next().map_or(1, char::len_utf8),
+        }
+    }
+    (singles, doubles)
 }
 
 fn heading_at(line: &str) -> Option<(u8, &str)> {
@@ -429,10 +554,23 @@ fn is_structural_macro(name: &str) -> bool {
     )
 }
 
+fn code_params_fit(params: &str) -> bool {
+    params
+        .split('|')
+        .filter(|p| !p.trim().is_empty())
+        .all(|p| match p.split_once('=') {
+            Some((k, _)) => k.trim().eq_ignore_ascii_case("language"),
+            None => true,
+        })
+}
+
+/// A `{code}` block's language. Jira draws one that names none as Java, so
+/// that is what it is read as: read as no language, it went back as
+/// `{noformat}`, which Jira draws plainly.
 fn code_language(params: &str) -> Option<String> {
     let params = params.trim();
     if params.is_empty() {
-        return None;
+        return Some("java".to_string());
     }
     for part in params.split('|') {
         if let Some((k, v)) = part.split_once('=') {
@@ -561,7 +699,10 @@ fn parse_inlines_in(text: &str, store: &mut RawStore, within: Option<u8>) -> Vec
                     continue;
                 }
                 match macro_at(text, i) {
-                    Some(m) if m.closed && !is_structural_macro(&m.name) => {
+                    // `{code}` in the middle of a line too: Jira draws it as
+                    // code, and read as text it went back with its braces
+                    // escaped, drawn as they are.
+                    Some(m) if m.closed => {
                         flush(&mut buf, &mut out);
                         let source = text[m.start..m.end].to_string();
                         let approx = macro_approx(&m.name, &m.params, &text[m.body.0..m.body.1]);
@@ -2337,5 +2478,50 @@ mod tests {
         assert!(matches!(doc.blocks[2], Block::Paragraph(_)));
         assert_eq!(from_ast(&doc, &store), src);
         assert_eq!(round_trip(src), src);
+    }
+}
+
+#[cfg(test)]
+mod review_cases {
+    use super::*;
+
+    /// Read and written back without an edit: what each block was read as,
+    /// and the text it goes back as.
+    fn read_back(text: &str) -> (Vec<bool>, String) {
+        let mut store = RawStore::new();
+        let doc = to_ast(text, &mut store);
+        let raw = doc
+            .blocks
+            .iter()
+            .map(|b| matches!(b, Block::Raw(_)))
+            .collect();
+        (raw, from_ast(&doc, &store))
+    }
+
+    /// The review's list of Data Center markup that came back changed. Each
+    /// is now either read as what it is, or kept whole as a read-only region;
+    /// either way it goes back as it came.
+    #[test]
+    fn markup_the_writer_cannot_reproduce_goes_back_as_it_came() {
+        let same = [
+            "{code:title=Foo.java}\nclass Foo {}\n{code}",
+            "Run {code}ls -la{code} now",
+            "{color:red}Warning:{color} do not deploy",
+            "|[the spec|https://x.example/a]|b|",
+            "|a||c|",
+            "|a| |c|",
+            "||h|a|",
+            "|a|* x\n* y|\n|c|d|",
+        ];
+        for text in same {
+            assert_eq!(read_back(text).1, text, "{text:?}");
+        }
+        assert_eq!(read_back("||h|a|").0, [true]);
+        assert_eq!(read_back("|a|* x\n* y|\n|c|d|").0, [true]);
+        // Jira draws a `{code}` with no language as Java, and so does the file.
+        assert_eq!(
+            read_back("{code}\nx = 1\n{code}"),
+            (vec![false], "{code:java}\nx = 1\n{code}".into())
+        );
     }
 }
