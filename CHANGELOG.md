@@ -8,6 +8,16 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.38.0] — 2026-11-27
+
+### Breaking
+
+- **`JIRED_FIXTURES` does nothing in an installed `jired`.** It replaced the
+  server with a recorded fixture directory in every build, so a stray value
+  in a shell made `init` and `push` report success against nothing. It now
+  works only in a build with the `fixtures` feature, as the test suite uses;
+  `jired-record` is built only with it too.
+
 ## [0.37.1] — 2026-11-27
 
 ### Fixed
