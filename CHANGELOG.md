@@ -8,6 +8,16 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.2] — 2026-11-27
+
+### Fixed
+
+- **Regrouping no longer deletes your files.** `by-parent/`, `sprints/` and
+  `boards/` were deleted whole and rebuilt on every pull and push, taking
+  anything else in them along: notes of your own, or an edit your editor
+  saved in place of a link. Only the links jired made are replaced now;
+  anything else is left where it is and named in a warning.
+
 ## [0.31.1] — 2026-11-27
 
 ### Fixed
