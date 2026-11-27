@@ -10,6 +10,7 @@
 mod common;
 
 use rexpect::session::{spawn_command, PtySession};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -70,23 +71,27 @@ impl Ws {
     }
 
     fn spawn(&self, args: &[&str], token: bool) -> PtySession {
-        let p = spawn_command(self.command(args, token), Some(15_000)).unwrap();
+        let mut cmd = self.command(args, token);
         // A new pty is 0×0, and a screen of no size draws nothing: give it
-        // the size of an ordinary terminal window.
-        let size = nix::libc::winsize {
-            ws_row: 40,
-            ws_col: 120,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        use std::os::fd::AsRawFd;
+        // the size of an ordinary terminal window. From inside the child,
+        // before it runs: set from this side after the spawn, it raced the
+        // child's first look at its size, which macOS's runners lost.
         #[allow(unsafe_code)]
-        // SAFETY: a valid fd for the pty master, and a winsize that lives for
-        // the call.
+        // SAFETY: one ioctl, async-signal-safe, on the child's own stdin and
+        // a winsize that lives for the call.
         unsafe {
-            nix::libc::ioctl(p.process.pty.as_raw_fd(), nix::libc::TIOCSWINSZ, &size);
+            cmd.pre_exec(|| {
+                let size = nix::libc::winsize {
+                    ws_row: 40,
+                    ws_col: 120,
+                    ws_xpixel: 0,
+                    ws_ypixel: 0,
+                };
+                nix::libc::ioctl(0, nix::libc::TIOCSWINSZ, &size);
+                Ok(())
+            });
         }
-        p
+        spawn_command(cmd, Some(15_000)).unwrap()
     }
 
     fn ready() -> Self {
@@ -233,7 +238,6 @@ fn the_token_prompt_takes_a_token_without_showing_it() {
 #[test]
 fn ctrl_c_at_the_token_prompt_leaves_the_terminal_as_it_was() {
     use nix::sys::termios::{tcgetattr, tcsetattr, LocalFlags, SetArg};
-    use std::os::unix::process::CommandExt;
     let ws = Ws::new();
     let mut cmd = ws.command(&["init", "--no-pull"], false);
     // rexpect turns echo off in the child just before it runs the program;
