@@ -104,6 +104,8 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     ("releases", include_str!("../../../schemas/releases.json")),
     ("reset", include_str!("../../../schemas/reset.json")),
     ("resolve", include_str!("../../../schemas/resolve.json")),
+    ("schema", include_str!("../../../schemas/schema.json")),
+    ("schemas", include_str!("../../../schemas/schemas.json")),
     ("search", include_str!("../../../schemas/search.json")),
     (
         "search-count",
@@ -162,36 +164,33 @@ pub fn run(args: &SchemaArgs, out: Out) -> Result<ExitCode> {
                             .join(", ")
                     ))
             })?;
+            // A document in `--json` mode like every other command's: printed
+            // with `say`, which `--json` silences, it was zero bytes and exit 0.
             out.say(text);
+            out.emit(
+                "schema",
+                &serde_json::json!({
+                    "name": name,
+                    "document": serde_json::from_str::<serde_json::Value>(text)?,
+                }),
+            );
         }
         None => {
-            if out.json {
-                let all: serde_json::Map<String, serde_json::Value> = SCHEMAS
-                    .iter()
-                    .map(|(n, s)| {
-                        (
-                            n.to_string(),
-                            serde_json::from_str(s).unwrap_or(serde_json::Value::Null),
-                        )
-                    })
-                    .collect();
-                let doc = serde_json::json!({
-                    "schema": "jired/schemas/1",
-                    "schemas": all,
-                });
-                // Printed directly: this *is* the result document, and `emit`
-                // would wrap it in a second envelope.
-                let mut stdout = std::io::stdout().lock();
-                let _ = std::io::Write::write_all(
-                    &mut stdout,
-                    serde_json::to_string_pretty(&doc)?.as_bytes(),
-                );
-                let _ = std::io::Write::write_all(&mut stdout, b"\n");
-            } else {
-                for (name, _) in SCHEMAS {
-                    out.say(name);
-                }
+            let all: serde_json::Map<String, serde_json::Value> = SCHEMAS
+                .iter()
+                .map(|(n, s)| {
+                    (
+                        n.to_string(),
+                        serde_json::from_str(s).unwrap_or(serde_json::Value::Null),
+                    )
+                })
+                .collect();
+            for (name, _) in SCHEMAS {
+                out.say(name);
             }
+            // Through the emitter, so `--fields` applies and the contract test
+            // sees it.
+            out.emit("schemas", &serde_json::json!({ "schemas": all }));
         }
     }
     Ok(ExitCode::Success)

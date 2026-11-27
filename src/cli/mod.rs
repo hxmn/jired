@@ -318,9 +318,12 @@ pub const INSECURE_TLS_WARNING: &str =
      traffic can be intercepted";
 
 pub fn run(cli: Cli) -> ExitCode {
+    // `--quiet` drops narration, and the output of a command that only reads
+    // is not narration but the answer: `jired schema push -q` printed nothing.
+    let quiet = cli.global.quiet && !prints_its_answer(&cli.command);
     let out = match cli.global.silent {
         true => Out::silent(cli.global.json),
-        false => Out::new(cli.global.json, cli.global.quiet),
+        false => Out::new(cli.global.json, quiet),
     };
     crate::style::init(cli.global.color_choice());
     crate::json::set_shape(crate::json::Shape {
@@ -353,6 +356,34 @@ pub fn run(cli: Cli) -> ExitCode {
             out.report_error(&err);
             err.exit_code()
         }
+    }
+}
+
+/// A command whose stdout is what it was run for, rather than an account of
+/// what it did.
+fn prints_its_answer(command: &Command) -> bool {
+    match command {
+        Command::Boards(_)
+        | Command::Completion(_)
+        | Command::Config(_)
+        | Command::Diff(_)
+        | Command::Fields(_)
+        | Command::Filters(_)
+        | Command::List(_)
+        | Command::Log(_)
+        | Command::Projects(_)
+        | Command::Releases(_)
+        | Command::Report(_)
+        | Command::Schema(_)
+        | Command::Search(_)
+        | Command::Show(_)
+        | Command::Sprints(_)
+        | Command::Status(_)
+        | Command::Users(_)
+        | Command::Version(_)
+        | Command::Whoami(_) => true,
+        Command::InitAgents(a) => a.print,
+        _ => false,
     }
 }
 

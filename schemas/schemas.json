@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jired/schemas/1",
+  "title": "jired schema result",
+  "description": "Every published result schema, by name",
+  "type": "object",
+  "required": [
+    "schema",
+    "schemas"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "jired/schemas/1"
+    },
+    "schemas": {
+      "description": "Each schema's JSON Schema, keyed by its name",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

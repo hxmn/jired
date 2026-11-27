@@ -213,16 +213,33 @@ pub fn run(g: &GlobalArgs, args: &InitAgentsArgs, out: Out) -> Result<ExitCode> 
     // (`jired init-agents --print | head`) should end the run, not panic in the
     // middle of it.
     if args.print {
+        let mut printed = serde_json::Map::new();
         if !args.no_docs {
             out.say("==> CLAUDE.md, AGENTS.md\n");
             out.say(&body);
+            for name in DOCS {
+                printed.insert((*name).to_string(), body.clone().into());
+            }
         }
         if !args.no_permissions {
+            let settings = claude_settings(&serde_json::json!({}))?;
             out.say(format!("\n==> {CLAUDE_SETTINGS}\n"));
-            out.say(claude_settings(&serde_json::json!({}))?);
+            out.say(&settings);
             out.say(format!("\n==> {CODEX_RULES}\n"));
             out.say(codex_rules());
+            printed.insert(CLAUDE_SETTINGS.to_string(), settings.into());
+            printed.insert(CODEX_RULES.to_string(), codex_rules().into());
         }
+        // Nothing written, and in `--json` mode the text is the document:
+        // printed only with `say`, it was zero bytes and exit 0.
+        out.emit(
+            "init-agents",
+            &serde_json::json!({
+                "files": [],
+                "printed": printed,
+                "permissions": permission_entries(),
+            }),
+        );
         return Ok(ExitCode::Success);
     }
 

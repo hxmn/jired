@@ -25,6 +25,13 @@
       "items": {
         "type": "string"
       }
+    },
+    "printed": {
+      "description": "With --print: what would be written, by path, and nothing is written",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
     }
   }
 }

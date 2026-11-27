@@ -8,7 +8,9 @@
 grouped under their own help heading and displayed after the command's own
 options.
 
-`-q/--quiet` drops the narration and the progress bars. `--silent` is the whole
+`-q/--quiet` drops the narration and the progress bars. A command that only
+reads — `show`, `list`, `search`, `log`, `status`, `schema` and the like — still
+prints its answer, which is not narration. `--silent` is the whole
 of that plus the two things it leaves behind: the warnings, and the `warn`-level
 log where the HTTP retries live — a `jired pull --silent` against a slow server
 writes nothing where `--quiet` writes a line per attempt. It is the flag for a

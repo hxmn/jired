@@ -2472,6 +2472,33 @@ fn json_mode_keeps_stderr_to_the_structured_error() {
     assert!(doc["warnings"].to_string().contains("versions"), "{doc}");
 }
 
+/// A command that only prints is its output: in `--json` mode a document,
+/// under `--quiet` still printed. `schema push --json` and `init-agents
+/// --print --json` wrote nothing and exited 0, and `schema push -q` too.
+#[test]
+fn what_a_command_prints_is_its_result_under_json_and_quiet() {
+    let ws = Ws::new();
+    ws.init();
+    let doc = ws.json(&["schema", "push"]);
+    assert_eq!(doc["schema"], "jired/schema/1", "{doc}");
+    assert_eq!(doc["document"]["$id"], "jired/push/1", "{doc}");
+    let all = ws.json(&["schema"]);
+    assert!(all["schemas"]["push"].is_object(), "{all}");
+
+    let out = ws.cmd(&["schema", "push", "-q"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("jired/push/1"));
+
+    let doc = ws.json(&["init-agents", "--print"]);
+    assert!(
+        doc["printed"]["CLAUDE.md"]
+            .as_str()
+            .unwrap()
+            .contains("jired"),
+        "{doc}"
+    );
+    assert_eq!(doc["files"], serde_json::json!([]), "{doc}");
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();
