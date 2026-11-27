@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.4] — 2026-11-27
+
+### Fixed
+
+- **Two read-only regions in one text can no longer be mixed up.** Their
+  short ids could clash in a long description, and the second region was
+  then sent back with the first one's content.
+
 ## [0.39.3] — 2026-11-27
 
 ### Fixed
