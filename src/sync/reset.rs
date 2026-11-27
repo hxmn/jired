@@ -23,7 +23,6 @@ use crate::convert::ast::RawBlock;
 use crate::doc::IssueDoc;
 use crate::error::{JiredError, Result};
 use crate::json::Out;
-use crate::store::state::content_hash;
 use crate::sync::render::{render_issue, RenderContext};
 use crate::sync::{attachments, group, Engine};
 use serde::Serialize;
@@ -412,9 +411,7 @@ pub fn apply(ctx: &mut Context, plan: Plan) -> Result<ResetReport> {
         // it, so it goes in two passes: render, hash, rewrite. The same order
         // `pull` uses — anything else and the restored file would not be
         // byte-identical to the one a pull writes.
-        doc.frontmatter.jired.content_hash = String::new();
-        let provisional = doc.render()?;
-        doc.frontmatter.jired.content_hash = content_hash(&provisional);
+        crate::sync::render::seal(&mut doc)?;
 
         let outcome = engine.projector.write(&doc, Some(&r.file))?;
         engine

@@ -577,12 +577,9 @@ pub fn run_scoped(
         // field empty: for a clean pull, the file that contains it. After a
         // merge that kept a local value the file no longer matches it, which
         // is how a file can say it holds edits when `state.db` cannot.
-        let sealed = {
-            let mut base_doc = write.base_doc.clone();
-            base_doc.frontmatter.jired.content_hash = String::new();
-            crate::store::state::content_hash(&base_doc.render()?)
-        };
-        write.doc.frontmatter.jired.content_hash = sealed;
+        let mut base_doc = write.base_doc.clone();
+        let base_hash = crate::sync::render::seal(&mut base_doc)?;
+        write.doc.frontmatter.jired.content_hash = base_doc.frontmatter.jired.content_hash;
 
         // A file that cannot be written fails its own issue, as one that
         // cannot be converted does: a name the filesystem refused stopped the
@@ -617,18 +614,9 @@ pub fn run_scoped(
                 .state
                 .replace_raw_blocks(&write.key, container, blocks)?;
         }
-        // Hash the base rendering, not the file that was written: they are the
-        // same for a clean pull and deliberately differ after a merge that kept
-        // a local value.
-        let base_hash = {
-            let mut base_doc = write.base_doc.clone();
-            base_doc.frontmatter.jired.content_hash = String::new();
-            let provisional = base_doc.render()?;
-            base_doc.frontmatter.jired.content_hash =
-                crate::store::state::content_hash(&provisional);
-            crate::store::state::content_hash(&base_doc.render()?)
-        };
-
+        // The base rendering's hash, sealed above, and not the written file's:
+        // they are the same for a clean pull and deliberately differ after a
+        // merge that kept a local value.
         engine.state.advance_base(
             &write.key,
             &write.description_storage,

@@ -14,6 +14,7 @@ use crate::convert;
 use crate::doc::{CommentId, IssueDoc, WorklogEntry, WorklogId};
 use crate::error::{ExitCode, JiredError, Result};
 use crate::json::Out;
+use crate::store::state::OpStatus;
 use crate::sync::render::{render_issue, RenderContext};
 use crate::sync::screen::Screen;
 use crate::sync::Engine;
@@ -106,10 +107,24 @@ impl IssueResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct OpReport {
     pub kind: &'static str,
-    pub status: &'static str,
+    pub status: OpOutcome,
     pub summary: Option<String>,
     pub request: Option<Value>,
     pub error: Option<String>,
+}
+
+/// What became of one planned operation. Spelled as before in the JSON;
+/// typed here, where four strings compared by hand at a dozen places could
+/// be misspelled and still compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpOutcome {
+    /// Shown by a dry run, not sent.
+    Planned,
+    Done,
+    Failed,
+    /// Not sent, because one before it failed or the issue was stale.
+    Skipped,
 }
 
 impl PushReport {
@@ -163,10 +178,10 @@ impl PushReport {
             lines.push(format!("── {}", style::out(CYAN, head)));
             for op in &r.ops {
                 let mark = match op.status {
-                    "planned" => String::new(),
-                    "done" => style::out(GREEN, "  ✓"),
-                    "skipped" => style::out(DIM, "  (skipped)"),
-                    _ => style::out(RED, "  ✗"),
+                    OpOutcome::Planned => String::new(),
+                    OpOutcome::Done => style::out(GREEN, "  ✓"),
+                    OpOutcome::Skipped => style::out(DIM, "  (skipped)"),
+                    OpOutcome::Failed => style::out(RED, "  ✗"),
                 };
                 lines.push(format!(
                     "   {:<20} {}{}",
@@ -803,22 +818,25 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             asked = Some(sent);
 
             let raw = engine.state.raw_blocks(&row.key, "description")?;
+            let plan_ctx = PlanContext {
+                field_meta: &field_meta,
+                ignored: &fields.ignored,
+                story_points_field: fields.story_points.as_deref(),
+                checklist_field: fields.checklist_text.as_deref(),
+                sprints: &sprints,
+                markup,
+                engine: &engine,
+                args,
+                max_upload,
+                done_transition: done_transition.as_deref(),
+            };
             plan(
+                &plan_ctx,
                 &base_doc,
                 &working,
                 &base.raw,
-                &field_meta,
-                &fields.ignored,
-                fields.story_points.as_deref(),
-                fields.checklist_text.as_deref(),
-                &sprints,
-                markup,
                 &raw,
-                &engine,
-                args,
                 &attachment_dir,
-                max_upload,
-                done_transition.as_deref(),
                 moved.map(String::as_str),
                 &mut link_types,
                 &mut report.warnings,
@@ -866,7 +884,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
                 ops.iter()
                     .map(|o| OpReport {
                         kind: o.kind,
-                        status: "planned",
+                        status: OpOutcome::Planned,
                         summary: Some(o.summary.clone()),
                         request: Some(o.request.clone()),
                         error: None,
@@ -975,10 +993,11 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     // appear from the push that filled it, rather than only from the next pull
     // that happens to write a file — which, after a push, is usually none.
     if !args.dry_run
-        && report
-            .results
-            .iter()
-            .any(|r| r.ops.iter().any(|o| o.status == "done" && regroups(o.kind)))
+        && report.results.iter().any(|r| {
+            r.ops
+                .iter()
+                .any(|o| o.status == OpOutcome::Done && regroups(o.kind))
+        })
     {
         let options = crate::sync::group::GroupOptions::from_context(ctx)?;
         match crate::sync::group::regroup(&engine, engine.projector.root(), &options) {
@@ -1340,14 +1359,14 @@ fn create_issue(
     if args.dry_run {
         let mut ops = vec![OpReport {
             kind: "create_issue",
-            status: "planned",
+            status: OpOutcome::Planned,
             summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
             request: Some(request),
             error: None,
         }];
         ops.extend(follow_ups.iter().map(|f| OpReport {
             kind: f.kind,
-            status: "planned",
+            status: OpOutcome::Planned,
             summary: Some(f.summary.clone()),
             request: Some(f.request.clone()),
             error: None,
@@ -1389,17 +1408,17 @@ fn create_issue(
                 .journal_ops(temp_key, &[("create_issue".into(), request.to_string())])?;
             let created = crate::api::block_on(client.create_issue(payload));
             match &created {
-                Ok(_) => engine.state.mark_op(op_ids[0], "done", None)?,
+                Ok(_) => engine.state.mark_op(op_ids[0], OpStatus::Done, None)?,
                 // Left `pending`: it may have been made, and the next push
                 // looks before it creates.
                 Err(e) if e.details["outcome"] == "unknown" => {
                     engine
                         .state
-                        .mark_op(op_ids[0], "pending", Some(&e.message))?
+                        .mark_op(op_ids[0], OpStatus::Pending, Some(&e.message))?
                 }
                 Err(e) => engine
                     .state
-                    .mark_op(op_ids[0], "failed", Some(&e.message))?,
+                    .mark_op(op_ids[0], OpStatus::Failed, Some(&e.message))?,
             }
             created
         }
@@ -1417,7 +1436,7 @@ fn create_issue(
                     hint: e.hint.clone(),
                     ops: vec![OpReport {
                         kind: "create_issue",
-                        status: "failed",
+                        status: OpOutcome::Failed,
                         summary: None,
                         request: None,
                         error: Some(e.message.clone()),
@@ -1457,7 +1476,7 @@ fn create_issue(
                 )),
                 ops: vec![OpReport {
                     kind: "create_issue",
-                    status: "done",
+                    status: OpOutcome::Done,
                     summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
                     request: None,
                     error: None,
@@ -1622,7 +1641,7 @@ fn finish_create(
     let mut failure_kinds: Vec<Option<&'static str>> = vec![None];
     let mut reports = vec![OpReport {
         kind: "create_issue",
-        status: "done",
+        status: OpOutcome::Done,
         summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
         request: None,
         error: None,
@@ -1633,7 +1652,7 @@ fn finish_create(
                 failure_kinds.push(None);
                 reports.push(OpReport {
                     kind: f.kind,
-                    status: "done",
+                    status: OpOutcome::Done,
                     summary: Some(f.summary.clone()),
                     request: None,
                     error: None,
@@ -1647,7 +1666,7 @@ fn finish_create(
                 failure_kinds.push(Some(e.kind.as_str()));
                 reports.push(OpReport {
                     kind: f.kind,
-                    status: "failed",
+                    status: OpOutcome::Failed,
                     summary: Some(f.summary.clone()),
                     request: Some(f.request.clone()),
                     error: Some(e.message.clone()),
@@ -1662,7 +1681,7 @@ fn finish_create(
     let sent = follow_ups
         .iter()
         .zip(reports.iter().skip(1))
-        .filter(|(_, r)| r.status == "done")
+        .filter(|(_, r)| r.status == OpOutcome::Done)
         .map(|(f, _)| &f.action);
     let confirmed = settle(ctx, client, &new_key, sent, confirmed)?;
     let confirmed = with_web_links(ctx, engine, client, confirmed);
@@ -1677,7 +1696,7 @@ fn finish_create(
         .zip(reports.iter_mut().skip(1))
         .zip(failure_kinds.iter_mut().skip(1))
     {
-        if report.status != "done" {
+        if report.status != OpOutcome::Done {
             continue;
         }
         let Some(why) = unapplied(&f.action, &confirmed) else {
@@ -1685,7 +1704,7 @@ fn finish_create(
         };
         ctx.out
             .warn(format!("{new_key} was created, but {}: {why}", f.summary));
-        report.status = "failed";
+        report.status = OpOutcome::Failed;
         report.request = Some(f.request.clone());
         report.error = Some(why);
         *kind = Some("unsupported_server");
@@ -1701,7 +1720,7 @@ fn finish_create(
     let failed: Vec<&FollowUp> = follow_ups
         .iter()
         .zip(reports.iter().skip(1))
-        .filter(|(_, r)| r.status == "failed")
+        .filter(|(_, r)| r.status == OpOutcome::Failed)
         .map(|(f, _)| f)
         .collect();
     let base_url = engine.base_url().to_string();
@@ -1738,15 +1757,18 @@ fn finish_create(
         .map(|f| (f.kind.to_string(), f.request.to_string()))
         .collect();
     let ids = engine.state.journal_ops(&new_key, &rows)?;
-    let errors = reports.iter().skip(1).filter(|r| r.status == "failed");
+    let errors = reports
+        .iter()
+        .skip(1)
+        .filter(|r| r.status == OpOutcome::Failed);
     for (id, report) in ids.iter().zip(errors) {
         engine
             .state
-            .mark_op(*id, "failed", report.error.as_deref())?;
+            .mark_op(*id, OpStatus::Failed, report.error.as_deref())?;
     }
     let reasons: Vec<String> = reports
         .iter()
-        .filter(|r| r.status == "failed")
+        .filter(|r| r.status == OpOutcome::Failed)
         .map(|r| {
             format!(
                 "{}: {}",
@@ -2111,7 +2133,7 @@ fn done_links(others: &[Option<String>], reports: &[OpReport]) -> Vec<String> {
     let mut keys: Vec<String> = others
         .iter()
         .zip(reports)
-        .filter(|(_, r)| r.status == "done")
+        .filter(|(_, r)| r.status == OpOutcome::Done)
         .filter_map(|(other, _)| other.clone())
         .collect();
     keys.sort();
@@ -2149,7 +2171,9 @@ fn verify(
     let ignored = engine.field_map().map(|f| f.ignored).unwrap_or_default();
     let base_url = engine.base_url().to_string();
     for result in &report.results {
-        if report.stale.contains(&result.key) || !result.ops.iter().any(|o| o.status == "done") {
+        if report.stale.contains(&result.key)
+            || !result.ops.iter().any(|o| o.status == OpOutcome::Done)
+        {
             continue;
         }
         let key = result.new_key.as_ref().unwrap_or(&result.key);
@@ -3170,29 +3194,50 @@ fn checklist_write(
 }
 
 /// Build the ordered operation list for one issue (decision D23).
+/// What planning needs that is the same for every issue in a push.
+///
+/// Its own struct rather than ten more parameters on [`plan`], which had
+/// eighteen, so a call could pass two of the same type in the wrong order
+/// and still compile.
+struct PlanContext<'a> {
+    field_meta: &'a std::collections::BTreeMap<String, crate::api::FieldMeta>,
+    ignored: &'a std::collections::BTreeSet<String>,
+    story_points_field: Option<&'a str>,
+    checklist_field: Option<&'a str>,
+    sprints: &'a [crate::store::state::SprintRow],
+    markup: Markup,
+    engine: &'a Engine,
+    args: &'a PushArgs,
+    max_upload: u64,
+    done_transition: Option<&'a str>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn plan(
+    ctx: &PlanContext<'_>,
     base: &IssueDoc,
     working: &IssueDoc,
     // The snapshot the base document was rendered from: the only place the
     // original shape of each custom field still exists.
     base_raw: &Value,
-    field_meta: &std::collections::BTreeMap<String, crate::api::FieldMeta>,
-    ignored: &std::collections::BTreeSet<String>,
-    story_points_field: Option<&str>,
-    checklist_field: Option<&str>,
-    sprints: &[crate::store::state::SprintRow],
-    markup: Markup,
     raw: &[crate::convert::ast::RawBlock],
-    engine: &Engine,
-    args: &PushArgs,
     attachment_dir: &std::path::Path,
-    max_upload: u64,
-    done_transition: Option<&str>,
     board_move: Option<&str>,
     link_types: &mut LinkTypes<'_>,
     warnings: &mut Vec<String>,
 ) -> Result<Vec<Op>> {
+    let PlanContext {
+        field_meta,
+        ignored,
+        story_points_field,
+        checklist_field,
+        sprints,
+        markup,
+        engine,
+        args,
+        max_upload,
+        done_transition,
+    } = *ctx;
     let mut ops = Vec::new();
     let mut fields = serde_json::Map::new();
 
@@ -3929,7 +3974,7 @@ fn execute(
         let live = crate::api::block_on(client.issue_updated(key))?;
         if moved_on(live, *base_updated) {
             for id in &op_ids {
-                engine.state.mark_op(*id, "failed", Some("stale"))?;
+                engine.state.mark_op(*id, OpStatus::Failed, Some("stale"))?;
             }
             return Ok(IssueResult {
                 key: key.to_string(),
@@ -3952,7 +3997,7 @@ fn execute(
                     .iter()
                     .map(|o| OpReport {
                         kind: o.kind,
-                        status: "skipped",
+                        status: OpOutcome::Skipped,
                         summary: Some(o.summary.clone()),
                         request: None,
                         error: None,
@@ -3968,10 +4013,10 @@ fn execute(
 
     for (op, op_id) in ops.iter().zip(op_ids.iter()) {
         if failure.is_some() {
-            engine.state.mark_op(*op_id, "pending", None)?;
+            engine.state.mark_op(*op_id, OpStatus::Pending, None)?;
             reports.push(OpReport {
                 kind: op.kind,
-                status: "skipped",
+                status: OpOutcome::Skipped,
                 summary: Some(op.summary.clone()),
                 request: None,
                 error: None,
@@ -3983,20 +4028,22 @@ fn execute(
                 if let Some(id) = created {
                     record_created(ctx, engine, file, &op.action, &id, &mut marked);
                 }
-                engine.state.mark_op(*op_id, "done", None)?;
+                engine.state.mark_op(*op_id, OpStatus::Done, None)?;
                 reports.push(OpReport {
                     kind: op.kind,
-                    status: "done",
+                    status: OpOutcome::Done,
                     summary: Some(op.summary.clone()),
                     request: None,
                     error: None,
                 });
             }
             Err(e) => {
-                engine.state.mark_op(*op_id, "failed", Some(&e.message))?;
+                engine
+                    .state
+                    .mark_op(*op_id, OpStatus::Failed, Some(&e.message))?;
                 reports.push(OpReport {
                     kind: op.kind,
-                    status: "failed",
+                    status: OpOutcome::Failed,
                     summary: Some(op.summary.clone()),
                     // Carried on a failure, where a plain push otherwise left
                     // nothing to say what had been sent: the error names the
@@ -4039,8 +4086,8 @@ fn execute(
         let Some(why) = unapplied(&op.action, &confirmed) else {
             continue;
         };
-        engine.state.mark_op(*op_id, "failed", Some(&why))?;
-        report.status = "failed";
+        engine.state.mark_op(*op_id, OpStatus::Failed, Some(&why))?;
+        report.status = OpOutcome::Failed;
         report.request = Some(op.request.clone());
         report.error = Some(why.clone());
         swallowed.push(why);
@@ -4297,14 +4344,8 @@ fn rewrite_keeping(
     )?;
     // The hash in the frontmatter describes the file that contains it, so each
     // rendering is hashed in two passes: render, hash, render again.
-    let seal = |doc: &mut IssueDoc| -> Result<String> {
-        doc.frontmatter.jired.content_hash = String::new();
-        let provisional = doc.render()?;
-        doc.frontmatter.jired.content_hash = crate::store::state::content_hash(&provisional);
-        Ok(crate::store::state::content_hash(&doc.render()?))
-    };
     let mut base_doc = rendered.doc;
-    let base_hash = seal(&mut base_doc)?;
+    let base_hash = crate::sync::render::seal(&mut base_doc)?;
     let mut doc = base_doc.clone();
     keep(&mut doc);
     // Sealed with the base's hash, not its own: a file that kept a local

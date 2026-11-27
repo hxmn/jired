@@ -256,6 +256,20 @@ pub fn human_size(bytes: u64) -> String {
     "0 B".to_string()
 }
 
+/// Seal a rendering of the server's copy for writing: its `content_hash` is
+/// the hash of it with that field empty, which is how a file later tells
+/// whether it is still as jired wrote it. Returns the hash of the sealed
+/// rendering, which is the base's `md_hash`.
+///
+/// One function, because pull, push and reset each sealed in two passes of
+/// their own, and a file is only comparable to a base sealed the same way.
+pub fn seal(base: &mut crate::doc::IssueDoc) -> crate::error::Result<String> {
+    base.frontmatter.jired.content_hash = String::new();
+    let provisional = base.render()?;
+    base.frontmatter.jired.content_hash = crate::store::state::content_hash(&provisional);
+    Ok(crate::store::state::content_hash(&base.render()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

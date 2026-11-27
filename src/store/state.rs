@@ -277,6 +277,27 @@ pub struct StateStore {
     conn: Connection,
 }
 
+/// Where a journalled operation stands. The column holds these three words,
+/// and `status` reports them; typed, so a caller cannot write a fourth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpStatus {
+    /// Journalled, and not known to have been done: not sent yet, or sent with
+    /// no answer.
+    Pending,
+    Done,
+    Failed,
+}
+
+impl OpStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OpStatus::Pending => "pending",
+            OpStatus::Done => "done",
+            OpStatus::Failed => "failed",
+        }
+    }
+}
+
 /// Every table keyed by an issue, which forgetting and rekeying an issue
 /// walk. One list, because the two hand-kept lists had drifted: a rekeyed
 /// issue left its changelog and its cached transitions under the `NEW-` key.
@@ -1271,10 +1292,10 @@ impl StateStore {
         Ok(ids)
     }
 
-    pub fn mark_op(&self, id: i64, status: &str, error: Option<&str>) -> Result<()> {
+    pub fn mark_op(&self, id: i64, status: OpStatus, error: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE pending_op SET status = ?2, error = ?3 WHERE id = ?1",
-            params![id, status, error],
+            params![id, status.as_str(), error],
         )?;
         Ok(())
     }
@@ -1737,7 +1758,7 @@ mod tests {
             .journal_ops("P-1", &[("update_fields".into(), "{}".into())])
             .unwrap();
         assert_eq!(s.pending_ops().unwrap().len(), 1);
-        s.mark_op(ids[0], "done", None).unwrap();
+        s.mark_op(ids[0], OpStatus::Done, None).unwrap();
         assert!(
             s.pending_ops().unwrap().is_empty(),
             "done ops are not pending"
@@ -1746,7 +1767,7 @@ mod tests {
         let ids = s
             .journal_ops("P-1", &[("transition".into(), "{}".into())])
             .unwrap();
-        s.mark_op(ids[0], "failed", Some("boom")).unwrap();
+        s.mark_op(ids[0], OpStatus::Failed, Some("boom")).unwrap();
         let failed = s.pending_ops().unwrap();
         assert_eq!(failed[0].status, "failed");
         assert_eq!(failed[0].error.as_deref(), Some("boom"));
