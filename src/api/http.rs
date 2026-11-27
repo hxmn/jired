@@ -99,6 +99,10 @@ pub struct Document {
 
 pub struct HttpClient {
     client: reqwest::Client,
+    auth: HeaderValue,
+    /// The configured server's scheme, host and port: the only place the
+    /// credential is sent.
+    origin: String,
     base_url: String,
     deployment: Deployment,
     limiter: Arc<RateLimiter>,
@@ -119,12 +123,14 @@ impl HttpClient {
         install_crypto_provider();
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-        headers.insert(
-            AUTHORIZATION,
-            auth_header(&conn).map_err(|e| {
-                JiredError::auth(format!("cannot build the authorization header: {e}"))
-            })?,
-        );
+        // Per request, not a client-wide default: a default goes with every
+        // request whatever its host, and an attachment's URL and a form's
+        // action are whatever the server's payload names.
+        let auth = auth_header(&conn)
+            .map_err(|e| JiredError::auth(format!("cannot build the authorization header: {e}")))?;
+        let origin = reqwest::Url::parse(&conn.base_url)
+            .map(|u| u.origin().ascii_serialization())
+            .map_err(|e| JiredError::usage(format!("server.url `{}`: {e}", conn.base_url)))?;
         // Atlassian rejects some clients without this on POST/PUT.
         headers.insert("X-Atlassian-Token", HeaderValue::from_static("no-check"));
 
@@ -160,10 +166,32 @@ impl HttpClient {
 
         Ok(Self {
             client,
+            auth,
+            origin,
             base_url: conn.base_url.trim_end_matches('/').to_string(),
             deployment: conn.deployment,
             limiter: Arc::new(RateLimiter::new(default_rate(conn.deployment))),
         })
+    }
+
+    /// A request to `url`, carrying the credential only when `url` is on the
+    /// configured server: same scheme, host and port. Anywhere else it goes
+    /// without, so a payload naming another host, or `http://` for an
+    /// `https://` server, cannot have the token sent there.
+    fn request(&self, method: Method, url: &str) -> reqwest::RequestBuilder {
+        let req = self.client.request(method, url);
+        match reqwest::Url::parse(url) {
+            Ok(u) if u.origin().is_tuple() && u.origin().ascii_serialization() == self.origin => {
+                req.header(AUTHORIZATION, self.auth.clone())
+            }
+            _ => {
+                tracing::warn!(
+                    "{url} is not on {}; sending it without the credential",
+                    self.base_url
+                );
+                req
+            }
+        }
     }
 
     pub fn base_url(&self) -> &str {
@@ -238,7 +266,7 @@ impl HttpClient {
         let mut attempt = 0u32;
         loop {
             self.limiter.acquire().await;
-            let mut req = self.client.request(method.clone(), &url);
+            let mut req = self.request(method.clone(), &url);
             if let Some(b) = &body {
                 req = req.header(CONTENT_TYPE, "application/json").json(b);
             }
@@ -336,8 +364,7 @@ impl HttpClient {
         let url = self.url(path);
         tracing::debug!("GET {path}");
         let resp = self
-            .client
-            .get(&url)
+            .request(Method::GET, &url)
             .header(ACCEPT, "text/html,application/xhtml+xml")
             .send()
             .await
@@ -362,8 +389,7 @@ impl HttpClient {
         // the same rule the JSON bodies follow puts them at `-vv`.
         tracing::trace!("POST {action} form: {fields:?}");
         let resp = self
-            .client
-            .post(&url)
+            .request(Method::POST, &url)
             .header(ACCEPT, "text/html,application/xhtml+xml")
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(form_encode(fields))
@@ -402,8 +428,7 @@ impl HttpClient {
         // A per-request `Accept` wins over the client's default: reqwest fills
         // in default headers only where the request left the key vacant.
         let resp = self
-            .client
-            .get(&url)
+            .request(Method::GET, &url)
             .header(ACCEPT, accept)
             .send()
             .await
@@ -437,8 +462,7 @@ impl HttpClient {
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
         self.limiter.acquire().await;
         let resp = self
-            .client
-            .get(url)
+            .request(Method::GET, url)
             .send()
             .await
             .map_err(|e| network_error(&e, &Method::GET, url))?;
@@ -474,8 +498,7 @@ impl HttpClient {
         let url = self.url(path);
 
         let resp = self
-            .client
-            .post(&url)
+            .request(Method::POST, &url)
             .multipart(form)
             .send()
             .await
@@ -969,5 +992,58 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.to_json()["kind"], "network", "{err:?}");
+    }
+
+    /// A server that answers 200 with no body and keeps each request's
+    /// `Authorization` header, or `None` for a request without one.
+    fn header_server() -> (String, Arc<std::sync::Mutex<Vec<Option<String>>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut auth = None;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("authorization") {
+                            auth = Some(value.trim().to_string());
+                        }
+                    }
+                }
+                log.lock().unwrap().push(auth);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+        (url, seen)
+    }
+
+    /// An attachment URL is whatever the issue payload names; the token goes
+    /// only to the configured server, not to another host or port.
+    #[tokio::test]
+    async fn the_credential_goes_only_to_the_configured_server() {
+        let (home, home_seen) = header_server();
+        let (elsewhere, elsewhere_seen) = header_server();
+        let http = client(home.clone());
+        http.get_bytes(&format!("{home}/secure/attachment/1/a.txt"))
+            .await
+            .unwrap();
+        http.get_bytes(&format!("{elsewhere}/secure/attachment/1/a.txt"))
+            .await
+            .unwrap();
+        assert_eq!(
+            home_seen.lock().unwrap().as_slice(),
+            [Some("Bearer t".to_string())]
+        );
+        assert_eq!(elsewhere_seen.lock().unwrap().as_slice(), [None]);
     }
 }
