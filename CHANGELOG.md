@@ -8,6 +8,20 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.7] — 2026-11-27
+
+### Fixed
+
+- **Pulling one issue does not hide edits to the others.** `pull PROJ-1`
+  moved the point later pulls fetch from, so another person's edit to
+  PROJ-7 made before it never came in, push refused PROJ-7 as stale, and
+  only `pull --full` recovered. Only a fetch of the whole project moves that
+  point now, and an issue named by key is always fetched, however long ago
+  it changed. `status`'s `last_fetch_at` is therefore when the whole project
+  was last fetched.
+- **A full fetch of a sprint or a board does not mark the rest of the
+  project deleted.**
+
 ## [0.28.6] — 2026-11-27
 
 ### Fixed
