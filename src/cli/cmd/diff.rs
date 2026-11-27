@@ -48,26 +48,16 @@ pub struct DiffArgs {
     pub exit_code: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DiffMode {
-    WorkingBase,
-    BaseRemote,
-    WorkingRemote,
-}
-
-impl DiffMode {
-    /// What the header says the diff is between.
-    pub fn describe(self) -> &'static str {
-        match self {
-            DiffMode::WorkingBase => "the working copy and the last sync",
-            DiffMode::BaseRemote => "the last sync and the last fetch",
-            DiffMode::WorkingRemote => "the working copy and the last fetch",
-        }
-    }
-}
+pub use crate::sync::diff::DiffMode;
 
 impl DiffArgs {
+    pub fn options(&self) -> crate::sync::diff::DiffOptions {
+        crate::sync::diff::DiffOptions {
+            issues: self.issues.clone(),
+            mode: self.mode(),
+        }
+    }
+
     pub fn mode(&self) -> DiffMode {
         match (self.remote, self.all, self.against) {
             (true, _, _) => DiffMode::BaseRemote,
@@ -79,7 +69,7 @@ impl DiffArgs {
 
 pub fn run(g: &GlobalArgs, args: &DiffArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let report = crate::sync::diff::run(&mut ctx, args)?;
+    let report = crate::sync::diff::run(&mut ctx, &args.options())?;
     report.render(out, args.stat);
     out.emit("diff", &report);
     Ok(if args.exit_code && !report.issues.is_empty() {

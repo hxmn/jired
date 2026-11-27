@@ -17,7 +17,6 @@
 //! Both are reported rather than silently kept, and `--include-new` opts into
 //! deleting the second.
 
-use crate::cli::cmd::reset::ResetArgs;
 use crate::context::Context;
 use crate::convert::ast::RawBlock;
 use crate::doc::IssueDoc;
@@ -203,8 +202,16 @@ impl Plan {
     }
 }
 
+/// What a reset is asked to do: the engine's half of `jired reset`'s flags.
+#[derive(Debug, Clone, Default)]
+pub struct ResetOptions {
+    pub issues: Vec<String>,
+    pub dry_run: bool,
+    pub include_new: bool,
+}
+
 /// Work out what a reset would drop, without dropping any of it.
-pub fn plan(ctx: &mut Context, args: &ResetArgs) -> Result<Plan> {
+pub fn plan(ctx: &mut Context, args: &ResetOptions) -> Result<Plan> {
     let engine = Engine::open(ctx)?;
     let wanted: Vec<String> = args
         .issues

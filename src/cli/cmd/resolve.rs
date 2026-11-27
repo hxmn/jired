@@ -7,7 +7,7 @@
 //! than editing files a second way, so `resolve --theirs` and
 //! `pull --strategy theirs` cannot drift apart.
 
-use crate::cli::cmd::pull::{PullArgs, Strategy};
+use crate::cli::cmd::pull::Strategy;
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, JiredError, Result};
@@ -150,7 +150,7 @@ pub fn run(g: &GlobalArgs, args: &ResolveArgs, out: Out) -> Result<ExitCode> {
     let report = match behind.is_empty() {
         true => None,
         false => {
-            let pull_args = PullArgs {
+            let pull_args = crate::sync::pull::PullOptions {
                 no_fetch: true,
                 strategy,
                 ..Default::default()

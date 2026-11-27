@@ -22,11 +22,21 @@ pub struct ResetArgs {
     pub include_new: bool,
 }
 
+impl ResetArgs {
+    pub fn options(&self) -> crate::sync::reset::ResetOptions {
+        crate::sync::reset::ResetOptions {
+            issues: self.issues.clone(),
+            dry_run: self.dry_run,
+            include_new: self.include_new,
+        }
+    }
+}
+
 pub fn run(g: &GlobalArgs, args: &ResetArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
 
-    let mut plan = crate::sync::reset::plan(&mut ctx, args)?;
+    let mut plan = crate::sync::reset::plan(&mut ctx, &args.options())?;
     if plan.report.is_empty() {
         out.say("nothing to reset — the working copy matches the last sync");
         out.emit("reset", &plan.report);

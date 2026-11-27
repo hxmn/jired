@@ -3,7 +3,6 @@
 //! Entirely offline: it reports the workspace against the last fetch, and says
 //! how old that fetch is rather than silently going to the network.
 
-use crate::cli::cmd::status::StatusArgs;
 use crate::context::Context;
 use crate::error::Result;
 use crate::json::Out;
@@ -236,7 +235,7 @@ pub struct WorkspaceState {
 impl WorkspaceState {
     /// The state as `status` would report it now.
     pub fn now(ctx: &mut Context) -> Result<Self> {
-        let report = run(ctx, &StatusArgs::default())?;
+        let report = run(ctx, &StatusOptions::default())?;
         Ok(Self {
             clean: report.is_clean(),
             new_issues: report.new_issues,
@@ -400,7 +399,13 @@ fn render_pending(out: Out, pending_ops: &[crate::store::state::PendingOp], widt
     }
 }
 
-pub fn run(ctx: &mut Context, args: &StatusArgs) -> Result<StatusReport> {
+/// What a status is asked for: the engine's half of `jired status`'s flags.
+#[derive(Debug, Clone, Default)]
+pub struct StatusOptions {
+    pub all: bool,
+}
+
+pub fn run(ctx: &mut Context, args: &StatusOptions) -> Result<StatusReport> {
     let engine = Engine::open(ctx)?;
     let files = engine.projector.scan()?;
     let field_map = engine.field_map()?;
@@ -632,7 +637,7 @@ fn out_warn(ctx: &Context, message: &str) {
 /// Used by the commands that are about to overwrite files, so they can name what
 /// would be lost before asking.
 pub fn dirty_keys(ctx: &mut Context) -> Result<Vec<String>> {
-    let report = run(ctx, &StatusArgs::default())?;
+    let report = run(ctx, &StatusOptions::default())?;
     let mut keys: Vec<String> = report.dirty.into_iter().map(|d| d.key).collect();
     keys.sort();
     Ok(keys)

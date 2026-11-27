@@ -6,11 +6,11 @@
 
 use crate::api::normalize::FieldMap;
 use crate::api::{Markup, RemoteIssue};
-use crate::cli::cmd::pull::{PullArgs, Strategy};
 use crate::context::Context;
 use crate::doc::{ChecklistEntry, CommentBlock, CommentId, IssueDoc, WorklogEntry, WorklogId};
 use crate::error::{JiredError, Result};
 use crate::json::Out;
+use crate::sync::fetch::FetchOptions;
 use crate::sync::merge::{self, Decision};
 use crate::sync::render::{render_issue, RenderContext};
 use crate::sync::{attachments, fetch, Engine};
@@ -256,7 +256,32 @@ impl PullReport {
     }
 }
 
-pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
+/// How a pull settles an issue that changed on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Strategy {
+    /// Stop before writing anything if any conflict is detected
+    #[default]
+    Abort,
+    /// Write conflict markers and record conflicts for `jired resolve`
+    Merge,
+    /// Keep the local value wherever both sides changed
+    Ours,
+    /// Take the remote value wherever both sides changed
+    Theirs,
+}
+
+/// What a pull is asked to do: the engine's half of `jired pull`'s flags.
+#[derive(Debug, Clone, Default)]
+pub struct PullOptions {
+    pub scope: FetchOptions,
+    pub no_fetch: bool,
+    /// The strategy in force: `--force` has already made this `Theirs`.
+    pub strategy: Strategy,
+    pub dry_run: bool,
+}
+
+pub fn run(ctx: &mut Context, args: &PullOptions) -> Result<PullReport> {
     // Issues named on the command line bound the merge as well as the fetch.
     // Bounding only the fetch wrote every issue an earlier fetch or push had
     // left behind: `jired pull PROJ-1` reported eighteen others as updated.
@@ -270,11 +295,11 @@ pub fn run(ctx: &mut Context, args: &PullArgs) -> Result<PullReport> {
 /// chosen strategy, rather than reimplementing the merge a second way.
 pub fn run_scoped(
     ctx: &mut Context,
-    args: &PullArgs,
+    args: &PullOptions,
     only: Option<&[String]>,
 ) -> Result<PullReport> {
     let engine = Engine::open(ctx)?;
-    let strategy = args.effective_strategy();
+    let strategy = args.strategy;
 
     let fetched = if args.no_fetch {
         None

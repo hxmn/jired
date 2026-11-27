@@ -342,7 +342,7 @@ fn set_up(g: &GlobalArgs, args: &InitArgs, out: Out, ctx: &mut Context) -> Resul
         None
     } else {
         out.say("");
-        let pull_args = crate::cli::cmd::pull::PullArgs::default();
+        let pull_args = crate::sync::pull::PullOptions::default();
         // Setup succeeded whatever the network did next. Propagating this error
         // would report a failed `init` for a workspace that is fully configured
         // — and remove it again, which is what a failed `init` now does — and

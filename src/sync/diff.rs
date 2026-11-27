@@ -2,7 +2,6 @@
 
 use crate::api::normalize::FieldMap;
 use crate::api::Markup;
-use crate::cli::cmd::diff::{DiffArgs, DiffMode};
 use crate::context::Context;
 use crate::doc::IssueDoc;
 use crate::error::Result;
@@ -70,7 +69,7 @@ impl DiffReport {
 
         if self.issues.is_empty() {
             out.say(format!("no differences between {}", self.mode.describe()));
-            if self.mode == crate::cli::cmd::diff::DiffMode::WorkingBase {
+            if self.mode == DiffMode::WorkingBase {
                 out.hint("use \"jired diff --against remote\" to see what a pull would bring in");
             }
             return;
@@ -178,7 +177,35 @@ fn render_value(v: &serde_json::Value) -> String {
     }
 }
 
-pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
+/// Which two of the three states a diff compares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffMode {
+    WorkingBase,
+    BaseRemote,
+    WorkingRemote,
+}
+
+impl DiffMode {
+    /// What the header says the diff is between.
+    pub fn describe(self) -> &'static str {
+        match self {
+            DiffMode::WorkingBase => "the working copy and the last sync",
+            DiffMode::BaseRemote => "the last sync and the last fetch",
+            DiffMode::WorkingRemote => "the working copy and the last fetch",
+        }
+    }
+}
+
+/// What a diff is asked for: the engine's half of `jired diff`'s flags, with
+/// the comparison already worked out from them.
+#[derive(Debug, Clone)]
+pub struct DiffOptions {
+    pub issues: Vec<String>,
+    pub mode: DiffMode,
+}
+
+pub fn run(ctx: &mut Context, args: &DiffOptions) -> Result<DiffReport> {
     let engine = Engine::open(ctx)?;
     let markup = engine.markup();
     let fields = engine.field_map()?;
@@ -209,14 +236,14 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
         // as a sendable change contradicts `status` and `push`, which skip on
         // this same hash. The three answer one question about one working
         // copy; the next `jired pull` rewrites the file in today's rendering.
-        if args.mode() == DiffMode::WorkingBase {
+        if args.mode == DiffMode::WorkingBase {
             if let (Some(base), Some(f)) = (&row.base, files.get(&row.key)) {
                 if engine.projector.hash_of(&f.relative).as_deref() == Some(base.md_hash.as_str()) {
                     continue;
                 }
             }
         }
-        let (left, right) = match args.mode() {
+        let (left, right) = match args.mode {
             DiffMode::WorkingBase => (
                 row.base
                     .as_ref()
@@ -248,7 +275,7 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
             (Some(_), None) => "deleted",
             _ => "modified",
         };
-        let working = args.mode() != DiffMode::BaseRemote;
+        let working = args.mode != DiffMode::BaseRemote;
         let Some(diff) = compare(&row.key, left.as_ref(), right.as_ref(), status, working) else {
             continue;
         };
@@ -266,7 +293,7 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
     // `push` sends, with the `.md` file untouched — so the loop above, which
     // reads only files, would call the workspace clean while `status` called it
     // staged. The three are meant to answer one question.
-    if args.mode() == DiffMode::WorkingBase {
+    if args.mode == DiffMode::WorkingBase {
         let (moves, _) = crate::sync::group::detect_moves(&engine, engine.projector.root())?;
         for m in moves {
             if !wanted.is_empty() && !wanted.contains(&m.key) {
@@ -300,7 +327,7 @@ pub fn run(ctx: &mut Context, args: &DiffArgs) -> Result<DiffReport> {
 
     issues.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(DiffReport {
-        mode: args.mode(),
+        mode: args.mode,
         issues,
         stat,
     })

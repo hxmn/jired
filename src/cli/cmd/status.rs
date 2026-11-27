@@ -13,9 +13,15 @@ pub struct StatusArgs {
     pub all: bool,
 }
 
+impl StatusArgs {
+    pub fn options(&self) -> crate::sync::status::StatusOptions {
+        crate::sync::status::StatusOptions { all: self.all }
+    }
+}
+
 pub fn run(g: &GlobalArgs, args: &StatusArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
-    let report = crate::sync::status::run(&mut ctx, args)?;
+    let report = crate::sync::status::run(&mut ctx, &args.options())?;
     report.render(out);
     out.emit("status", &report);
     Ok(ExitCode::Success)

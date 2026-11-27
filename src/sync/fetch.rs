@@ -6,7 +6,6 @@
 
 use crate::api::client::{next_page, FieldSet, Page, SearchQuery};
 use crate::api::model::jql_timestamp;
-use crate::cli::cmd::fetch::FetchArgs;
 use crate::context::Context;
 use crate::error::{JiredError, Result};
 use crate::json::Out;
@@ -43,7 +42,37 @@ impl FetchReport {
     }
 }
 
-pub fn run(ctx: &mut Context, args: &FetchArgs) -> Result<FetchReport> {
+/// What a fetch is asked for: the engine's half of `jired fetch`'s flags.
+#[derive(Debug, Clone, Default)]
+pub struct FetchOptions {
+    /// Issues named, as typed: keys, file paths or links.
+    pub issues: Vec<String>,
+    pub jql: Option<String>,
+    pub sprint: Option<String>,
+    pub board: Option<String>,
+    pub updated_since: Option<String>,
+    pub full: bool,
+    pub slim: bool,
+}
+
+impl FetchOptions {
+    /// Every issue named, resolved to keys.
+    pub fn wanted_issues(&self) -> crate::error::Result<Vec<String>> {
+        let mut all: Vec<String> = self
+            .issues
+            .iter()
+            .map(|r| crate::project::naming::key_from_input(r))
+            .collect::<crate::error::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|k| !k.is_empty())
+            .collect();
+        all.sort();
+        all.dedup();
+        Ok(all)
+    }
+}
+
+pub fn run(ctx: &mut Context, args: &FetchOptions) -> Result<FetchReport> {
     let engine = Engine::open(ctx)?;
     let client = engine.client(ctx)?;
     run_with(ctx, &engine, client.as_ref(), args)
@@ -53,7 +82,7 @@ pub fn run_with(
     ctx: &mut Context,
     engine: &Engine,
     client: &dyn crate::api::JiraApi,
-    args: &FetchArgs,
+    args: &FetchOptions,
 ) -> Result<FetchReport> {
     let started = Utc::now();
 
@@ -230,7 +259,7 @@ fn web_links(
     ctx: &mut Context,
     engine: &Engine,
     client: &dyn crate::api::JiraApi,
-    args: &FetchArgs,
+    args: &FetchOptions,
     issues: &[crate::api::model::RemoteIssue],
 ) -> Result<Vec<Option<Vec<serde_json::Value>>>> {
     use futures::StreamExt;
@@ -328,7 +357,7 @@ fn skew_adjusted(watermark: DateTime<Utc>) -> DateTime<Utc> {
 
 pub fn build_jql(
     ctx: &mut Context,
-    args: &FetchArgs,
+    args: &FetchOptions,
     since: Option<&DateTime<Utc>>,
 ) -> Result<String> {
     let mut clauses: Vec<String> = Vec::new();

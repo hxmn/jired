@@ -138,7 +138,7 @@ pub fn run(g: &GlobalArgs, args: &CreateArgs, out: Out) -> Result<ExitCode> {
 
     // `--dry-run` alone is a dry run of the push: the plan is what it is for.
     let pushed = if args.push || args.dry_run {
-        let push = crate::cli::cmd::push::PushArgs {
+        let push = crate::sync::push::PushOptions {
             issues: vec![key.clone()],
             dry_run: args.dry_run,
             verify: args.verify,

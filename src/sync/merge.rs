@@ -4,7 +4,7 @@
 //! conflict is the same field or the same region of text changed on both sides
 //! relative to base — anything else merges without asking.
 
-use crate::cli::cmd::pull::Strategy;
+use crate::sync::pull::Strategy;
 use similar::{DiffOp, TextDiff};
 
 /// What a three-way comparison of one value says to do.

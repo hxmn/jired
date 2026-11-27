@@ -8,7 +8,6 @@
 //! in front of it rather than a flag.
 
 use crate::cli::cmd::pick::Listing;
-use crate::cli::cmd::push::PushArgs;
 use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::doc::IssueDoc;
@@ -240,7 +239,7 @@ pub fn push_one(ctx: &mut Context, key: &str, dry_run: bool) -> Result<PushRepor
 /// One call rather than one per issue: the report is then the whole outcome,
 /// and an issue that fails does not hide the ones that went out.
 pub fn push_these(ctx: &mut Context, keys: &[String], dry_run: bool) -> Result<PushReport> {
-    let args = PushArgs {
+    let args = crate::sync::push::PushOptions {
         issues: keys
             .iter()
             .map(|k| crate::project::naming::key_from_input(k))

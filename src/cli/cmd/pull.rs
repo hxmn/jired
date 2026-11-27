@@ -7,18 +7,34 @@ use crate::error::{ExitCode, Result};
 use crate::json::Out;
 use clap::{Args, ValueEnum};
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Strategy {
-    /// Stop before writing anything if any conflict is detected
-    #[default]
-    Abort,
-    /// Write conflict markers and record conflicts for `jired resolve`
-    Merge,
-    /// Keep the local value wherever both sides changed
-    Ours,
-    /// Take the remote value wherever both sides changed
-    Theirs,
+pub use crate::sync::pull::Strategy;
+
+// By hand rather than derived, so the engine's type carries no clap: the
+// spellings and help here are the flag's, and the engine never sees them.
+impl ValueEnum for Strategy {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            Strategy::Abort,
+            Strategy::Merge,
+            Strategy::Ours,
+            Strategy::Theirs,
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        use clap::builder::PossibleValue;
+        Some(match self {
+            Strategy::Abort => PossibleValue::new("abort")
+                .help("Stop before writing anything if any conflict is detected"),
+            Strategy::Merge => PossibleValue::new("merge")
+                .help("Write conflict markers and record conflicts for `jired resolve`"),
+            Strategy::Ours => {
+                PossibleValue::new("ours").help("Keep the local value wherever both sides changed")
+            }
+            Strategy::Theirs => PossibleValue::new("theirs")
+                .help("Take the remote value wherever both sides changed"),
+        })
+    }
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -44,6 +60,16 @@ pub struct PullArgs {
 }
 
 impl PullArgs {
+    /// What the engine is asked to do.
+    pub fn options(&self) -> crate::sync::pull::PullOptions {
+        crate::sync::pull::PullOptions {
+            scope: self.scope.options(),
+            no_fetch: self.no_fetch,
+            strategy: self.effective_strategy(),
+            dry_run: self.dry_run,
+        }
+    }
+
     pub fn effective_strategy(&self) -> Strategy {
         if self.force {
             Strategy::Theirs
@@ -76,7 +102,7 @@ pub fn run(g: &GlobalArgs, args: &PullArgs, out: Out) -> Result<ExitCode> {
         }
     }
 
-    let mut report = crate::sync::pull::run(&mut ctx, args)?;
+    let mut report = crate::sync::pull::run(&mut ctx, &args.options())?;
     report.render(out);
     report.state = closing_state(&mut ctx, &report);
     if let Some(state) = &report.state {

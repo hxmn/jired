@@ -8,7 +8,6 @@
 //!   so untouched read-only content goes back byte-identical.
 
 use crate::api::{JiraApi, Markup, RemoteIssue, RichText, WorklogInput};
-use crate::cli::cmd::push::PushArgs;
 use crate::context::Context;
 use crate::convert;
 use crate::doc::{CommentId, IssueDoc, WorklogEntry, WorklogId};
@@ -473,7 +472,21 @@ enum Action {
     },
 }
 
-pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
+/// What a push is asked to do: the engine's half of `jired push`'s flags.
+#[derive(Debug, Clone, Default)]
+pub struct PushOptions {
+    pub issues: Vec<String>,
+    pub dry_run: bool,
+    pub force: bool,
+    pub allow_lossy: bool,
+    pub allow_comment_delete: bool,
+    pub allow_worklog_delete: bool,
+    pub resume: bool,
+    pub refresh_stale: bool,
+    pub verify: bool,
+}
+
+pub fn run(ctx: &mut Context, args: &PushOptions) -> Result<PushReport> {
     let engine = Engine::open(ctx)?;
     let client = engine.client(ctx)?;
     let markup = engine.markup();
@@ -1225,7 +1238,7 @@ fn create_issue(
     client: &dyn JiraApi,
     temp_key: &str,
     file: &str,
-    args: &PushArgs,
+    args: &PushOptions,
     link_types: &mut LinkTypes<'_>,
 ) -> Result<(IssueResult, Vec<String>)> {
     let doc = engine.projector.read(file)?;
@@ -1982,18 +1995,18 @@ fn plan_custom_fields(
 ///
 /// The recovery this replaces was three commands and a full pull of every issue
 /// in the workspace to send one label.
-fn retry_stale(ctx: &mut Context, report: &mut PushReport, args: &PushArgs) -> Result<()> {
+fn retry_stale(ctx: &mut Context, report: &mut PushReport, args: &PushOptions) -> Result<()> {
     let stale = report.stale.clone();
     ctx.out.say(format!(
         "re-fetching {} issue(s) the server had moved on from",
         stale.len()
     ));
 
-    let pull_args = crate::cli::cmd::pull::PullArgs {
+    let pull_args = crate::sync::pull::PullOptions {
         // Abort, deliberately: a conflicting issue must be left exactly as a
         // plain push would leave it, not merged with markers behind the user's
         // back in the middle of a push they did not ask to be interactive.
-        strategy: crate::cli::cmd::pull::Strategy::Abort,
+        strategy: crate::sync::pull::Strategy::Abort,
         ..Default::default()
     };
     let pulled = match crate::sync::pull::run_scoped(ctx, &pull_args, Some(&stale)) {
@@ -2030,7 +2043,7 @@ fn retry_stale(ctx: &mut Context, report: &mut PushReport, args: &PushArgs) -> R
     // `refresh_stale` off, so a second round of staleness reports rather than
     // looping: an issue that goes stale twice in one push is a signal, not
     // something to keep chasing.
-    let retry = PushArgs {
+    let retry = PushOptions {
         issues: retryable.clone(),
         refresh_stale: false,
         ..args.clone()
@@ -2077,9 +2090,9 @@ fn refresh_parents(ctx: &mut Context, engine: &Engine, report: &mut PushReport) 
     if parents.is_empty() {
         return Ok(());
     }
-    let pull_args = crate::cli::cmd::pull::PullArgs {
+    let pull_args = crate::sync::pull::PullOptions {
         no_fetch: true,
-        strategy: crate::cli::cmd::pull::Strategy::Abort,
+        strategy: crate::sync::pull::Strategy::Abort,
         ..Default::default()
     };
     let mut pending = parents;
@@ -2436,9 +2449,9 @@ fn refresh_linked(
     if pending.is_empty() {
         return Ok(false);
     }
-    let pull_args = crate::cli::cmd::pull::PullArgs {
+    let pull_args = crate::sync::pull::PullOptions {
         no_fetch: true,
-        strategy: crate::cli::cmd::pull::Strategy::Abort,
+        strategy: crate::sync::pull::Strategy::Abort,
         ..Default::default()
     };
     let mut wrote = false;
@@ -3207,7 +3220,7 @@ struct PlanContext<'a> {
     sprints: &'a [crate::store::state::SprintRow],
     markup: Markup,
     engine: &'a Engine,
-    args: &'a PushArgs,
+    args: &'a PushOptions,
     max_upload: u64,
     done_transition: Option<&'a str>,
 }
@@ -3952,7 +3965,7 @@ fn execute(
     key: &str,
     base_updated: &chrono::DateTime<chrono::Utc>,
     ops: Vec<Op>,
-    args: &PushArgs,
+    args: &PushOptions,
     file: &str,
     markup: Markup,
     base_url: &str,

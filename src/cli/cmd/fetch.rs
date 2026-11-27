@@ -45,27 +45,30 @@ pub struct FetchArgs {
 }
 
 impl FetchArgs {
-    /// Every issue named, from either spelling, resolved to keys.
-    pub fn wanted_issues(&self) -> crate::error::Result<Vec<String>> {
-        let mut all: Vec<String> = self
-            .positional_issues
-            .iter()
-            .chain(self.issues.iter())
-            .map(|r| crate::project::naming::key_from_input(r))
-            .collect::<crate::error::Result<Vec<_>>>()?
-            .into_iter()
-            .filter(|k| !k.is_empty())
-            .collect();
-        all.sort();
-        all.dedup();
-        Ok(all)
+    /// What the engine is asked to do: both spellings of the named issues as
+    /// one list.
+    pub fn options(&self) -> crate::sync::fetch::FetchOptions {
+        crate::sync::fetch::FetchOptions {
+            issues: self
+                .positional_issues
+                .iter()
+                .chain(self.issues.iter())
+                .cloned()
+                .collect(),
+            jql: self.jql.clone(),
+            sprint: self.sprint.clone(),
+            board: self.board.clone(),
+            updated_since: self.updated_since.clone(),
+            full: self.full,
+            slim: self.slim,
+        }
     }
 }
 
 pub fn run(g: &GlobalArgs, args: &FetchArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
-    let report = crate::sync::fetch::run(&mut ctx, args)?;
+    let report = crate::sync::fetch::run(&mut ctx, &args.options())?;
     report.render(out);
     out.emit("fetch", &report);
     Ok(ExitCode::Success)

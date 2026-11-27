@@ -65,6 +65,23 @@ pub struct PushArgs {
     pub verify: bool,
 }
 
+impl PushArgs {
+    /// What the engine is asked to do; `--show-body` is the report's business.
+    pub fn options(&self) -> crate::sync::push::PushOptions {
+        crate::sync::push::PushOptions {
+            issues: self.issues.clone(),
+            dry_run: self.dry_run,
+            force: self.force,
+            allow_lossy: self.allow_lossy,
+            allow_comment_delete: self.allow_comment_delete,
+            allow_worklog_delete: self.allow_worklog_delete,
+            resume: self.resume,
+            refresh_stale: self.refresh_stale,
+            verify: self.verify,
+        }
+    }
+}
+
 pub fn run(g: &GlobalArgs, args: &PushArgs, out: Out) -> Result<ExitCode> {
     let mut ctx = Context::open(g, out)?;
     ctx.lock()?;
@@ -74,9 +91,9 @@ pub fn run(g: &GlobalArgs, args: &PushArgs, out: Out) -> Result<ExitCode> {
     // costs nothing — a dry run makes no calls — and turns the confirmation into
     // an accurate list rather than a count.
     if !args.dry_run && ctx.resolver.interactive() && !ctx.yes {
-        let plan_args = PushArgs {
+        let plan_args = crate::sync::push::PushOptions {
             dry_run: true,
-            ..args.clone()
+            ..args.options()
         };
         let plan = crate::sync::push::run(&mut ctx, &plan_args)?;
         if plan.results.is_empty() {
@@ -108,7 +125,7 @@ pub fn run(g: &GlobalArgs, args: &PushArgs, out: Out) -> Result<ExitCode> {
         }
     }
 
-    let report = crate::sync::push::run(&mut ctx, args)?;
+    let report = crate::sync::push::run(&mut ctx, &args.options())?;
     report.render_with(out, args.show_body && report.dry_run);
     out.emit("push", &report);
     Ok(report.exit_code())
