@@ -8,6 +8,17 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.5] — 2026-11-27
+
+### Fixed
+
+- **Credential handling is tighter.** The encryption key and the request
+  header built from your token are wiped from memory after use; a
+  `credentials.toml` edited to demand absurd key-derivation work is refused
+  rather than run; two `jired init`s at once no longer drop one of their
+  entries from the shared `credentials.toml`. On Windows, where jired sets
+  no file permissions of its own, the security notes now say so.
+
 ## [0.39.4] — 2026-11-27
 
 ### Fixed
