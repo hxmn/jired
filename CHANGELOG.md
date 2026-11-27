@@ -8,6 +8,16 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.0] — 2026-11-27
+
+### Added
+
+- **An interrupted `fetch` goes on from where it stopped.** Each page of
+  issues is stored as it arrives; after a network failure, the next fetch
+  asks only for what it had not reached, and reports `"resumed": true`. A
+  first fetch of a large project no longer starts over, or holds the whole
+  project in memory.
+
 ## [0.38.1] — 2026-11-27
 
 ### Fixed
