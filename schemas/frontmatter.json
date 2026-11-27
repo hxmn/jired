@@ -176,6 +176,11 @@
         "null"
       ],
       "description": "Jira's own `duedate`: a date with no time, `2026-09-14`. A system field, so it is named here rather than living under `custom:`"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

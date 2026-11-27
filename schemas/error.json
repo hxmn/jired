@@ -30,6 +30,11 @@
     },
     "message": { "type": "string" },
     "details": { "type": "object" },
-    "hint": { "type": "string" }
+    "hint": { "type": "string" },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
+    }
   }
 }

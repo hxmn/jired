@@ -164,6 +164,11 @@
         "null"
       ],
       "description": "A jired/push/1 document for the carry-over, when there was one"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

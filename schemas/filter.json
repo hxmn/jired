@@ -14,6 +14,11 @@
     },
     "filter": {
       "$ref": "#/$defs/filter"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   },
   "$defs": {

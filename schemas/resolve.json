@@ -55,6 +55,11 @@
         "null"
       ],
       "description": "The jired/pull/1 document produced by the re-merge"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

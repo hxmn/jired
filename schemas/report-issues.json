@@ -97,6 +97,11 @@
         "type": "integer"
       },
       "description": "Per column, the issues in it, each once; empty for one field"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

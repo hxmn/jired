@@ -159,6 +159,27 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Option<Value> {
+        serde_json::from_slice(&self.output(args).stdout).ok()
+    }
+
+    /// The structured error a failing command leaves on stderr.
+    fn error(&self, args: &[&str]) -> Value {
+        let out = self.output(args);
+        assert!(
+            !out.status.success(),
+            "`jired {}` succeeded",
+            args.join(" ")
+        );
+        serde_json::from_slice(&out.stderr).unwrap_or_else(|e| {
+            panic!(
+                "stderr of `jired {}` is not JSON: {e}\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        })
+    }
+
+    fn output(&self, args: &[&str]) -> std::process::Output {
         let mut cmd = common::jired(&common::process_home());
         cmd.current_dir(self.dir.path())
             .env("JIRED_FIXTURES", &self.fixtures)
@@ -174,12 +195,10 @@ impl Fixture {
                 .env("JIRED_AUTH", "pat")
                 .env("JIRED_PROJECT", "DC");
         }
-        let out = cmd
-            .args(args)
+        cmd.args(args)
             .args(["--json", "--no-input", "--yes"])
             .output()
-            .unwrap();
-        serde_json::from_slice(&out.stdout).ok()
+            .unwrap()
     }
 }
 
@@ -274,6 +293,11 @@ fn command_output_matches_its_published_schema() {
         vec!["filter", "share", "id:10500", "--add", "authenticated"],
         vec!["filter", "run", "id:10500"],
         vec!["filter", "delete", "id:10500"],
+        // A warning parked beside the payload's own: `status` lists objects,
+        // and a parked string among them broke its schema.
+        vec!["status", "--insecure"],
+        vec!["config", "path"],
+        vec!["config", "path", "--global"],
     ];
 
     let mut checked = 0;
@@ -285,6 +309,15 @@ fn command_output_matches_its_published_schema() {
         checked += 1;
     }
     assert!(checked >= 20, "only {checked} documents were checked");
+
+    // The error path is a document too, warnings and all.
+    for args in [
+        vec!["show", "PROJ-999", "--insecure"],
+        vec!["pull", "--nonsense"],
+        vec!["schema", "no-such-schema"],
+    ] {
+        check(&ws.error(&args), &args);
+    }
 }
 
 /// The documents only a Data Center server produces.

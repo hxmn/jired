@@ -82,6 +82,11 @@
       "type": "integer",
       "minimum": 0,
       "description": "Findings doctor cannot repair; the command exits 1 when this is non-zero"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

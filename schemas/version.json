@@ -41,6 +41,11 @@
         "null"
       ],
       "description": "The Markdown changelog this binary was built from; null unless --changelog was given"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

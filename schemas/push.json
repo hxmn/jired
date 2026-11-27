@@ -13,6 +13,10 @@
     "schema": {
       "const": "jired/push/1"
     },
+    "cancelled": {
+      "description": "The plan was shown and declined: nothing was sent, and `results` is what would have been",
+      "type": "boolean"
+    },
     "dry_run": {
       "type": "boolean"
     },

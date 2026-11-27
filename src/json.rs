@@ -397,13 +397,26 @@ fn merge_parked(doc: &mut serde_json::Value, parked: Vec<String>) {
     let serde_json::Value::Object(map) = doc else {
         return;
     };
+    let status = map.get("schema").and_then(serde_json::Value::as_str) == Some("jired/status/1");
     let entry = map
         .entry("warnings")
         .or_insert_with(|| serde_json::Value::Array(Vec::new()));
     if let serde_json::Value::Array(list) = entry {
+        // A document whose own warnings are objects (`status` names the issue
+        // and file of each) takes a parked one as an object too, or its list
+        // would mix shapes and break the schema it publishes.
+        let objects = list.iter().any(serde_json::Value::is_object) || status;
         for w in parked {
-            if !list.iter().any(|have| have.as_str() == Some(w.as_str())) {
-                list.push(serde_json::Value::from(w));
+            let seen = list.iter().any(|have| {
+                have.as_str() == Some(w.as_str())
+                    || have.get("message").and_then(serde_json::Value::as_str) == Some(w.as_str())
+            });
+            if !seen {
+                list.push(if objects {
+                    serde_json::json!({ "message": w })
+                } else {
+                    serde_json::Value::from(w)
+                });
             }
         }
     }

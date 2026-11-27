@@ -2,15 +2,26 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jired/config/1",
   "title": "jired config result",
-  "description": "A single configuration value",
+  "description": "A single configuration value; or, for `config path` and `config edit`, the file",
   "type": "object",
   "required": [
-    "schema",
-    "key"
+    "schema"
   ],
   "properties": {
     "schema": {
       "const": "jired/config/1"
+    },
+    "file": {
+      "description": "config path and config edit: the config file",
+      "type": "string"
+    },
+    "exists": {
+      "description": "config path: whether the file exists yet",
+      "type": "boolean"
+    },
+    "edited": {
+      "description": "config edit: the file was opened and saved",
+      "type": "boolean"
     },
     "key": {
       "type": "string"
@@ -52,6 +63,11 @@
           "change": { "type": "string" }
         }
       }
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

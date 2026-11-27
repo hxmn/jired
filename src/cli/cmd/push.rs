@@ -99,10 +99,11 @@ pub fn run(g: &GlobalArgs, args: &PushArgs, out: Out) -> Result<ExitCode> {
         );
         if !crate::cli::cmd::prompt::confirm(&question, false, true)? {
             out.say("cancelled — nothing was sent");
-            out.emit(
-                "push",
-                &serde_json::json!({"cancelled": true, "planned": plan}),
-            );
+            // The plan's own document, said to be cancelled: one with only
+            // `cancelled` and `planned` lacked what `jired/push/1` requires.
+            let mut doc = serde_json::to_value(&plan)?;
+            doc["cancelled"] = serde_json::Value::Bool(true);
+            out.emit("push", &doc);
             return Ok(ExitCode::Success);
         }
     }

@@ -238,12 +238,10 @@
     },
     "warnings": {
       "type": "array",
-      "description": "Content that will be ignored unless the file is corrected",
+      "description": "Content that will be ignored unless the file is corrected, naming the issue and file; any other warning is a message alone",
       "items": {
         "type": "object",
         "required": [
-          "key",
-          "file",
           "message"
         ],
         "properties": {

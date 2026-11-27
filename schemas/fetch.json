@@ -17,6 +17,11 @@
       "description": "Issue keys whose remote snapshot changed, sorted",
       "items": { "type": "string" }
     },
-    "fetched_at": { "type": "string", "format": "date-time" }
+    "fetched_at": { "type": "string", "format": "date-time" },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
+    }
   }
 }

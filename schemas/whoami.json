@@ -52,6 +52,11 @@
         "user_config"
       ],
       "description": "Where the credential is kept (creds.storage)"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

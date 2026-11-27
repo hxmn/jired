@@ -77,6 +77,11 @@
         "null"
       ],
       "description": "A jired/push/1 document when --push was given"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

@@ -94,6 +94,11 @@
         }
       },
       "description": "The API call, sent unless dry_run. Only the fields that change are in the body: the endpoint merges"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

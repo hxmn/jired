@@ -40,6 +40,11 @@
         "$ref": "#/$defs/call"
       },
       "description": "The API calls, in order: the create, Cloud's star, then one per share"
+    },
+    "warnings": {
+      "description": "Things worth knowing that did not stop the command",
+      "type": "array",
+      "items": { "type": "string" }
     }
   },
   "$defs": {
