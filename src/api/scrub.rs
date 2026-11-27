@@ -19,6 +19,14 @@ const IDENTITY_FIELDS: &[&str] = &[
     "username",
 ];
 
+/// Of those, the ones that name a person only inside a user object: a
+/// status's or a field's `name` and a project's `key` became `personN`, and
+/// a fixture stopped saying what it recorded.
+const USER_ONLY_FIELDS: &[&str] = &["name", "key"];
+
+/// What marks an object as a user.
+const USER_MARKS: &[&str] = &["accountId", "emailAddress", "displayName", "avatarUrls"];
+
 /// Field names dropped outright: bulky, useless in a fixture, and often
 /// carrying signed URLs.
 const DROPPED_FIELDS: &[&str] = &[
@@ -75,25 +83,71 @@ impl Scrubber {
         }
     }
 
+    /// Scrub a payload: identities by field, then every identity it learned
+    /// wherever else it appears — a mention in a description, a name in a
+    /// summary or an attachment's file name — which the field rule alone let
+    /// through.
     pub fn scrub(&mut self, value: &Value) -> Value {
+        let once = self.scrub_fields(value);
+        self.replace_known(&once)
+    }
+
+    fn replace_known(&self, value: &Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), self.replace_known(v)))
+                    .collect(),
+            ),
+            Value::Array(items) => {
+                Value::Array(items.iter().map(|v| self.replace_known(v)).collect())
+            }
+            Value::String(s) => {
+                let mut out = s.clone();
+                // Longest first, so a full name goes before a part of it.
+                let mut known: Vec<(&String, &String)> = self
+                    .people
+                    .iter()
+                    .filter(|(original, _)| original.len() >= 3 && !is_issue_key(original))
+                    .collect();
+                known.sort_by_key(|(original, _)| std::cmp::Reverse(original.len()));
+                for (original, pseudonym) in known {
+                    if out.contains(original.as_str()) {
+                        out = out.replace(original.as_str(), pseudonym);
+                    }
+                }
+                Value::String(out)
+            }
+            other => other.clone(),
+        }
+    }
+
+    fn scrub_fields(&mut self, value: &Value) -> Value {
         match value {
             Value::Object(map) => {
+                let is_user = USER_MARKS.iter().any(|m| map.contains_key(*m));
                 let mut out = Map::new();
                 for (k, v) in map {
                     if DROPPED_FIELDS.contains(&k.as_str()) {
                         continue;
                     }
-                    if IDENTITY_FIELDS.contains(&k.as_str()) {
+                    // A Data Center user key names a person wherever it is.
+                    let user_key = v.as_str().is_some_and(|s| s.starts_with("JIRAUSER"));
+                    let identity = IDENTITY_FIELDS.contains(&k.as_str())
+                        && (is_user || user_key || !USER_ONLY_FIELDS.contains(&k.as_str()));
+                    if identity {
                         if let Value::String(s) = v {
                             out.insert(k.clone(), Value::String(self.pseudonym(k, s)));
                             continue;
                         }
                     }
-                    out.insert(k.clone(), self.scrub(v));
+                    out.insert(k.clone(), self.scrub_fields(v));
                 }
                 Value::Object(out)
             }
-            Value::Array(items) => Value::Array(items.iter().map(|v| self.scrub(v)).collect()),
+            Value::Array(items) => {
+                Value::Array(items.iter().map(|v| self.scrub_fields(v)).collect())
+            }
             Value::String(s) => Value::String(self.apply_literals(s)),
             other => other.clone(),
         }
@@ -175,6 +229,30 @@ mod tests {
         let mut s = Scrubber::new();
         let out = s.scrub(&json!({"key": "JIRAUSER10100"}));
         assert_ne!(out["key"], "JIRAUSER10100");
+    }
+
+    /// A status's or a field's `name` is what the fixture records, not a
+    /// person: it stays. A person's name in a description or a mention does
+    /// not.
+    #[test]
+    fn only_people_are_renamed_and_they_are_renamed_everywhere() {
+        let mut s = Scrubber::new();
+        let out = s.scrub(&json!({
+            "fields": {
+                "status": {"name": "In Progress"},
+                "project": {"key": "PROJ", "name": "Payments"},
+                "assignee": {"accountId": "5b10real", "displayName": "Ilya Ashbourne"},
+                "summary": "Ask Ilya Ashbourne about it",
+                "description": {"type": "mention", "attrs": {"id": "5b10real", "text": "@Ilya Ashbourne"}}
+            }
+        }));
+        assert_eq!(out["fields"]["status"]["name"], "In Progress");
+        assert_eq!(out["fields"]["project"]["key"], "PROJ");
+        assert_eq!(out["fields"]["project"]["name"], "Payments");
+        let text = out.to_string();
+        for original in ["5b10real", "Ilya Ashbourne"] {
+            assert!(!text.contains(original), "{original} survived in {text}");
+        }
     }
 
     #[test]
