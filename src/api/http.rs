@@ -1079,6 +1079,9 @@ mod tests {
             .with_writer(move || sink.clone())
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
+        // Tests on other threads run with no subscriber, and a call site first
+        // reached there is cached as never wanted; asked again, it sees this one.
+        tracing::callsite::rebuild_interest_cache();
 
         let (url, _) = loopback::serve(|_| Reply::Json(401, serde_json::json!({})));
         let http = client(&url);
