@@ -8,6 +8,19 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.1] — 2026-11-27
+
+### Fixed
+
+- **A closed pipe no longer hides a failure.** With `jired push | head` or
+  `| grep -q`, once the reader stopped reading, jired exited 0 and said
+  nothing, even when an issue failed after that point; `diff --exit-code`
+  exited 0 with changes to report. Only the output that would have gone to
+  the closed pipe is dropped now. The exit code and any error on stderr are
+  the command's own.
+- **Bold text that starts like a nested list marker stays bold on Data
+  Center.** `*# 0*` went to Jira as literal text.
+
 ## [0.31.0] — 2026-11-27
 
 ### Breaking
