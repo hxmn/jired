@@ -8,6 +8,15 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.36.0] — 2026-11-27
+
+### Breaking
+
+- **`--config PATH` is read inside a workspace, above its own config.** It
+  was silently ignored there and stood in for the workspace's file outside
+  one. A value it supplies now reports its source as `extra-config` rather
+  than `local-config`.
+
 ## [0.35.0] — 2026-11-27
 
 ### Breaking
