@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.11] — 2026-11-27
+
+### Changed
+
+- **`fetch` writes each page of issues in one commit** rather than several
+  per issue, so a large first fetch spends less time on the database, and an
+  interrupted one never keeps half a page.
+
 ## [0.39.10] — 2026-11-27
 
 ### Changed
