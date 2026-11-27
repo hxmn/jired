@@ -29,11 +29,11 @@
     },
     "since": {
       "type": "string",
-      "description": "Midnight UTC of the first day counted, ISO-8601"
+      "description": "Midnight starting the first day counted, in the zone of the machine that ran the report, as a UTC ISO-8601 instant"
     },
     "until": {
       "type": "string",
-      "description": "Midnight UTC of the day after the last one counted, ISO-8601"
+      "description": "Midnight starting the day after the last one counted, in the same zone, as a UTC ISO-8601 instant"
     },
     "dates": {
       "type": "array",

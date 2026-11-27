@@ -782,14 +782,17 @@ copy; what it cannot see is time booked since the last `pull`, which is why
 every rendering carries the age of the snapshot.
 
 The shape is a grid: a row per person, a column per day, a total down the right
-and along the bottom. `--days N` (default 7) is how many columns, whole UTC days
-ending with today — not a rolling `N × 24h`, because the question is asked in
+and along the bottom. `--days N` (default 7) is how many columns, whole days in
+the reader's zone ending with today — not a rolling `N × 24h`, because the question is asked in
 days and an entry booked at 09:00 seven days ago should not drop out of a
 seven-day report because it is now 10:00. Every entry therefore falls in exactly
 one column, and `dates`/`by_day` in the JSON are that grid in the order it is
-drawn. The columns are the one printed thing that does not move with the reader:
-a date range is what the window counts, not a clock reading, while the `last
-fetch` line beside it is a clock reading and is shown as their own.
+drawn. Days are the reader's because work is: counted in UTC, a Friday
+evening's hours west of UTC showed under Saturday. The zone is the offset at
+the moment of the report, so a window across a clock change is an hour out at
+its far end. A worklog Jira has is counted in the seconds Jira counts, not by
+reading its `1d 2h`, whose day is the instance's own length; only time not
+pushed yet, or edited since, is read from its text, `1.5h` included.
 
 Totals are shown in hours and minutes and never in days, for the same reason
 `logwork` sends the duration as written: how long a working day is is an

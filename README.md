@@ -523,8 +523,8 @@ That is the reader's timezone, taken from the machine (`TZ` and the system zone)
 with no zone marker — the offset is one you already know, and UTC on a screen is
 only a subtraction to do. `log`, `status`, `report time` and every message jired writes to the
 terminal follow it, and so do the times the `logwork` form shows and prefills.
-(`report time` counts whole UTC days, so the date range in its header is not a
-clock reading and does not move.)
+`report time` counts whole days in that zone too, so an evening's work is on
+the day it was done.
 
 What jired *keeps* stays UTC, because a record has to mean the same thing on
 every machine that reads it: `--json` documents, the timestamps in issue files

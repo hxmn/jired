@@ -15,7 +15,7 @@ pub mod issues;
 
 use crate::doc::{parse_duration, IssueDoc, WorklogId};
 use crate::json::Out;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveTime, Utc, Weekday};
 use serde::Serialize;
 use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
@@ -28,7 +28,13 @@ const NOBODY: &str = "(unknown)";
 /// "report" is an export, and the grid has nothing left to draw.
 pub const MAX_DAYS: u32 = 3650;
 
-/// The stretch of time a report covers: whole UTC days, one per column.
+/// The stretch of time a report covers: whole days, one per column, in the
+/// zone of whoever asks.
+///
+/// UTC midnights put an evening's work west of UTC on the next day's column:
+/// a Friday's last hours showed under Saturday. The zone is a fixed offset,
+/// taken when the report is, so a window across a clock change is off by an
+/// hour at its far end; Jira's own worklog report draws the same line.
 ///
 /// Whole days rather than a rolling `N × 24h`, because the question is asked in
 /// days: an entry booked at 09:00 seven days ago should not drop out of a
@@ -38,10 +44,12 @@ pub const MAX_DAYS: u32 = 3650;
 #[derive(Debug, Clone, Copy)]
 pub struct Window {
     pub days: u32,
-    /// Midnight UTC of the first day counted.
+    /// Midnight of the first day counted, in [`Window::offset`].
     pub since: DateTime<Utc>,
-    /// Midnight UTC of the day after the last one counted.
+    /// Midnight of the day after the last one counted.
     pub until: DateTime<Utc>,
+    /// The zone the days are counted in.
+    pub offset: FixedOffset,
     /// When the report was taken, which is what dates an entry that names no
     /// start of its own.
     pub taken_at: DateTime<Utc>,
@@ -49,37 +57,44 @@ pub struct Window {
 
 impl Window {
     /// The `days` days ending `back` days before today.
-    pub fn ending(days: u32, now: DateTime<Utc>, back: u32) -> Self {
+    pub fn ending(days: u32, now: DateTime<Utc>, back: u32, offset: FixedOffset) -> Self {
         let days = days.clamp(1, MAX_DAYS);
-        let tomorrow = now.date_naive().and_time(NaiveTime::MIN).and_utc() + Duration::days(1);
-        let until = tomorrow - Duration::days(i64::from(back));
+        let today = now.with_timezone(&offset).date_naive();
+        let last = today - Duration::days(i64::from(back));
+        let first = last - Duration::days(i64::from(days) - 1);
         Self {
             days,
-            since: until - Duration::days(i64::from(days)),
-            until,
+            since: midnight(first, offset),
+            until: midnight(last + Duration::days(1), offset),
+            offset,
             taken_at: now,
         }
     }
 
     /// The `days` days ending today.
-    pub fn last(days: u32, now: DateTime<Utc>) -> Self {
-        Self::ending(days, now, 0)
+    pub fn last(days: u32, now: DateTime<Utc>, offset: FixedOffset) -> Self {
+        Self::ending(days, now, 0, offset)
     }
 
     /// From `first` to `last`, both counted: the window a person names when
     /// the question is "the week of the 19th" rather than "the last N days".
     ///
     /// `None` when the dates run backwards or span more than [`MAX_DAYS`].
-    pub fn between(first: NaiveDate, last: NaiveDate, now: DateTime<Utc>) -> Option<Self> {
+    pub fn between(
+        first: NaiveDate,
+        last: NaiveDate,
+        now: DateTime<Utc>,
+        offset: FixedOffset,
+    ) -> Option<Self> {
         let days = (last - first).num_days() + 1;
         if days < 1 || days > i64::from(MAX_DAYS) {
             return None;
         }
-        let since = first.and_time(NaiveTime::MIN).and_utc();
         Some(Self {
             days: days as u32,
-            since,
-            until: since + Duration::days(days),
+            since: midnight(first, offset),
+            until: midnight(last + Duration::days(1), offset),
+            offset,
             taken_at: now,
         })
     }
@@ -87,8 +102,9 @@ impl Window {
     /// How many days before today the window's last column is, the offset
     /// [`Window::ending`] takes; `None` for a window that ends in the future.
     pub fn back(&self, now: DateTime<Utc>) -> Option<u32> {
-        let last = (self.until - Duration::days(1)).date_naive();
-        u32::try_from((now.date_naive() - last).num_days()).ok()
+        let last = self.first() + Duration::days(i64::from(self.days) - 1);
+        let today = now.with_timezone(&self.offset).date_naive();
+        u32::try_from((today - last).num_days()).ok()
     }
 
     /// Which column `when` falls in, or `None` when it falls outside.
@@ -96,15 +112,31 @@ impl Window {
         if when < self.since || when >= self.until {
             return None;
         }
-        Some((when - self.since).num_days().max(0) as usize)
+        let day = when.with_timezone(&self.offset).date_naive();
+        usize::try_from((day - self.first()).num_days()).ok()
+    }
+
+    fn first(&self) -> NaiveDate {
+        self.since.with_timezone(&self.offset).date_naive()
     }
 
     /// The day each column stands for, oldest first.
     pub fn dates(&self) -> Vec<NaiveDate> {
         (0..i64::from(self.days))
-            .map(|i| (self.since + Duration::days(i)).date_naive())
+            .map(|i| self.first() + Duration::days(i))
             .collect()
     }
+}
+
+/// Midnight starting `day` in `offset`, as an instant.
+fn midnight(day: NaiveDate, offset: FixedOffset) -> DateTime<Utc> {
+    (day.and_time(NaiveTime::MIN) - Duration::seconds(i64::from(offset.local_minus_utc())))
+        .and_utc()
+}
+
+/// The zone of the machine running the report, as it stands at `now`.
+pub fn local_offset(now: DateTime<Utc>) -> FixedOffset {
+    *now.with_timezone(&chrono::Local).offset()
 }
 
 /// What the files cannot say about a worklog or an issue, read out of the
@@ -119,6 +151,10 @@ pub struct Lookup {
     /// A worklog's author, by worklog id — unique across an instance, so the
     /// issue it sits on is not needed to find it.
     pub authors: HashMap<String, Author>,
+    /// A worklog's duration as the server counts it, by worklog id, beside
+    /// the text it shows for it. The seconds are exact; the text is in days
+    /// and weeks of the instance's own length, which jired can only guess at.
+    pub seconds: HashMap<String, (String, u64)>,
     /// The account running the report, which staged entries belong to.
     pub me_id: Option<String>,
     /// Issues the snapshots know, for a parent that has no file here: what a
@@ -179,6 +215,13 @@ impl Lookup {
                 Some(serde_json::Value::Number(n)) => n.to_string(),
                 _ => continue,
             };
+            if let (Some(text), Some(seconds)) = (
+                w.get("timeSpent").and_then(serde_json::Value::as_str),
+                w.get("timeSpentSeconds")
+                    .and_then(serde_json::Value::as_u64),
+            ) {
+                self.seconds.insert(id.clone(), (text.to_string(), seconds));
+            }
             if let Some(user) = crate::api::normalize::user_ref(w.get("author")) {
                 self.authors.insert(
                     id,
@@ -206,6 +249,8 @@ pub struct Source<'a> {
     /// chain.
     pub rollup: bool,
     pub now: DateTime<Utc>,
+    /// The zone the report's days are counted in: see [`Window`].
+    pub offset: FixedOffset,
     pub project: Option<String>,
     /// When the snapshot was last refreshed. Kept as the instant it is: the
     /// document writes it as UTC and the printed line as the reader's clock.
@@ -215,7 +260,7 @@ pub struct Source<'a> {
 
 impl Source<'_> {
     pub fn report(&self, days: u32, back: u32) -> TimeReport {
-        self.report_in(&Window::ending(days, self.now, back))
+        self.report_in(&Window::ending(days, self.now, back, self.offset))
     }
 
     pub fn report_in(&self, window: &Window) -> TimeReport {
@@ -237,9 +282,10 @@ impl Source<'_> {
 #[derive(Debug, Clone, Serialize)]
 pub struct TimeReport {
     pub days: u32,
-    /// Midnight UTC of the first day counted.
+    /// Midnight starting the first day counted, in the report's zone, written
+    /// as UTC.
     pub since: String,
-    /// Midnight UTC of the day after the last one counted.
+    /// Midnight starting the day after the last one counted.
     pub until: String,
     /// The day each column stands for, oldest first. Every `by_day` array in
     /// this document is in this order and of this length.
@@ -424,7 +470,19 @@ impl TimeReport {
                 let Some(column) = window.column(started) else {
                     continue;
                 };
-                let Some(seconds) = parse_duration(&w.time_spent) else {
+                // The server's count where the entry is as the server has it:
+                // `1d` is a day of the instance's length, and taking it for 8h
+                // counted an 8-hour entry on a 7.5-hour instance as 8.5. Text
+                // is read only for time not pushed yet, or edited since.
+                let server = match &w.id {
+                    WorklogId::Existing(id) => lookup
+                        .seconds
+                        .get(id)
+                        .filter(|(text, _)| text.trim() == w.time_spent.trim())
+                        .map(|(_, s)| *s),
+                    WorklogId::New => None,
+                };
+                let Some(seconds) = server.or_else(|| duration_seconds(&w.time_spent)) else {
                     skipped += 1;
                     continue;
                 };
@@ -884,6 +942,26 @@ pub fn short_name(name: &str) -> String {
     }
 }
 
+/// Seconds in a duration as a person writes one: Jira's `2h 30m`, or a
+/// decimal such as `1.5h`, which Jira takes too and which was counted as
+/// unreadable. A day is 8 hours and a week 5 days, as Jira's defaults are.
+fn duration_seconds(text: &str) -> Option<u64> {
+    if let Some(seconds) = parse_duration(text) {
+        return Some(seconds);
+    }
+    let text = text.trim();
+    let unit = text.chars().last()?;
+    let scale = match unit.to_ascii_lowercase() {
+        'w' => 5.0 * 8.0 * 3600.0,
+        'd' => 8.0 * 3600.0,
+        'h' => 3600.0,
+        'm' => 60.0,
+        _ => return None,
+    };
+    let n: f64 = text[..text.len() - unit.len_utf8()].trim().parse().ok()?;
+    (n.is_finite() && n > 0.0).then(|| (n * scale).round() as u64)
+}
+
 /// Hours as a decimal with no more places than it needs: `40.5`, `8`, `0.25`.
 pub fn decimal_hours(seconds: u64) -> String {
     let text = format!("{:.2}", seconds as f64 / 3600.0);
@@ -1183,6 +1261,10 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn utc() -> FixedOffset {
+        FixedOffset::east_opt(0).unwrap()
+    }
     use crate::doc::WorklogEntry;
 
     fn at(text: &str) -> DateTime<Utc> {
@@ -1216,6 +1298,52 @@ mod tests {
             started: started.into(),
             body: String::new(),
         }
+    }
+
+    /// Time Jira has is counted in Jira's seconds, whatever day length its
+    /// text assumes; time not pushed is read from its text, decimals and all.
+    #[test]
+    fn booked_time_is_counted_in_the_servers_seconds() {
+        let mut entry = booked("Ilya A", "1d", "2026-08-20T09:00:00Z");
+        let WorklogId::Existing(id) = entry.id.clone() else {
+            unreachable!()
+        };
+        let mut lookup = Lookup::default();
+        lookup.seconds.insert(id, ("1d".into(), 27_000));
+        let issues = vec![issue(
+            "PROJ-1",
+            "s",
+            vec![entry.clone(), staged("1.5h", "2026-08-20T10:00:00Z")],
+        )];
+        let report = TimeReport::build_with(&week(), "", &issues, &lookup, false);
+        assert_eq!(report.seconds, 27_000 + 5_400);
+        assert_eq!(report.skipped, 0);
+
+        // Edited in the file since: the file's text is what will be pushed.
+        entry.time_spent = "2h".into();
+        let issues = vec![issue("PROJ-1", "s", vec![entry])];
+        let report = TimeReport::build_with(&week(), "", &issues, &lookup, false);
+        assert_eq!(report.seconds, 7_200);
+    }
+
+    /// A Friday evening west of UTC is Friday, not Saturday.
+    #[test]
+    fn a_day_is_the_readers_day() {
+        let west = FixedOffset::west_opt(5 * 3600).unwrap();
+        let window = Window::last(7, at("2026-08-22T15:00:00Z"), west);
+        // 20:30 on Friday the 21st in UTC-5, the 22nd in UTC.
+        let issues = vec![issue(
+            "PROJ-1",
+            "s",
+            vec![booked("Ilya A", "1h", "2026-08-22T01:30:00Z")],
+        )];
+        let report = TimeReport::build(&window, "", &issues);
+        let friday = report
+            .dates
+            .iter()
+            .position(|d| d.to_string() == "2026-08-21")
+            .unwrap();
+        assert_eq!(report.by_day[friday], 3600, "{:?}", report.by_day);
     }
 
     /// A sprint page's house style: `Ilya A`, `40.5`, `TSK-9` before `TSK-10`.
@@ -1274,7 +1402,7 @@ mod tests {
     }
 
     fn week() -> Window {
-        Window::last(7, at("2026-08-22T10:00:00Z"))
+        Window::last(7, at("2026-08-22T10:00:00Z"), utc())
     }
 
     /// The whole point: one row per person, most time first.
@@ -1360,7 +1488,11 @@ mod tests {
         assert_eq!(report.people[0].seconds, 3 * 3600);
 
         // And a shorter window keeps only what falls inside it.
-        let today = TimeReport::build(&Window::last(1, at("2026-08-22T10:00:00Z")), "", &issues);
+        let today = TimeReport::build(
+            &Window::last(1, at("2026-08-22T10:00:00Z"), utc()),
+            "",
+            &issues,
+        );
         assert!(today.people.is_empty());
     }
 
@@ -1378,11 +1510,11 @@ mod tests {
         )];
         let now = at("2026-08-22T10:00:00Z");
 
-        let this_week = TimeReport::build(&Window::ending(7, now, 0), "", &issues);
+        let this_week = TimeReport::build(&Window::ending(7, now, 0, utc()), "", &issues);
         assert_eq!(this_week.people.len(), 1);
         assert_eq!(this_week.people[0].name, "Jane D");
 
-        let week_before = TimeReport::build(&Window::ending(7, now, 7), "", &issues);
+        let week_before = TimeReport::build(&Window::ending(7, now, 7, utc()), "", &issues);
         assert_eq!(week_before.span(), "2026-08-09 → 2026-08-15");
         assert_eq!(week_before.people.len(), 1);
         assert_eq!(week_before.people[0].name, "Old Hand");
@@ -1421,7 +1553,7 @@ mod tests {
 
         // A window that does not reach today does not reach it either.
         let earlier = TimeReport::build(
-            &Window::ending(7, at("2026-08-22T10:00:00Z"), 7),
+            &Window::ending(7, at("2026-08-22T10:00:00Z"), 7, utc()),
             "Ilya A",
             &issues,
         );
@@ -1450,14 +1582,14 @@ mod tests {
     fn a_window_between_two_dates_counts_both() {
         let day = |d: &str| NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap();
         let now = at("2026-10-27T10:00:00Z");
-        let w = Window::between(day("2026-10-19"), day("2026-10-23"), now).unwrap();
+        let w = Window::between(day("2026-10-19"), day("2026-10-23"), now, utc()).unwrap();
         assert_eq!(w.days, 5);
         assert_eq!(w.dates().first().unwrap().to_string(), "2026-10-19");
         assert_eq!(w.dates().last().unwrap().to_string(), "2026-10-23");
         assert_eq!(w.back(now), Some(4));
-        assert!(Window::between(day("2026-10-23"), day("2026-10-19"), now).is_none());
+        assert!(Window::between(day("2026-10-23"), day("2026-10-19"), now, utc()).is_none());
         // A window reaching past today has nowhere for the screen to start.
-        let ahead = Window::between(day("2026-10-26"), day("2026-10-30"), now).unwrap();
+        let ahead = Window::between(day("2026-10-26"), day("2026-10-30"), now, utc()).unwrap();
         assert_eq!(ahead.back(now), None);
     }
 

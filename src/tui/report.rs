@@ -745,6 +745,7 @@ mod tests {
             lookup: crate::report::Lookup::default(),
             rollup: false,
             now: now(),
+            offset: chrono::FixedOffset::east_opt(0).unwrap(),
             project: Some("PROJ".into()),
             last_fetch: None,
             last_fetch_age_seconds: None,

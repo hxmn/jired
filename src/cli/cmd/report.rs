@@ -255,13 +255,15 @@ fn time(g: &GlobalArgs, args: &TimeArgs, out: Out) -> Result<ExitCode> {
 
     let last_fetch = engine.state.last_fetch_at()?;
     let now = chrono::Utc::now();
-    let window = window(args, now)?;
+    let offset = crate::report::local_offset(now);
+    let window = window(args, now, offset)?;
     let source = Source {
         issues: &issues,
         me: engine.account.display_name.clone().unwrap_or_default(),
         lookup,
         rollup: args.rollup.is_some(),
         now,
+        offset,
         project: ctx
             .resolver
             .get_quiet("workspace.project")?
@@ -350,16 +352,20 @@ fn table_style(ctx: &mut Context, engine: &Engine, args: &TimeArgs) -> Result<Ta
 /// The window the flags name: `--since`/`--until` as dates, both counted;
 /// `--since` with `--days` counting forward; `--days` alone counting back from
 /// today, which is what it always meant.
-fn window(args: &TimeArgs, now: chrono::DateTime<chrono::Utc>) -> Result<Window> {
+fn window(
+    args: &TimeArgs,
+    now: chrono::DateTime<chrono::Utc>,
+    offset: chrono::FixedOffset,
+) -> Result<Window> {
     let Some(since) = args.since else {
-        return Ok(Window::last(args.days.unwrap_or(7), now));
+        return Ok(Window::last(args.days.unwrap_or(7), now, offset));
     };
     let until = match (args.until, args.days) {
         (Some(until), _) => until,
         (None, Some(days)) => since + chrono::Duration::days(i64::from(days) - 1),
-        (None, None) => now.date_naive(),
+        (None, None) => now.with_timezone(&offset).date_naive(),
     };
-    Window::between(since, until, now).ok_or_else(|| {
+    Window::between(since, until, now, offset).ok_or_else(|| {
         JiredError::usage(format!(
             "{since} to {until} is not a window of 1 to {MAX_DAYS} days"
         ))
