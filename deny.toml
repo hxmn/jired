@@ -1,5 +1,19 @@
 [advisories]
 yanked = "deny"
+# Unmaintained, not vulnerable: each has no maintained release to move to in
+# this tree, and an "unmaintained" notice failing every build hid the
+# vulnerabilities this job is for behind it. Revisit when a replacement lands.
+ignore = [
+    # chrono: the date and time types used throughout.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained notice; no vulnerability" },
+    # unsafe-libyaml, under serde_yaml_ng for frontmatter.
+    { id = "RUSTSEC-2024-0449", reason = "unmaintained notice; no vulnerability" },
+    # zbus_names, zvariant, zvariant_derive: the Linux Secret Service client
+    # under the keyring.
+    { id = "RUSTSEC-2026-0371", reason = "unmaintained notice; no vulnerability" },
+    { id = "RUSTSEC-2026-0370", reason = "unmaintained notice; no vulnerability" },
+    { id = "RUSTSEC-2026-0372", reason = "unmaintained notice; no vulnerability" },
+]
 
 [licenses]
 # Permissive licences only. Unicode-DFS-2016 covers the Unicode character data
