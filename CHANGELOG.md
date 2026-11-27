@@ -8,6 +8,13 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.10] — 2026-11-27
+
+### Changed
+
+- Nothing in jired's behaviour: internal clean-up of how a push tracks its
+  operations and how commands reach the server.
+
 ## [0.39.9] — 2026-11-27
 
 ### Fixed
