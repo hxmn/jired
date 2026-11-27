@@ -8,6 +8,20 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.0] — 2026-11-27
+
+### Breaking
+
+- **Data Center markup that would come back changed is read-only.** Editing
+  one word of a description rewrote parts jired had misread: a `{code}`
+  block's title, a `{color}` span at the start of a line (split into its own
+  paragraph), a `{code}` in the middle of a sentence (its braces escaped), a
+  table row mixing header and plain cells, a list inside a table cell. Each
+  now comes into the file as a read-only region and goes back as it came,
+  and the issue reads `lossy: true`.
+- **A `{code}` block that names no language is ```` ```java ````** in the
+  file, which is how Jira draws it; it went back as `{noformat}` before.
+
 ## [0.30.0] — 2026-11-27
 
 ### Breaking
