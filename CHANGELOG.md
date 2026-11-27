@@ -8,6 +8,19 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.4] — 2026-11-27
+
+### Fixed
+
+- **A long non-ASCII summary no longer stops `pull`.** File names were cut
+  at 120 characters, which a summary in Chinese or Japanese can fit inside
+  while going past the 255 bytes most filesystems allow; the write failed,
+  and every issue after it was never written again. Names are now also
+  capped at 200 bytes, and an existing file whose name is longer is renamed
+  on its next write.
+- **An issue whose file cannot be written fails alone in `pull`**, listed
+  under `failed` with the error, and the rest are written.
+
 ## [0.31.3] — 2026-11-27
 
 ### Fixed
