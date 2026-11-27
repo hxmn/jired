@@ -3,7 +3,7 @@
 use crate::api::normalize::FieldMap;
 use crate::api::Markup;
 use crate::cli::cmd::diff::{DiffArgs, DiffMode};
-use crate::cli::context::Context;
+use crate::context::Context;
 use crate::doc::IssueDoc;
 use crate::error::Result;
 use crate::json::Out;

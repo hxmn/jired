@@ -18,7 +18,7 @@
 //! deleting the second.
 
 use crate::cli::cmd::reset::ResetArgs;
-use crate::cli::context::Context;
+use crate::context::Context;
 use crate::convert::ast::RawBlock;
 use crate::doc::IssueDoc;
 use crate::error::{JiredError, Result};

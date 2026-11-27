@@ -35,7 +35,7 @@ pub struct GroupOptions {
 }
 
 impl GroupOptions {
-    pub fn from_context(ctx: &mut crate::cli::context::Context) -> Result<Self> {
+    pub fn from_context(ctx: &mut crate::context::Context) -> Result<Self> {
         Ok(Self {
             mode: match ctx.resolver.get_value("links.mode")? {
                 Some(m) => LinkMode::parse(&m)?,

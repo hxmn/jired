@@ -14,7 +14,7 @@ pub mod screen;
 pub mod status;
 
 use crate::api::{JiraApi, Markup};
-use crate::cli::context::Context;
+use crate::context::Context;
 use crate::error::Result;
 use crate::project::Projector;
 use crate::store::session::{Account, SessionStore};

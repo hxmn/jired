@@ -4,7 +4,7 @@
 //! how old that fetch is rather than silently going to the network.
 
 use crate::cli::cmd::status::StatusArgs;
-use crate::cli::context::Context;
+use crate::context::Context;
 use crate::error::Result;
 use crate::json::Out;
 use crate::sync::Engine;

@@ -9,7 +9,7 @@
 
 use crate::api::{JiraApi, Markup, RemoteIssue, RichText, WorklogInput};
 use crate::cli::cmd::push::PushArgs;
-use crate::cli::context::Context;
+use crate::context::Context;
 use crate::convert;
 use crate::doc::{CommentId, IssueDoc, WorklogEntry, WorklogId};
 use crate::error::{ExitCode, JiredError, Result};

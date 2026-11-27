@@ -7,7 +7,7 @@
 use crate::api::normalize::FieldMap;
 use crate::api::{Markup, RemoteIssue};
 use crate::cli::cmd::pull::{PullArgs, Strategy};
-use crate::cli::context::Context;
+use crate::context::Context;
 use crate::doc::{ChecklistEntry, CommentBlock, CommentId, IssueDoc, WorklogEntry, WorklogId};
 use crate::error::{JiredError, Result};
 use crate::json::Out;

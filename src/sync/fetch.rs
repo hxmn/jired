@@ -7,7 +7,7 @@
 use crate::api::client::{next_page, FieldSet, Page, SearchQuery};
 use crate::api::model::jql_timestamp;
 use crate::cli::cmd::fetch::FetchArgs;
-use crate::cli::context::Context;
+use crate::context::Context;
 use crate::error::{JiredError, Result};
 use crate::json::Out;
 use crate::sync::{jql_quote, Engine};
