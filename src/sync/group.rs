@@ -56,17 +56,16 @@ pub fn regroup(engine: &Engine, root: &Path, options: &GroupOptions) -> Result<G
     let markup = engine.markup();
 
     // Clearing first is what makes this idempotent: a group someone renamed or
-    // an issue that left a sprint would otherwise linger forever.
+    // an issue that left a sprint would otherwise linger forever. Only what
+    // jired made goes; see `clear_group`.
     for name in [
         naming::GROUP_PARENT,
         naming::GROUP_SPRINTS,
         naming::GROUP_BOARDS,
     ] {
-        let dir = root.join(name);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
-        }
+        clear_group(&root.join(name), root, &mut report)?;
     }
+    let field_map = engine.state.field_map()?;
 
     let mut by_parent: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut by_sprint: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -81,11 +80,7 @@ pub fn regroup(engine: &Engine, root: &Path, options: &GroupOptions) -> Result<G
         let Some(snapshot) = row.base.as_ref() else {
             continue;
         };
-        let issue = crate::api::normalize::issue_from_json(
-            &snapshot.raw,
-            markup,
-            &engine.state.field_map()?,
-        )?;
+        let issue = crate::api::normalize::issue_from_json(&snapshot.raw, markup, &field_map)?;
 
         // An epic link and a parent are the same relationship for grouping.
         if let Some(parent) = issue.fields.parent.or(issue.fields.epic) {
@@ -209,6 +204,18 @@ fn link_all(
             continue;
         };
         let link = dir.join(&file.relative);
+        // Still here after the clearing, so not one jired made: an editor
+        // that saves by writing a new file and renaming it over the link
+        // leaves the edit here, and replacing it would lose it.
+        if std::fs::symlink_metadata(&link).is_ok() {
+            report.warnings.push(format!(
+                "{}: not a link jired made, so it was left as it is; an edit in it \
+                 belongs in {}",
+                link.display(),
+                file.relative
+            ));
+            continue;
+        }
         match links::create(&file.path, &link, mode) {
             Ok(kind) => {
                 report.kind.get_or_insert(kind);
@@ -218,6 +225,81 @@ fn link_all(
         }
     }
     Ok(())
+}
+
+/// Empty a grouping folder of what jired made in it — links to issue files,
+/// stubs, hard links and directories left empty — and leave the rest, named
+/// in a warning. `remove_dir_all` on `sprints/` took a folder of someone's
+/// own sprint notes with it, and the edit an editor saved over a link.
+fn clear_group(dir: &Path, root: &Path, report: &mut GroupReport) -> Result<()> {
+    if std::fs::symlink_metadata(dir).is_err() {
+        return Ok(());
+    }
+    let kept = clear_dir(dir, root)?;
+    if !kept.is_empty() {
+        let names: Vec<String> = kept
+            .iter()
+            .map(|p| p.strip_prefix(root).unwrap_or(p).display().to_string())
+            .collect();
+        report.warnings.push(format!(
+            "{} holds {} file(s) jired did not make, left in place: {}",
+            dir.strip_prefix(root).unwrap_or(dir).display(),
+            kept.len(),
+            names.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Clear `dir` as [`clear_group`] does; what was kept.
+fn clear_dir(dir: &Path, root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut kept = Vec::new();
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
+            kept.extend(clear_dir(&path, root)?);
+        } else if made_by_jired(&path, &meta, root) {
+            std::fs::remove_file(&path)?;
+        } else {
+            kept.push(path);
+        }
+    }
+    if kept.is_empty() {
+        std::fs::remove_dir(dir)?;
+    }
+    Ok(kept)
+}
+
+/// A link to an issue file, a stub, a second name for the issue file of the
+/// same name at the top of the workspace, or a copy of an issue file exactly
+/// as jired wrote it. The last is what a hard link becomes once the issue file
+/// is rewritten — the rewrite replaces the file, and the link keeps the old
+/// one — and what an edit saved over a link is not.
+fn made_by_jired(path: &Path, meta: &std::fs::Metadata, root: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if naming::key_from_file_name(name).is_none() {
+        return false;
+    }
+    if meta.file_type().is_symlink() || links::is_stub_file(path) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(o) = std::fs::metadata(root.join(name)) {
+            if o.dev() == meta.dev() && o.ino() == meta.ino() {
+                return true;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = root;
+    std::fs::read_to_string(path).is_ok_and(|text| crate::sync::pull::written_as_is(&text))
 }
 
 #[cfg(test)]

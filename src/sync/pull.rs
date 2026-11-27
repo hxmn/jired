@@ -1130,7 +1130,7 @@ fn change_names(changes: &[FieldChange]) -> Vec<String> {
 /// value kept — does not match it. A file that cannot say, unreadable or from
 /// before the hash, counts as edited: the cost of that mistake is a conflict
 /// to answer rather than an edit lost.
-fn written_as_is(text: &str) -> bool {
+pub(crate) fn written_as_is(text: &str) -> bool {
     let Ok(mut doc) = IssueDoc::parse(text) else {
         return false;
     };

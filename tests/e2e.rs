@@ -10296,7 +10296,13 @@ fn regroup_clears_a_stale_group_rather_than_leaving_it() {
     // A group folder from an earlier sprint the issue has since left.
     let stale = ws.path().join("sprints/Sprint 40");
     std::fs::create_dir_all(&stale).unwrap();
-    std::fs::write(stale.join("PROJ-0142. Fix login flow.md"), "stale").unwrap();
+    // A copy of the file as jired wrote it, which is what a hard link is
+    // left holding once the issue file it shared is rewritten.
+    std::fs::write(
+        stale.join("PROJ-0142. Fix login flow.md"),
+        ws.read(ISSUE_FILE),
+    )
+    .unwrap();
 
     ws.json(&["doctor", "--regroup"]);
     assert!(
@@ -10307,6 +10313,33 @@ fn regroup_clears_a_stale_group_rather_than_leaving_it() {
         .path()
         .join("sprints/Sprint 42/PROJ-0142. Fix login flow.md")
         .exists());
+}
+
+/// A grouping folder is jired's view, but what someone else put in it is
+/// not jired's to delete: a `sprints/` of one's own notes went with every
+/// regroup, and so did an edit an editor saved over a link.
+#[test]
+fn regroup_leaves_what_jired_did_not_make() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let notes = ws.path().join("sprints/retro notes.txt");
+    std::fs::write(&notes, "keep me").unwrap();
+    let link = ws
+        .path()
+        .join("sprints/Sprint 42/PROJ-0142. Fix login flow.md");
+    let edited = ws
+        .read(ISSUE_FILE)
+        .replace("priority: High", "priority: Low");
+    std::fs::remove_file(&link).unwrap();
+    std::fs::write(&link, &edited).unwrap();
+
+    let report = ws.json(&["doctor", "--regroup"]);
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), "keep me");
+    assert_eq!(std::fs::read_to_string(&link).unwrap(), edited);
+    let text = report.to_string();
+    assert!(text.contains("retro notes.txt"), "{report}");
+    assert!(text.contains("not a link jired made"), "{report}");
 }
 
 #[test]
