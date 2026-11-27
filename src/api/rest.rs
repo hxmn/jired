@@ -782,8 +782,21 @@ impl JiraApi for Rest {
             })
             .transpose()?
             .unwrap_or_default();
-        for issue in &mut issues {
-            self.complete(issue).await;
+        // A page's issues one after another was a round trip each, at four a
+        // second on Data Center; a few at a time, under the same limiter.
+        {
+            use futures::StreamExt;
+            let pending: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>> =
+                issues
+                    .iter_mut()
+                    // Boxed, so the futures have one type and the borrow of
+                    // each issue is not a closure's to generalise.
+                    .map(|issue| Box::pin(self.complete(issue)) as _)
+                    .collect();
+            futures::stream::iter(pending)
+                .buffer_unordered(crate::api::CONCURRENCY)
+                .collect::<Vec<()>>()
+                .await;
         }
 
         let next_page_token = v
@@ -1755,5 +1768,53 @@ mod tests {
         let all = rest.comment_values("PROJ-1").await.unwrap();
         assert_eq!(all.len(), 5);
         assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    /// A page's issues have the rest of their comments read a few at a time:
+    /// one after another, each waited its turn on the round trip before it.
+    #[tokio::test]
+    async fn a_pages_issues_are_completed_at_once() {
+        let (url, _) = loopback::serve(|r| {
+            if r.path.contains("/comment") {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                return Reply::Json(
+                    200,
+                    json!({"startAt": 0, "total": 1, "comments": [
+                    {"id": "1", "body": "b"}]}),
+                );
+            }
+            if r.path.ends_with("/field") {
+                return Reply::Json(200, json!([]));
+            }
+            let issue = |n: u32| {
+                json!({"id": n.to_string(), "key": format!("DC-{n}"), "fields": {
+                "summary": "s", "updated": "2026-01-01T00:00:00.000+0000",
+                "comment": {"startAt": 0, "maxResults": 0, "total": 1, "comments": []}}})
+            };
+            Reply::Json(
+                200,
+                json!({"startAt": 0, "total": 4,
+                "issues": [issue(1), issue(2), issue(3), issue(4)]}),
+            )
+        });
+        let rest = Rest::new(loopback::client(&url, Deployment::DataCenter));
+        let started = std::time::Instant::now();
+        let page = rest
+            .search(&SearchQuery {
+                jql: "project = DC".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            page.issues.iter().all(|i| i.comments.len() == 1),
+            "{:?}",
+            page.issues
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(1000),
+            "four 300ms reads took {:?}",
+            started.elapsed()
+        );
     }
 }

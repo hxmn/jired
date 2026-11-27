@@ -137,12 +137,13 @@ pub fn run_with(
         fetched += count;
         tracing::debug!("page: {fetched} of {} issues", page.total);
         progress.set_message(format!("fetched {fetched} of {} issue(s)", page.total));
-        for issue in page.issues {
+        let links = web_links(ctx, engine, client, args, &page.issues)?;
+        for (issue, links) in page.issues.into_iter().zip(links) {
             newest = Some(newest.map_or(issue.updated, |n| n.max(issue.updated)));
             let key = issue.key.clone();
             // Once each: an issue edited during the walk moves to its end,
             // and is met again there.
-            if store(ctx, engine, client, args, issue)? && !changed_keys.contains(&key) {
+            if store(engine, issue, links)? && !changed_keys.contains(&key) {
                 changed_keys.push(key.clone());
             }
             present.insert(key);
@@ -212,36 +213,75 @@ pub fn run_with(
     })
 }
 
-/// Store one fetched issue's snapshot; whether it changed.
-fn store(
+/// The web links of each issue on a page that moved since its last
+/// snapshot, read a few at a time; `None` for one not read, whose last links
+/// are carried forward.
+///
+/// Web links are a resource of their own, one more call per issue, so they
+/// are read only for an issue that changed and only when changelogs are
+/// wanted too. A read that fails is the same as one not made: carried, and
+/// said, but no reason to fail a fetch whose issues all arrived.
+fn web_links(
     ctx: &mut Context,
     engine: &Engine,
     client: &dyn crate::api::JiraApi,
     args: &FetchArgs,
-    mut issue: crate::api::model::RemoteIssue,
-) -> Result<bool> {
-    // Web links are a resource of their own, one more call per issue, so they
-    // are read only for an issue that changed and only when changelogs are
-    // wanted too; otherwise the last snapshot's are carried forward. A read
-    // that fails is the same: carried, and said, but no reason to fail a
-    // fetch whose issues all arrived.
-    let previous = engine.state.issue(&issue.key)?.and_then(|row| row.remote);
-    // Decided the way `upsert_remote` decides what changed: the stored
-    // second, and the payload's own milliseconds when the seconds tie.
-    let stamp = crate::api::model::format_timestamp;
-    let exact = crate::store::state::exact_updated;
-    let moved = previous.as_ref().is_none_or(|p| {
-        stamp(&p.updated) != stamp(&issue.updated)
-            || matches!((exact(&p.raw), exact(&issue.raw)), (Some(a), Some(b)) if a != b)
-    });
-    if moved && !args.slim {
-        match crate::api::block_on(client.remote_links(&issue.key)) {
-            Ok(links) => crate::api::normalize::set_remote_links(&mut issue, links),
-            Err(e) => ctx.out.warn(format!(
-                "{}: cannot read its web links: {} — the last ones seen are kept",
-                issue.key, e.message
-            )),
+    issues: &[crate::api::model::RemoteIssue],
+) -> Result<Vec<Option<Vec<serde_json::Value>>>> {
+    use futures::StreamExt;
+    if args.slim {
+        return Ok(vec![None; issues.len()]);
+    }
+    let mut moved = Vec::with_capacity(issues.len());
+    for issue in issues {
+        let previous = engine.state.issue(&issue.key)?.and_then(|row| row.remote);
+        // Decided the way `upsert_remote` decides what changed: the stored
+        // second, and the payload's own milliseconds when the seconds tie.
+        let stamp = crate::api::model::format_timestamp;
+        let exact = crate::store::state::exact_updated;
+        moved.push(previous.as_ref().is_none_or(|p| {
+            stamp(&p.updated) != stamp(&issue.updated)
+                || matches!((exact(&p.raw), exact(&issue.raw)), (Some(a), Some(b)) if a != b)
+        }));
+    }
+    let reads = issues.iter().zip(&moved).map(|(issue, moved)| async move {
+        match moved {
+            true => Some((issue.key.clone(), client.remote_links(&issue.key).await)),
+            false => None,
         }
+    });
+    let mut read: Vec<_> = crate::api::block_on(
+        futures::stream::iter(reads.enumerate().map(|(n, f)| async move { (n, f.await) }))
+            .buffer_unordered(crate::api::CONCURRENCY)
+            .collect::<Vec<_>>(),
+    );
+    read.sort_by_key(|(n, _)| *n);
+    Ok(read
+        .into_iter()
+        .map(|(_, result)| match result {
+            Some((_, Ok(links))) => Some(links),
+            Some((key, Err(e))) => {
+                ctx.out.warn(format!(
+                    "{key}: cannot read its web links: {} — the last ones seen are kept",
+                    e.message
+                ));
+                None
+            }
+            None => None,
+        })
+        .collect())
+}
+
+/// Store one fetched issue's snapshot, with the web links read for it or the
+/// last ones carried; whether it changed.
+fn store(
+    engine: &Engine,
+    mut issue: crate::api::model::RemoteIssue,
+    links: Option<Vec<serde_json::Value>>,
+) -> Result<bool> {
+    let previous = engine.state.issue(&issue.key)?.and_then(|row| row.remote);
+    if let Some(links) = links {
+        crate::api::normalize::set_remote_links(&mut issue, links);
     }
     if let Some(previous) = &previous {
         crate::api::normalize::carry_remote_links(&mut issue, &previous.raw);

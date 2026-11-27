@@ -52,31 +52,39 @@ pub type Seen = Arc<Mutex<Vec<Request>>>;
 pub const TOKEN: &str = "loopback-secret-7f3a";
 
 /// Start a server answering with `answer`; its URL, and the requests seen.
-pub fn serve(answer: impl Fn(&Request) -> Reply + Send + 'static) -> (String, Seen) {
+pub fn serve(answer: impl Fn(&Request) -> Reply + Send + Sync + 'static) -> (String, Seen) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let seen: Seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
+    let answer = Arc::new(answer);
     std::thread::spawn(move || {
         for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { return };
-            let Some(request) = read_request(&stream) else {
-                continue;
-            };
-            let reply = answer(&request);
-            log.lock().unwrap().push(request);
-            let bytes = match reply {
-                Reply::Json(status, v) => {
-                    let body = v.to_string();
-                    head(status, &["Content-Type: application/json".into()], &body)
-                }
-                Reply::With(status, headers, body) => head(status, &headers, &body),
-                Reply::Raw(text) => text,
-            };
-            let _ = stream.write_all(bytes.as_bytes());
+            let Ok(stream) = stream else { return };
+            let (answer, log) = (answer.clone(), log.clone());
+            // A thread a connection, so requests made at once are answered at
+            // once, as a server would.
+            std::thread::spawn(move || answer_one(stream, &*answer, &log));
         }
     });
     (url, seen)
+}
+
+fn answer_one(mut stream: std::net::TcpStream, answer: &dyn Fn(&Request) -> Reply, log: &Seen) {
+    let Some(request) = read_request(&stream) else {
+        return;
+    };
+    let reply = answer(&request);
+    log.lock().unwrap().push(request);
+    let bytes = match reply {
+        Reply::Json(status, v) => {
+            let body = v.to_string();
+            head(status, &["Content-Type: application/json".into()], &body)
+        }
+        Reply::With(status, headers, body) => head(status, &headers, &body),
+        Reply::Raw(text) => text,
+    };
+    let _ = stream.write_all(bytes.as_bytes());
 }
 
 fn head(status: u16, headers: &[String], body: &str) -> String {

@@ -404,6 +404,12 @@ pub fn assignee_body(deployment: Deployment, user_id: Option<&str>) -> serde_jso
     serde_json::json!({ key: user_id })
 }
 
+/// How many of an issue's own requests — the rest of its comments, its web
+/// links — are in flight at once. The rate limiter stays the one throttle on
+/// what reaches the server; this only stops each request waiting for the one
+/// before it to come back.
+pub const CONCURRENCY: usize = 4;
+
 /// Run one async operation from a synchronous command handler.
 ///
 /// Commands are one-shot, so a single shared runtime keeps thread creation off
