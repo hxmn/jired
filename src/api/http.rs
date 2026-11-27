@@ -1059,6 +1059,11 @@ mod tests {
     }
 
     /// The token never reaches the log, at the level that logs request bodies.
+    ///
+    /// The subscriber is the process's own rather than this thread's: tracing
+    /// decides once per call site whether anyone listens, and with tests on
+    /// other threads reaching the same call sites unsubscribed, a thread-local
+    /// one was told no now and then and saw nothing.
     #[tokio::test]
     async fn the_trace_log_holds_no_token() {
         #[derive(Clone, Default)]
@@ -1072,26 +1077,30 @@ mod tests {
                 Ok(())
             }
         }
-        let buf = Buf::default();
-        let sink = buf.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .with_writer(move || sink.clone())
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
-        // Tests on other threads run with no subscriber, and a call site first
-        // reached there is cached as never wanted; asked again, it sees this one.
-        tracing::callsite::rebuild_interest_cache();
+        static LOG: std::sync::OnceLock<Buf> = std::sync::OnceLock::new();
+        let buf = LOG.get_or_init(|| {
+            let buf = Buf::default();
+            let sink = buf.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(move || sink.clone())
+                .finish();
+            tracing::subscriber::set_global_default(subscriber).expect("no other subscriber");
+            buf
+        });
 
         let (url, _) = loopback::serve(|_| Reply::Json(401, serde_json::json!({})));
         let http = client(&url);
         let _ = http
-            .post_json("/rest/api/2/issue", serde_json::json!({"fields": {}}))
+            .post_json(
+                "/rest/api/2/issue/TRACE-1",
+                serde_json::json!({"fields": {}}),
+            )
             .await;
         let _ = http.get_json("/rest/api/2/myself").await;
         let log = String::from_utf8_lossy(&buf.0.lock().unwrap()).into_owned();
         assert!(
-            log.contains("/rest/api/2/issue"),
+            log.contains("/rest/api/2/issue/TRACE-1"),
             "nothing was logged:\n{log}"
         );
         assert!(!log.contains(TOKEN), "{log}");
