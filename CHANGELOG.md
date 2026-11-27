@@ -8,6 +8,25 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.37.0] — 2026-11-27
+
+### Breaking
+
+- **A yes-or-no setting that is neither is an error** (exit 2). A value such
+  as `JIRED_NO_INPUT=ture` used to be read as "no" without a word. `true`,
+  `false`, `yes`, `no`, `on`, `off`, `1` and `0` are accepted.
+
+### Fixed
+
+- **A config file with a syntax error no longer locks you out of fixing
+  it.** `config edit`, `config path` and `doctor` now run, reading the
+  broken file as empty and saying so; `doctor` reports it as the config
+  problem. A broken global config used to stop every command everywhere.
+- **`config set` no longer crashes** when a parent of the key is already set
+  to a plain value; it says which one is in the way.
+- **A setting jired does not know is warned about** — a typo such as
+  `[tsl]` used to be accepted and ignored.
+
 ## [0.36.0] — 2026-11-27
 
 ### Breaking
