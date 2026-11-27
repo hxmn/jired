@@ -4,7 +4,7 @@
 //! Kept apart from the command, which parses its flags, calls these and
 //! prints what came back, so the rules can be read and tested without one.
 
-use crate::api::{JiraApi, Version, VersionUpdate};
+use crate::api::{JiraApi, Server, Version, VersionUpdate};
 use crate::error::{JiredError, Result};
 use chrono::NaiveDate;
 
@@ -148,7 +148,7 @@ pub(crate) fn pick(project: &str, versions: &[Version], wanted: &str) -> Result<
     )
 }
 
-pub(crate) fn api_prefix(client: &dyn JiraApi) -> &'static str {
+pub(crate) fn api_prefix(client: &dyn Server) -> &'static str {
     client.deployment().api_prefix()
 }
 

@@ -14,7 +14,8 @@
 //! [`crate::api::cloud`].
 
 use crate::api::client::{
-    ApiSpec, FieldSet, JiraApi, SearchPage, SearchQuery, SpecModule, UserScope,
+    Agile, ApiSpec, FieldSet, Filters, Issues, Projects, SearchPage, SearchQuery, Server,
+    SpecModule, UserScope, Users,
 };
 use crate::api::datacenter::routes::{self, Module, Route};
 use crate::api::http::HttpClient;
@@ -35,7 +36,7 @@ pub struct Rest {
 }
 
 /// Where a board's project can be read from. The two Jira deployments populate
-/// one each; see [`JiraApi::board_project`].
+/// one each; see [`Agile::board_project`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Source {
     /// `GET /board/{id}/configuration` → `location.projectKey` (Cloud).
@@ -292,7 +293,7 @@ impl Rest {
 }
 
 #[async_trait]
-impl JiraApi for Rest {
+impl Server for Rest {
     fn deployment(&self) -> Deployment {
         self.deployment
     }
@@ -336,65 +337,6 @@ impl JiraApi for Rest {
         }))
     }
 
-    async fn myself(&self) -> Result<Myself> {
-        let v = self.get(&routes::MYSELF, &[], &[]).await?;
-        let account_id = ["accountId", "name", "key"]
-            .iter()
-            .find_map(|k| v.get(*k).and_then(Value::as_str))
-            .ok_or_else(|| JiredError::auth("the server returned no account identity"))?
-            .to_string();
-        Ok(Myself {
-            account_id,
-            display_name: v
-                .get("displayName")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            email: v
-                .get("emailAddress")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            time_zone: v
-                .get("timeZone")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        })
-    }
-
-    async fn projects(&self) -> Result<Vec<Project>> {
-        if self.deployment == Deployment::DataCenter {
-            return crate::api::datacenter::client::projects(self).await;
-        }
-        // Cloud paginates `/project/search`, which Data Center does not
-        // serve at all; there the whole listing is one array, and
-        // `datacenter::client` reads it that way.
-        let mut out = Vec::new();
-        let mut start = 0usize;
-        loop {
-            let v = self
-                .http
-                .get_json(&crate::api::cloud::PROJECT_SEARCH.url(
-                    self.api(),
-                    &[],
-                    &[("startAt", &start.to_string()), ("maxResults", "50")],
-                ))
-                .await?;
-            let values = v
-                .get("values")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let n = values.len();
-            out.extend(values.iter().filter_map(project_from));
-            let is_last = v.get("isLast").and_then(Value::as_bool).unwrap_or(true);
-            if is_last || n == 0 {
-                break;
-            }
-            start += n;
-        }
-        out.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(out)
-    }
-
     async fn fields(&self) -> Result<Vec<FieldMeta>> {
         let v = self.get(&routes::FIELDS, &[], &[]).await?;
         Ok(v.as_array()
@@ -428,300 +370,52 @@ impl JiraApi for Rest {
             })
             .collect())
     }
+}
 
-    async fn boards(&self, project: Option<&str>) -> Result<Vec<Board>> {
-        let mut out = Vec::new();
-        let mut start = 0usize;
-        loop {
-            let mut query = vec![("maxResults", "50".to_string())];
-            if let Some(p) = project {
-                query.push(("projectKeyOrId", p.to_string()));
-            }
-            query.push(("startAt", start.to_string()));
-            let query: Vec<(&str, &str)> = query.iter().map(|(n, v)| (*n, v.as_str())).collect();
-            let v = self.get(&routes::BOARDS, &[], &query).await?;
-            let values = v
-                .get("values")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let n = values.len();
-            out.extend(values.iter().filter_map(|b| {
-                Some(Board {
-                    id: id_string(b.get("id")?)?,
-                    name: b.get("name")?.as_str()?.to_string(),
-                    board_type: b
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    project_key: b
-                        .get("location")
-                        .and_then(|l| l.get("projectKey"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                })
-            }));
-            if v.get("isLast").and_then(Value::as_bool).unwrap_or(true) || n == 0 {
-                break;
-            }
-            start += n;
-        }
-        Ok(out)
+#[async_trait]
+impl Users for Rest {
+    async fn myself(&self) -> Result<Myself> {
+        let v = self.get(&routes::MYSELF, &[], &[]).await?;
+        let account_id = ["accountId", "name", "key"]
+            .iter()
+            .find_map(|k| v.get(*k).and_then(Value::as_str))
+            .ok_or_else(|| JiredError::auth("the server returned no account identity"))?
+            .to_string();
+        Ok(Myself {
+            account_id,
+            display_name: v
+                .get("displayName")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            email: v
+                .get("emailAddress")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            time_zone: v
+                .get("timeZone")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        })
     }
 
-    async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>> {
-        let v = self
-            .get(&routes::BOARD_CONFIGURATION, &[("boardId", board_id)], &[])
-            .await?;
-        Ok(v.get("columnConfig")
-            .and_then(|c| c.get("columns"))
-            .and_then(Value::as_array)
-            .map(|cols| {
-                cols.iter()
-                    .filter_map(|c| {
-                        Some(BoardColumn {
-                            name: c.get("name")?.as_str()?.to_string(),
-                            status_ids: c
-                                .get("statuses")
-                                .and_then(Value::as_array)
-                                .map(|s| s.iter().filter_map(|x| id_string(x.get("id")?)).collect())
-                                .unwrap_or_default(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default())
-    }
-
-    async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
+    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>> {
         if self.deployment == Deployment::DataCenter {
-            return crate::api::datacenter::client::board_project(self, board_id).await;
+            return crate::api::datacenter::client::search_users(self, query, scope).await;
         }
-        // Two endpoints answer this, one per deployment, and neither answers on
-        // both: `location` in the board configuration is a Cloud field that
-        // Data Center omits entirely, so Cloud asks that one first and
-        // `datacenter::client` reverses the order. Both still fall back to the
-        // other, because which endpoint a given Jira version populates is not
-        // something to bet a null on.
-        if let Some(key) = self
-            .board_project_from(board_id, Source::Configuration)
-            .await?
-        {
-            return Ok(Some(key));
-        }
-        self.board_project_from(board_id, Source::Listing).await
-    }
-
-    async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>> {
-        let mut out = Vec::new();
-        let mut start = 0usize;
-        loop {
-            let v = self
-                .get(
-                    &routes::BOARD_SPRINTS,
-                    &[("boardId", board_id)],
-                    &[("startAt", &start.to_string()), ("maxResults", "50")],
-                )
-                .await?;
-            let values = v
-                .get("values")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let n = values.len();
-            out.extend(values.iter().filter_map(|s| sprint_from_json(s, board_id)));
-            if v.get("isLast").and_then(Value::as_bool).unwrap_or(true) || n == 0 {
-                break;
-            }
-            start += n;
-        }
-        Ok(out)
-    }
-
-    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint> {
         let v = self
             .http
-            .post_json(&self.url(&routes::CREATE_SPRINT, &[], &[]), input.to_body())
-            .await?;
-        // The response is a sprint like any other, so it is read like any
-        // other; only its id is beyond invention if the server omits it.
-        sprint_from_json(&v, &input.board_id).ok_or_else(|| {
-            JiredError::generic("sprint creation returned nothing recognisable as a sprint")
-                .with_detail("response", v)
-        })
-    }
-
-    async fn sprint(&self, id: &str) -> Result<Sprint> {
-        let v = self
-            .get(&routes::GET_SPRINT, &[("sprintId", id)], &[])
-            .await?;
-        // No board to fall back on: this endpoint is asked by sprint id, and
-        // the payload's own `originBoardId` is the only board there is.
-        sprint_from_json(&v, "").ok_or_else(|| {
-            JiredError::generic(format!(
-                "sprint {id} came back in a shape jired cannot read"
-            ))
-            .with_detail("response", v)
-        })
-    }
-
-    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint> {
-        let v = self
-            .http
-            .post_json(
-                &self.url(&routes::UPDATE_SPRINT, &[("sprintId", id)], &[]),
-                update.to_body(),
-            )
-            .await?;
-        sprint_from_json(&v, "").ok_or_else(|| {
-            JiredError::generic(format!(
-                "sprint {id} came back in a shape jired cannot read"
-            ))
-            .with_detail("response", v)
-        })
-    }
-
-    async fn project(&self, key: &str) -> Result<Project> {
-        let v = self
-            .get(&routes::GET_PROJECT, &[("projectIdOrKey", key)], &[])
-            .await?;
-        project_from(&v).ok_or_else(|| {
-            JiredError::generic(format!(
-                "project {key} came back in a shape jired cannot read"
-            ))
-            .with_detail("response", v)
-        })
-    }
-
-    async fn versions(&self, project: &str) -> Result<Vec<Version>> {
-        let v = self
-            .get(
-                &routes::PROJECT_VERSIONS,
-                &[("projectIdOrKey", project)],
-                &[],
-            )
+            .get_json(&cloud_user_search(self.api(), query, scope))
             .await?;
         Ok(v.as_array()
-            .map(|a| a.iter().filter_map(version_from_json).collect())
-            .unwrap_or_default())
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|u| normalize::user_ref(Some(u)))
+            .collect())
     }
+}
 
-    async fn version(&self, id: &str) -> Result<Version> {
-        let v = self.get(&routes::GET_VERSION, &[("id", id)], &[]).await?;
-        version_from_json(&v).ok_or_else(|| unreadable_version(id, v))
-    }
-
-    async fn create_version(&self, input: &VersionInput) -> Result<Version> {
-        let v = self
-            .http
-            .post_json(
-                &self.url(&routes::CREATE_VERSION, &[], &[]),
-                input.to_body(),
-            )
-            .await?;
-        version_from_json(&v).ok_or_else(|| unreadable_version(&input.name, v))
-    }
-
-    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version> {
-        let v = self
-            .http
-            .put_json(
-                &self.url(&routes::UPDATE_VERSION, &[("id", id)], &[]),
-                update.to_body(),
-            )
-            .await?;
-        version_from_json(&v).ok_or_else(|| unreadable_version(id, v))
-    }
-
-    /// Cloud's `filter/search`, a page at a time, or its favourites.
-    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>> {
-        if self.deployment == Deployment::DataCenter {
-            return crate::api::datacenter::client::filters(self, listing).await;
-        }
-        let (by, value) = match listing {
-            FilterListing::Favourites => {
-                let v = self.get(&routes::FAVOURITE_FILTERS, &[], &[]).await?;
-                return Ok(filter::filters_from_json(&v));
-            }
-            FilterListing::Owned(account) => ("accountId", account),
-            FilterListing::Named(name) => ("filterName", name.trim()),
-        };
-        let mut all = Vec::new();
-        loop {
-            let start = all.len().to_string();
-            let v = self
-                .get(
-                    &crate::api::cloud::FILTER_SEARCH,
-                    &[],
-                    &[
-                        (by, value),
-                        ("expand", filter::CLOUD_EXPAND),
-                        ("startAt", start.as_str()),
-                        ("maxResults", "100"),
-                    ],
-                )
-                .await?;
-            let page = filter::filters_from_json(&v);
-            let last = page.is_empty() || v.get("isLast").and_then(Value::as_bool) != Some(false);
-            all.extend(page);
-            if last {
-                break;
-            }
-        }
-        // `filterName` matches a part of the name; the question was the whole.
-        if let FilterListing::Named(name) = listing {
-            all.retain(|f| f.name.eq_ignore_ascii_case(name.trim()));
-        }
-        Ok(all)
-    }
-
-    async fn filter(&self, id: &str) -> Result<Filter> {
-        let v = self.get(&routes::GET_FILTER, &[("id", id)], &[]).await?;
-        filter::filter_from_json(&v).ok_or_else(|| unreadable_filter(id, v))
-    }
-
-    async fn create_filter(&self, input: &FilterInput) -> Result<Filter> {
-        let plan = filter::create(self.deployment, input, filter::NEW);
-        let v = self.send(&plan[0]).await?;
-        let made = filter::filter_from_json(&v).ok_or_else(|| unreadable_filter(&input.name, v))?;
-        // Planned again with the id the server gave: the rest address it.
-        let follow_ups = &filter::create(self.deployment, input, &made.id)[1..];
-        if follow_ups.is_empty() {
-            return Ok(made);
-        }
-        for call in follow_ups {
-            self.send(call).await?;
-        }
-        self.filter(&made.id).await
-    }
-
-    async fn update_filter(&self, current: &Filter, update: &FilterUpdate) -> Result<Filter> {
-        for call in filter::update(self.deployment, current, update) {
-            self.send(&call).await?;
-        }
-        // Read back rather than taken from the PUT: on Cloud the star is a
-        // second call the PUT's answer predates.
-        self.filter(&current.id).await
-    }
-
-    async fn delete_filter(&self, id: &str) -> Result<()> {
-        self.send(&filter::delete(self.deployment, id)).await?;
-        Ok(())
-    }
-
-    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()> {
-        self.send(&filter::add_share(self.deployment, id, share))
-            .await?;
-        Ok(())
-    }
-
-    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()> {
-        self.send(&filter::remove_share(self.deployment, id, permission_id))
-            .await?;
-        Ok(())
-    }
-
+#[async_trait]
+impl Issues for Rest {
     async fn count(&self, jql: &str) -> Result<usize> {
         if self.deployment != Deployment::Cloud {
             let page = self
@@ -1016,17 +710,6 @@ impl JiraApi for Rest {
             )
             .await?;
         Ok(())
-    }
-
-    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()> {
-        let path = match sprint {
-            Some(id) => self.url(&routes::SPRINT_ISSUES, &[("sprintId", id)], &[]),
-            None => self.url(&routes::BACKLOG_ISSUES, &[], &[]),
-        };
-        self.http
-            .post_json_repeatable(&path, json!({ "issues": keys }))
-            .await
-            .map(|_| ())
     }
 
     async fn move_subtask_parent(&self, key: &str, parent: &str) -> Result<()> {
@@ -1363,21 +1046,6 @@ impl JiraApi for Rest {
         self.http.get_bytes(&attachment.content_url).await
     }
 
-    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>> {
-        if self.deployment == Deployment::DataCenter {
-            return crate::api::datacenter::client::search_users(self, query, scope).await;
-        }
-        let v = self
-            .http
-            .get_json(&cloud_user_search(self.api(), query, scope))
-            .await?;
-        Ok(v.as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|u| normalize::user_ref(Some(u)))
-            .collect())
-    }
-
     /// The body is the identifier itself, as a bare JSON string — not an object
     /// with a field in it, which is what every other write here sends.
     async fn watch(&self, key: &str, user_id: &str) -> Result<()> {
@@ -1398,6 +1066,354 @@ impl JiraApi for Rest {
                 &[(watcher_param(self.deployment), user_id)],
             ))
             .await
+    }
+}
+
+#[async_trait]
+impl Agile for Rest {
+    async fn boards(&self, project: Option<&str>) -> Result<Vec<Board>> {
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        loop {
+            let mut query = vec![("maxResults", "50".to_string())];
+            if let Some(p) = project {
+                query.push(("projectKeyOrId", p.to_string()));
+            }
+            query.push(("startAt", start.to_string()));
+            let query: Vec<(&str, &str)> = query.iter().map(|(n, v)| (*n, v.as_str())).collect();
+            let v = self.get(&routes::BOARDS, &[], &query).await?;
+            let values = v
+                .get("values")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let n = values.len();
+            out.extend(values.iter().filter_map(|b| {
+                Some(Board {
+                    id: id_string(b.get("id")?)?,
+                    name: b.get("name")?.as_str()?.to_string(),
+                    board_type: b
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    project_key: b
+                        .get("location")
+                        .and_then(|l| l.get("projectKey"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                })
+            }));
+            if v.get("isLast").and_then(Value::as_bool).unwrap_or(true) || n == 0 {
+                break;
+            }
+            start += n;
+        }
+        Ok(out)
+    }
+
+    async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>> {
+        let v = self
+            .get(&routes::BOARD_CONFIGURATION, &[("boardId", board_id)], &[])
+            .await?;
+        Ok(v.get("columnConfig")
+            .and_then(|c| c.get("columns"))
+            .and_then(Value::as_array)
+            .map(|cols| {
+                cols.iter()
+                    .filter_map(|c| {
+                        Some(BoardColumn {
+                            name: c.get("name")?.as_str()?.to_string(),
+                            status_ids: c
+                                .get("statuses")
+                                .and_then(Value::as_array)
+                                .map(|s| s.iter().filter_map(|x| id_string(x.get("id")?)).collect())
+                                .unwrap_or_default(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::board_project(self, board_id).await;
+        }
+        // Two endpoints answer this, one per deployment, and neither answers on
+        // both: `location` in the board configuration is a Cloud field that
+        // Data Center omits entirely, so Cloud asks that one first and
+        // `datacenter::client` reverses the order. Both still fall back to the
+        // other, because which endpoint a given Jira version populates is not
+        // something to bet a null on.
+        if let Some(key) = self
+            .board_project_from(board_id, Source::Configuration)
+            .await?
+        {
+            return Ok(Some(key));
+        }
+        self.board_project_from(board_id, Source::Listing).await
+    }
+
+    async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>> {
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        loop {
+            let v = self
+                .get(
+                    &routes::BOARD_SPRINTS,
+                    &[("boardId", board_id)],
+                    &[("startAt", &start.to_string()), ("maxResults", "50")],
+                )
+                .await?;
+            let values = v
+                .get("values")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let n = values.len();
+            out.extend(values.iter().filter_map(|s| sprint_from_json(s, board_id)));
+            if v.get("isLast").and_then(Value::as_bool).unwrap_or(true) || n == 0 {
+                break;
+            }
+            start += n;
+        }
+        Ok(out)
+    }
+
+    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint> {
+        let v = self
+            .http
+            .post_json(&self.url(&routes::CREATE_SPRINT, &[], &[]), input.to_body())
+            .await?;
+        // The response is a sprint like any other, so it is read like any
+        // other; only its id is beyond invention if the server omits it.
+        sprint_from_json(&v, &input.board_id).ok_or_else(|| {
+            JiredError::generic("sprint creation returned nothing recognisable as a sprint")
+                .with_detail("response", v)
+        })
+    }
+
+    async fn sprint(&self, id: &str) -> Result<Sprint> {
+        let v = self
+            .get(&routes::GET_SPRINT, &[("sprintId", id)], &[])
+            .await?;
+        // No board to fall back on: this endpoint is asked by sprint id, and
+        // the payload's own `originBoardId` is the only board there is.
+        sprint_from_json(&v, "").ok_or_else(|| {
+            JiredError::generic(format!(
+                "sprint {id} came back in a shape jired cannot read"
+            ))
+            .with_detail("response", v)
+        })
+    }
+
+    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint> {
+        let v = self
+            .http
+            .post_json(
+                &self.url(&routes::UPDATE_SPRINT, &[("sprintId", id)], &[]),
+                update.to_body(),
+            )
+            .await?;
+        sprint_from_json(&v, "").ok_or_else(|| {
+            JiredError::generic(format!(
+                "sprint {id} came back in a shape jired cannot read"
+            ))
+            .with_detail("response", v)
+        })
+    }
+
+    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()> {
+        let path = match sprint {
+            Some(id) => self.url(&routes::SPRINT_ISSUES, &[("sprintId", id)], &[]),
+            None => self.url(&routes::BACKLOG_ISSUES, &[], &[]),
+        };
+        self.http
+            .post_json_repeatable(&path, json!({ "issues": keys }))
+            .await
+            .map(|_| ())
+    }
+}
+
+#[async_trait]
+impl Projects for Rest {
+    async fn projects(&self) -> Result<Vec<Project>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::projects(self).await;
+        }
+        // Cloud paginates `/project/search`, which Data Center does not
+        // serve at all; there the whole listing is one array, and
+        // `datacenter::client` reads it that way.
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        loop {
+            let v = self
+                .http
+                .get_json(&crate::api::cloud::PROJECT_SEARCH.url(
+                    self.api(),
+                    &[],
+                    &[("startAt", &start.to_string()), ("maxResults", "50")],
+                ))
+                .await?;
+            let values = v
+                .get("values")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let n = values.len();
+            out.extend(values.iter().filter_map(project_from));
+            let is_last = v.get("isLast").and_then(Value::as_bool).unwrap_or(true);
+            if is_last || n == 0 {
+                break;
+            }
+            start += n;
+        }
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(out)
+    }
+
+    async fn project(&self, key: &str) -> Result<Project> {
+        let v = self
+            .get(&routes::GET_PROJECT, &[("projectIdOrKey", key)], &[])
+            .await?;
+        project_from(&v).ok_or_else(|| {
+            JiredError::generic(format!(
+                "project {key} came back in a shape jired cannot read"
+            ))
+            .with_detail("response", v)
+        })
+    }
+
+    async fn versions(&self, project: &str) -> Result<Vec<Version>> {
+        let v = self
+            .get(
+                &routes::PROJECT_VERSIONS,
+                &[("projectIdOrKey", project)],
+                &[],
+            )
+            .await?;
+        Ok(v.as_array()
+            .map(|a| a.iter().filter_map(version_from_json).collect())
+            .unwrap_or_default())
+    }
+
+    async fn version(&self, id: &str) -> Result<Version> {
+        let v = self.get(&routes::GET_VERSION, &[("id", id)], &[]).await?;
+        version_from_json(&v).ok_or_else(|| unreadable_version(id, v))
+    }
+
+    async fn create_version(&self, input: &VersionInput) -> Result<Version> {
+        let v = self
+            .http
+            .post_json(
+                &self.url(&routes::CREATE_VERSION, &[], &[]),
+                input.to_body(),
+            )
+            .await?;
+        version_from_json(&v).ok_or_else(|| unreadable_version(&input.name, v))
+    }
+
+    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version> {
+        let v = self
+            .http
+            .put_json(
+                &self.url(&routes::UPDATE_VERSION, &[("id", id)], &[]),
+                update.to_body(),
+            )
+            .await?;
+        version_from_json(&v).ok_or_else(|| unreadable_version(id, v))
+    }
+}
+
+#[async_trait]
+impl Filters for Rest {
+    /// Cloud's `filter/search`, a page at a time, or its favourites.
+    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::filters(self, listing).await;
+        }
+        let (by, value) = match listing {
+            FilterListing::Favourites => {
+                let v = self.get(&routes::FAVOURITE_FILTERS, &[], &[]).await?;
+                return Ok(filter::filters_from_json(&v));
+            }
+            FilterListing::Owned(account) => ("accountId", account),
+            FilterListing::Named(name) => ("filterName", name.trim()),
+        };
+        let mut all = Vec::new();
+        loop {
+            let start = all.len().to_string();
+            let v = self
+                .get(
+                    &crate::api::cloud::FILTER_SEARCH,
+                    &[],
+                    &[
+                        (by, value),
+                        ("expand", filter::CLOUD_EXPAND),
+                        ("startAt", start.as_str()),
+                        ("maxResults", "100"),
+                    ],
+                )
+                .await?;
+            let page = filter::filters_from_json(&v);
+            let last = page.is_empty() || v.get("isLast").and_then(Value::as_bool) != Some(false);
+            all.extend(page);
+            if last {
+                break;
+            }
+        }
+        // `filterName` matches a part of the name; the question was the whole.
+        if let FilterListing::Named(name) = listing {
+            all.retain(|f| f.name.eq_ignore_ascii_case(name.trim()));
+        }
+        Ok(all)
+    }
+
+    async fn filter(&self, id: &str) -> Result<Filter> {
+        let v = self.get(&routes::GET_FILTER, &[("id", id)], &[]).await?;
+        filter::filter_from_json(&v).ok_or_else(|| unreadable_filter(id, v))
+    }
+
+    async fn create_filter(&self, input: &FilterInput) -> Result<Filter> {
+        let plan = filter::create(self.deployment, input, filter::NEW);
+        let v = self.send(&plan[0]).await?;
+        let made = filter::filter_from_json(&v).ok_or_else(|| unreadable_filter(&input.name, v))?;
+        // Planned again with the id the server gave: the rest address it.
+        let follow_ups = &filter::create(self.deployment, input, &made.id)[1..];
+        if follow_ups.is_empty() {
+            return Ok(made);
+        }
+        for call in follow_ups {
+            self.send(call).await?;
+        }
+        self.filter(&made.id).await
+    }
+
+    async fn update_filter(&self, current: &Filter, update: &FilterUpdate) -> Result<Filter> {
+        for call in filter::update(self.deployment, current, update) {
+            self.send(&call).await?;
+        }
+        // Read back rather than taken from the PUT: on Cloud the star is a
+        // second call the PUT's answer predates.
+        self.filter(&current.id).await
+    }
+
+    async fn delete_filter(&self, id: &str) -> Result<()> {
+        self.send(&filter::delete(self.deployment, id)).await?;
+        Ok(())
+    }
+
+    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()> {
+        self.send(&filter::add_share(self.deployment, id, share))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()> {
+        self.send(&filter::remove_share(self.deployment, id, permission_id))
+            .await?;
+        Ok(())
     }
 }
 

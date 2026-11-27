@@ -1,4 +1,5 @@
-//! The `JiraApi` trait — the seam every deployment difference stops at.
+//! The `JiraApi` trait and its parts — the seam every deployment difference
+//! stops at.
 
 use crate::api::model::*;
 use crate::api::Deployment;
@@ -110,9 +111,12 @@ pub struct ApiSpec {
     pub bytes: Vec<u8>,
 }
 
+/// The server itself: which deployment, where, and what it says about its own
+/// REST modules and fields.
 #[async_trait]
-pub trait JiraApi: Send + Sync {
+pub trait Server: Send + Sync {
     fn deployment(&self) -> Deployment;
+
     fn base_url(&self) -> &str;
 
     async fn server_info(&self) -> Result<ServerInfo>;
@@ -128,58 +132,24 @@ pub trait JiraApi: Send + Sync {
     /// it — a module the Jira version never mounted, or dropped.
     async fn api_spec(&self, module: &SpecModule) -> Result<Option<ApiSpec>>;
 
-    async fn myself(&self) -> Result<Myself>;
-    async fn projects(&self) -> Result<Vec<Project>>;
     async fn fields(&self) -> Result<Vec<FieldMeta>>;
+}
 
-    async fn boards(&self, project: Option<&str>) -> Result<Vec<Board>>;
-    async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>>;
-    /// The project a board is filed under, asked of the board itself.
-    ///
-    /// The board listing carries this on Cloud and not on Data Center, where it
-    /// is only in the board's own configuration — one request per board, which
-    /// is why it is asked for a board at a time rather than folded into
-    /// [`JiraApi::boards`].
-    async fn board_project(&self, board_id: &str) -> Result<Option<String>>;
-    async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>>;
-    /// Create a sprint on a board. Returns it as the server now holds it.
-    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint>;
-    /// One sprint by id, asked of the server rather than of the local cache.
-    ///
-    /// The cache carries a name and a state and no dates, and the checks a
-    /// `sprint start` makes before sending — has it dates, is it already
-    /// running — are checks against what the server holds *now*.
-    async fn sprint(&self, id: &str) -> Result<Sprint>;
-    /// Change a sprint that exists: its name, goal, dates, or state.
-    ///
-    /// A merge rather than a replacement, so a caller only names what it means
-    /// to change. Returns the sprint as the server now holds it.
-    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint>;
+/// Who is signed in, and finding people to name.
+#[async_trait]
+pub trait Users: Send + Sync {
+    async fn myself(&self) -> Result<Myself>;
 
-    /// One project by key — for its id, which creating a version needs.
-    async fn project(&self, key: &str) -> Result<Project>;
-    /// Every version a project has, released and archived ones included.
-    async fn versions(&self, project: &str) -> Result<Vec<Version>>;
-    /// One version by id, as the server holds it now.
-    async fn version(&self, id: &str) -> Result<Version>;
-    async fn create_version(&self, input: &VersionInput) -> Result<Version>;
-    /// Change a version that exists. A merge, like [`JiraApi::update_sprint`]:
-    /// what the update does not name is what the version keeps.
-    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version>;
+    /// Users matching `query`, restricted to those `scope` permits.
+    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>>;
+}
 
-    /// Saved filters. Data Center answers every listing out of the account's
-    /// favourites, having no other; see [`crate::api::filter::narrow`].
-    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>>;
-    async fn filter(&self, id: &str) -> Result<Filter>;
-    /// Send [`crate::api::filter::create`]'s plan; the filter as it now stands.
-    async fn create_filter(&self, input: &FilterInput) -> Result<Filter>;
-    /// Send [`crate::api::filter::update`]'s plan; the filter as it now stands.
-    async fn update_filter(&self, filter: &Filter, update: &FilterUpdate) -> Result<Filter>;
-    async fn delete_filter(&self, id: &str) -> Result<()>;
-    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()>;
-    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()>;
-
+/// Issues and everything hung on one: fields, transitions, links, worklogs,
+/// comments, attachments, watchers.
+#[async_trait]
+pub trait Issues: Send + Sync {
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage>;
+
     /// How many issues `jql` matches, in one request. Data Center reports it
     /// beside an empty page; Cloud's search reports no total, and has a count
     /// of its own.
@@ -194,8 +164,11 @@ pub trait JiraApi: Send + Sync {
             .await?;
         Ok(page.total)
     }
+
     async fn issue(&self, key: &str) -> Result<RemoteIssue>;
+
     async fn changelog(&self, key: &str) -> Result<Vec<ChangelogEntry>>;
+
     async fn transitions(&self, key: &str) -> Result<Vec<Transition>>;
 
     /// The server's current `updated` value — the optimistic-concurrency check
@@ -203,19 +176,16 @@ pub trait JiraApi: Send + Sync {
     async fn issue_updated(&self, key: &str) -> Result<DateTime<Utc>>;
 
     async fn update_fields(&self, key: &str, fields: serde_json::Value) -> Result<()>;
+
     /// Returns `(key, id)` of the created issue.
     async fn create_issue(&self, fields: serde_json::Value) -> Result<(String, String)>;
+
     async fn do_transition(
         &self,
         key: &str,
         transition_id: &str,
         fields: Option<serde_json::Value>,
     ) -> Result<()>;
-
-    /// Move issues into a sprint, or out of every sprint when `sprint` is
-    /// `None`. The Sprint field itself is read-only on many instances; the
-    /// board API is the way that works on both deployments.
-    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()>;
 
     /// Put a sub-task under a different parent.
     ///
@@ -228,13 +198,16 @@ pub trait JiraApi: Send + Sync {
 
     /// Every worklog on an issue, for the case the issue payload paged them.
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>>;
+
     async fn add_worklog(&self, key: &str, worklog: &WorklogInput) -> Result<RemoteWorklog>;
+
     async fn update_worklog(
         &self,
         key: &str,
         id: &str,
         worklog: &WorklogInput,
     ) -> Result<RemoteWorklog>;
+
     async fn delete_worklog(&self, key: &str, id: &str) -> Result<()>;
 
     /// The fields this issue's edit screen carries.
@@ -269,7 +242,7 @@ pub trait JiraApi: Send + Sync {
     /// Add a web link to an issue.
     async fn create_remote_link(&self, key: &str, url: &str, title: &str) -> Result<()>;
 
-    /// Remove one of an issue's web links, by the id [`JiraApi::remote_links`]
+    /// Remove one of an issue's web links, by the id [`Issues::remote_links`]
     /// gave it.
     async fn delete_remote_link(&self, key: &str, link_id: &str) -> Result<()>;
 
@@ -299,7 +272,9 @@ pub trait JiraApi: Send + Sync {
     async fn comments(&self, key: &str) -> Result<Vec<RemoteComment>>;
 
     async fn add_comment(&self, key: &str, body: &RichText) -> Result<RemoteComment>;
+
     async fn update_comment(&self, key: &str, id: &str, body: &RichText) -> Result<RemoteComment>;
+
     async fn delete_comment(&self, key: &str, id: &str) -> Result<()>;
 
     async fn upload_attachment(
@@ -308,10 +283,8 @@ pub trait JiraApi: Send + Sync {
         filename: &str,
         bytes: Vec<u8>,
     ) -> Result<RemoteAttachment>;
-    async fn download_attachment(&self, attachment: &RemoteAttachment) -> Result<Vec<u8>>;
 
-    /// Users matching `query`, restricted to those `scope` permits.
-    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>>;
+    async fn download_attachment(&self, attachment: &RemoteAttachment) -> Result<Vec<u8>>;
 
     /// Add a user to an issue's watchers, and take one off again.
     ///
@@ -319,8 +292,100 @@ pub trait JiraApi: Send + Sync {
     /// Cloud, a username on Data Center — which is exactly what
     /// [`Myself::account_id`] already holds for each.
     async fn watch(&self, key: &str, user_id: &str) -> Result<()>;
+
     async fn unwatch(&self, key: &str, user_id: &str) -> Result<()>;
 }
+
+/// Boards and sprints, the agile API's half of Jira.
+#[async_trait]
+pub trait Agile: Send + Sync {
+    async fn boards(&self, project: Option<&str>) -> Result<Vec<Board>>;
+
+    async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>>;
+
+    /// The project a board is filed under, asked of the board itself.
+    ///
+    /// The board listing carries this on Cloud and not on Data Center, where it
+    /// is only in the board's own configuration — one request per board, which
+    /// is why it is asked for a board at a time rather than folded into
+    /// [`Agile::boards`].
+    async fn board_project(&self, board_id: &str) -> Result<Option<String>>;
+
+    async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>>;
+
+    /// Create a sprint on a board. Returns it as the server now holds it.
+    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint>;
+
+    /// One sprint by id, asked of the server rather than of the local cache.
+    ///
+    /// The cache carries a name and a state and no dates, and the checks a
+    /// `sprint start` makes before sending — has it dates, is it already
+    /// running — are checks against what the server holds *now*.
+    async fn sprint(&self, id: &str) -> Result<Sprint>;
+
+    /// Change a sprint that exists: its name, goal, dates, or state.
+    ///
+    /// A merge rather than a replacement, so a caller only names what it means
+    /// to change. Returns the sprint as the server now holds it.
+    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint>;
+
+    /// Move issues into a sprint, or out of every sprint when `sprint` is
+    /// `None`. The Sprint field itself is read-only on many instances; the
+    /// board API is the way that works on both deployments.
+    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()>;
+}
+
+/// Projects and their versions.
+#[async_trait]
+pub trait Projects: Send + Sync {
+    async fn projects(&self) -> Result<Vec<Project>>;
+
+    /// One project by key — for its id, which creating a version needs.
+    async fn project(&self, key: &str) -> Result<Project>;
+
+    /// Every version a project has, released and archived ones included.
+    async fn versions(&self, project: &str) -> Result<Vec<Version>>;
+
+    /// One version by id, as the server holds it now.
+    async fn version(&self, id: &str) -> Result<Version>;
+
+    async fn create_version(&self, input: &VersionInput) -> Result<Version>;
+
+    /// Change a version that exists. A merge, like [`Agile::update_sprint`]:
+    /// what the update does not name is what the version keeps.
+    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version>;
+}
+
+/// Saved filters and who they are shared with.
+#[async_trait]
+pub trait Filters: Send + Sync {
+    /// Saved filters. Data Center answers every listing out of the account's
+    /// favourites, having no other; see [`crate::api::filter::narrow`].
+    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>>;
+
+    async fn filter(&self, id: &str) -> Result<Filter>;
+
+    /// Send [`crate::api::filter::create`]'s plan; the filter as it now stands.
+    async fn create_filter(&self, input: &FilterInput) -> Result<Filter>;
+
+    /// Send [`crate::api::filter::update`]'s plan; the filter as it now stands.
+    async fn update_filter(&self, filter: &Filter, update: &FilterUpdate) -> Result<Filter>;
+
+    async fn delete_filter(&self, id: &str) -> Result<()>;
+
+    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()>;
+
+    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()>;
+}
+
+/// All of Jira, as the engine holds it.
+///
+/// Split into the parts above so a function that needs one can say so, and a
+/// double written for a test covers only the part its subject uses; anything
+/// that implements every part is a `JiraApi`, with nothing more to write.
+pub trait JiraApi: Server + Users + Issues + Agile + Projects + Filters {}
+
+impl<T: Server + Users + Issues + Agile + Projects + Filters + ?Sized> JiraApi for T {}
 
 /// Walk every page of a search, respecting both pagination styles.
 ///
@@ -331,7 +396,7 @@ pub trait JiraApi: Send + Sync {
 /// fewer, which `fetch` then marked deleted. A walk that runs out before the
 /// total is an error rather than a smaller answer, for the same reason.
 pub async fn search_all(
-    api: &dyn JiraApi,
+    api: &dyn Issues,
     mut query: SearchQuery,
     mut on_page: impl FnMut(&SearchPage),
 ) -> Result<Vec<RemoteIssue>> {

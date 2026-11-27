@@ -4,7 +4,7 @@
 //! Kept apart from the command, which parses its flags, calls these and
 //! prints what came back, so the rules can be read and tested without one.
 
-use crate::api::{Deployment, Filter, FilterListing, JiraApi};
+use crate::api::{Deployment, Filter, FilterListing, Filters, Issues, JiraApi};
 use crate::api::{ShareInput, UserScope};
 use crate::error::{JiredError, Result};
 use serde_json::{json, Value};
@@ -70,7 +70,7 @@ pub(crate) fn find(client: &dyn JiraApi, wanted: &str) -> Result<Filter> {
 ///
 /// Jira answers a filter that does not exist and one the account may not see
 /// with the same 400, and both mean "not this one" to a lookup.
-pub(crate) fn by_id(client: &dyn JiraApi, id: &str) -> Result<Option<Filter>> {
+pub(crate) fn by_id(client: &dyn Filters, id: &str) -> Result<Option<Filter>> {
     if !is_id(id) {
         return Ok(None);
     }
@@ -100,7 +100,7 @@ pub(crate) fn not_found(client: &dyn JiraApi, wanted: &str) -> JiredError {
 /// One count: the server parses the whole query, and names an unknown field
 /// or value, at the cost of a number. A search with room for no issues used
 /// to stand in for it, and Cloud's search reports no total.
-pub(crate) fn check_jql(client: &dyn JiraApi, jql: &str) -> Result<usize> {
+pub(crate) fn check_jql(client: &dyn Issues, jql: &str) -> Result<usize> {
     match crate::api::block_on(client.count(jql)) {
         Ok(total) => Ok(total),
         // A 400 from search is the query, and the query is the user's input:

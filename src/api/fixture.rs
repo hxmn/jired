@@ -8,7 +8,10 @@
 //!
 //! Set `JIRED_FIXTURES=<dir>` to activate it for any command.
 
-use crate::api::client::{ApiSpec, JiraApi, SearchPage, SearchQuery, SpecModule, UserScope};
+use crate::api::client::{
+    Agile, ApiSpec, Filters, Issues, Projects, SearchPage, SearchQuery, Server, SpecModule,
+    UserScope, Users,
+};
 use crate::api::model::*;
 use crate::api::normalize::{self, FieldMap};
 use crate::api::{Deployment, Markup};
@@ -721,7 +724,7 @@ fn read_json(dir: &Path, name: &str) -> Option<Value> {
 }
 
 #[async_trait]
-impl JiraApi for FixtureClient {
+impl Server for FixtureClient {
     fn deployment(&self) -> Deployment {
         self.deployment
     }
@@ -774,6 +777,15 @@ impl JiraApi for FixtureClient {
         }))
     }
 
+    async fn fields(&self) -> Result<Vec<FieldMeta>> {
+        Ok(read_json(&self.dir, "fields.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default())
+    }
+}
+
+#[async_trait]
+impl Users for FixtureClient {
     async fn myself(&self) -> Result<Myself> {
         let v = read_json(&self.dir, "myself.json").ok_or_else(|| {
             JiredError::auth("fixture has no myself.json").with_hint(FIXTURE_HINT)
@@ -800,323 +812,44 @@ impl JiraApi for FixtureClient {
         })
     }
 
-    async fn projects(&self) -> Result<Vec<Project>> {
-        Ok(read_json(&self.dir, "projects.json")
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default())
-    }
-
-    async fn fields(&self) -> Result<Vec<FieldMeta>> {
-        Ok(read_json(&self.dir, "fields.json")
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default())
-    }
-
-    async fn boards(&self, _project: Option<&str>) -> Result<Vec<Board>> {
-        Ok(read_json(&self.dir, "boards.json")
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default())
-    }
-
-    async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>> {
-        Ok(
-            read_json(&self.dir, &format!("board-{board_id}-columns.json"))
-                .and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or_default(),
-        )
-    }
-
-    async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
-        let located =
-            read_json(&self.dir, &format!("board-{board_id}-config.json")).and_then(|v| {
-                v.get("location")
-                    .and_then(|l| l.get("projectKey").or_else(|| l.get("key")))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            });
-        if located.is_some() {
-            return Ok(located);
+    /// The users a scope permits, from the narrowest recording that exists.
+    ///
+    /// `assignable-{key}.json`, then `assignable-{project}.json`, then
+    /// `users.json` — the same falling-back the sprints listing does. A fixture
+    /// that records only `users.json` therefore answers every scope with it,
+    /// which is what keeps a recording that predates the assignable search
+    /// working; a test that cares about the difference writes the narrower file.
+    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>> {
+        let mut names: Vec<String> = Vec::new();
+        match scope {
+            UserScope::Any => {}
+            UserScope::Issue(key) => {
+                names.push(format!("assignable-{key}.json"));
+                if let Some((project, _)) = key.rsplit_once('-') {
+                    names.push(format!("assignable-{project}.json"));
+                }
+            }
+            UserScope::Project(project) => names.push(format!("assignable-{project}.json")),
         }
-        // The Data Center shape: no `location` in the configuration, and the
-        // answer on the board's project listing instead. Read through the same
-        // function the real client uses, so a fixture cannot pass on a reading
-        // the server would not give.
-        Ok(
-            read_json(&self.dir, &format!("board-{board_id}-projects.json"))
-                .as_ref()
-                .and_then(crate::api::rest::single_project),
-        )
-    }
+        names.push("users.json".to_string());
 
-    async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>> {
-        // Boards that share a sprint pool answer identically, which is what the
-        // single `sprints.json` stands for; a board with a pool of its own gets
-        // a file of its own.
-        Ok(read_json(&self.dir, &format!("sprints-{board_id}.json"))
-            .or_else(|| read_json(&self.dir, "sprints.json"))
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default())
-    }
-
-    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint> {
-        self.record("POST", "/rest/agile/1.0/sprint", input.to_body())?;
-        let sprint = Sprint {
-            id: self.next_id(),
-            name: input.name.clone(),
-            // Jira decides this, and a sprint nobody has started yet is future.
-            state: "future".to_string(),
-            board_id: Some(input.board_id.clone()),
-            start_date: input.start,
-            end_date: input.end,
-            goal: input.goal.clone(),
-        };
-        // Written back to the fixture directory, so the next process to run —
-        // a `jired sprints` in the same test — sees the sprint that was just
-        // created rather than the recording it started from.
-        let mut all: Vec<Sprint> = read_json(&self.dir, "sprints.json")
+        let users: Vec<UserRef> = names
+            .iter()
+            .find_map(|name| read_json(&self.dir, name))
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
-        all.push(sprint.clone());
-        self.save_sprints(&all);
-        Ok(sprint)
-    }
-
-    async fn sprint(&self, id: &str) -> Result<Sprint> {
-        self.stored_sprints()
+        let q = query.to_lowercase();
+        Ok(users
             .into_iter()
-            .find(|s| s.id == id)
-            .ok_or_else(|| {
-                JiredError::usage(format!("no sprint with id {id}")).with_hint(FIXTURE_HINT)
+            .filter(|u| {
+                u.display_name.to_lowercase().contains(&q) || u.id.to_lowercase().contains(&q)
             })
-    }
-
-    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint> {
-        let path = format!("/rest/agile/1.0/sprint/{id}");
-        self.record("POST", &path, update.to_body())?;
-
-        let mut all = self.stored_sprints();
-        let found = all.iter_mut().find(|s| s.id == id).ok_or_else(|| {
-            JiredError::usage(format!("no sprint with id {id}")).with_hint(FIXTURE_HINT)
-        })?;
-        if !self.applies("POST", &path) {
-            return Ok(found.clone());
-        }
-        // Merged, not replaced, exactly as the endpoint behind it merges: a
-        // fixture that overwrote the unmentioned fields would let a caller that
-        // forgot to send one pass here and lose it against a real server.
-        if let Some(name) = &update.name {
-            found.name = name.clone();
-        }
-        if let Some(goal) = &update.goal {
-            found.goal = Some(goal.clone()).filter(|g| !g.is_empty());
-        }
-        if update.start.is_some() {
-            found.start_date = update.start;
-        }
-        if update.end.is_some() {
-            found.end_date = update.end;
-        }
-        if let Some(state) = &update.state {
-            found.state = state.clone();
-        }
-        let updated = found.clone();
-        self.save_sprints(&all);
-        Ok(updated)
-    }
-
-    async fn project(&self, key: &str) -> Result<Project> {
-        self.projects()
-            .await?
-            .into_iter()
-            .find(|p| p.key.eq_ignore_ascii_case(key))
-            .ok_or_else(|| {
-                JiredError::usage(format!("no project with key {key}")).with_hint(FIXTURE_HINT)
-            })
-    }
-
-    async fn versions(&self, project: &str) -> Result<Vec<Version>> {
-        // A recording without the file is one that never asked, which is not
-        // the same answer as a project with no versions: an empty list here
-        // would have push refusing every name in `fix_versions:`.
-        if !self.dir.join("versions.json").is_file() {
-            return Err(JiredError::usage("versions.json was not recorded").with_hint(FIXTURE_HINT));
-        }
-        let id = self.project(project).await.ok().map(|p| p.id);
-        Ok(self
-            .stored_versions()
-            .into_iter()
-            // A recorded version that names no project belongs to whichever
-            // one is asked about: the fixture has one project worth asking.
-            .filter(|v| v.project_id.is_none() || v.project_id == id)
             .collect())
     }
+}
 
-    async fn version(&self, id: &str) -> Result<Version> {
-        self.stored_versions()
-            .into_iter()
-            .find(|v| v.id == id)
-            .ok_or_else(|| {
-                JiredError::usage(format!("no version with id {id}")).with_hint(FIXTURE_HINT)
-            })
-    }
-
-    async fn create_version(&self, input: &VersionInput) -> Result<Version> {
-        let path = format!("{}/version", self.deployment.api_prefix());
-        self.record("POST", &path, input.to_body())?;
-        let mut all = self.stored_versions();
-        // Jira refuses a second version of one name in a project, and a fixture
-        // that took it would let a duplicate through to a real server.
-        if all.iter().any(|v| {
-            v.name.eq_ignore_ascii_case(&input.name)
-                && v.project_id.as_deref() == Some(input.project_id.as_str())
-        }) {
-            return Err(JiredError::generic(format!(
-                "A version with this name already exists in this project: {}",
-                input.name
-            )));
-        }
-        // Above every id already on disk rather than from a counter: each
-        // `jired` run is a fresh process, and a counter would start again.
-        let next = all
-            .iter()
-            .filter_map(|v| v.id.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            .max(90000)
-            + 1;
-        let version = Version {
-            id: next.to_string(),
-            name: input.name.clone(),
-            project_id: Some(input.project_id.clone()),
-            description: input.description.clone(),
-            released: false,
-            archived: false,
-            start_date: input.start,
-            release_date: input.release,
-        };
-        all.push(version.clone());
-        self.save_versions(&all);
-        Ok(version)
-    }
-
-    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version> {
-        let path = format!("{}/version/{id}", self.deployment.api_prefix());
-        self.record("PUT", &path, update.to_body())?;
-        let mut all = self.stored_versions();
-        let found = all.iter_mut().find(|v| v.id == id).ok_or_else(|| {
-            JiredError::usage(format!("no version with id {id}")).with_hint(FIXTURE_HINT)
-        })?;
-        if !self.applies("PUT", &path) {
-            return Ok(found.clone());
-        }
-        // Merged, as the endpoint merges.
-        if let Some(name) = &update.name {
-            found.name = name.clone();
-        }
-        if let Some(text) = &update.description {
-            found.description = Some(text.clone()).filter(|t| !t.is_empty());
-        }
-        if update.start.is_some() {
-            found.start_date = update.start;
-        }
-        if update.release.is_some() {
-            found.release_date = update.release;
-        }
-        if let Some(released) = update.released {
-            found.released = released;
-        }
-        if let Some(archived) = update.archived {
-            found.archived = archived;
-        }
-        let updated = found.clone();
-        self.save_versions(&all);
-        Ok(updated)
-    }
-
-    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>> {
-        let all: Vec<Filter> = self
-            .stored_filters()
-            .iter()
-            .filter_map(crate::api::filter::filter_from_json)
-            .collect();
-        Ok(match self.deployment {
-            // The same narrowing the Data Center client does, so a test on
-            // that deployment meets the server's limits rather than this one's.
-            Deployment::DataCenter => crate::api::filter::narrow(
-                listing,
-                all.into_iter().filter(|f| f.favourite).collect(),
-            ),
-            Deployment::Cloud => all
-                .into_iter()
-                .filter(|f| match listing {
-                    FilterListing::Favourites => f.favourite,
-                    FilterListing::Owned(me) => f.owner.as_ref().is_some_and(|o| o.id == me),
-                    FilterListing::Named(name) => f.name.eq_ignore_ascii_case(name.trim()),
-                })
-                .collect(),
-        })
-    }
-
-    async fn filter(&self, id: &str) -> Result<Filter> {
-        self.stored_filters()
-            .iter()
-            .find(|f| filter_id(f) == id)
-            .and_then(crate::api::filter::filter_from_json)
-            .ok_or_else(unavailable_filter)
-    }
-
-    async fn create_filter(&self, input: &FilterInput) -> Result<Filter> {
-        let plan = crate::api::filter::create(self.deployment, input, crate::api::filter::NEW);
-        self.record(plan[0].method, &plan[0].path, plan[0].body.clone())?;
-        let owner = read_json(&self.dir, "myself.json").unwrap_or(Value::Null);
-        let me = normalize::user_ref(Some(&owner)).map(|u| u.id);
-        let mut all = self.stored_filters();
-        // Jira keeps one filter of a name per owner.
-        let clash = all.iter().any(|f| {
-            f.get("name").and_then(Value::as_str).map(str::to_lowercase)
-                == Some(input.name.to_lowercase())
-                && normalize::user_ref(f.get("owner")).map(|u| u.id) == me
-        });
-        if clash {
-            return Err(bad_request("Filter with same name already exists."));
-        }
-        let id = self.next_id();
-        let mut made = plan[0].body.clone();
-        made["id"] = json!(id);
-        made["owner"] = owner;
-        made["favourite"] = json!(made.get("favourite").and_then(Value::as_bool) == Some(true));
-        made["sharePermissions"] = json!([]);
-        all.push(made);
-        self.save_filters(&all);
-        for call in &crate::api::filter::create(self.deployment, input, &id)[1..] {
-            self.apply_filter_call(call)?;
-        }
-        self.filter(&id).await
-    }
-
-    async fn update_filter(&self, current: &Filter, update: &FilterUpdate) -> Result<Filter> {
-        for call in crate::api::filter::update(self.deployment, current, update) {
-            self.apply_filter_call(&call)?;
-        }
-        self.filter(&current.id).await
-    }
-
-    async fn delete_filter(&self, id: &str) -> Result<()> {
-        self.apply_filter_call(&crate::api::filter::delete(self.deployment, id))
-    }
-
-    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()> {
-        self.apply_filter_call(&crate::api::filter::add_share(self.deployment, id, share))
-    }
-
-    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()> {
-        self.apply_filter_call(&crate::api::filter::remove_share(
-            self.deployment,
-            id,
-            permission_id,
-        ))
-    }
-
+#[async_trait]
+impl Issues for FixtureClient {
     async fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         self.check_fault("POST", "/search")?;
         if let Some(message) = jql_error(&query.jql) {
@@ -1541,55 +1274,6 @@ impl JiraApi for FixtureClient {
         Ok(())
     }
 
-    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()> {
-        let path = match sprint {
-            Some(id) => format!("/rest/agile/1.0/sprint/{id}/issue"),
-            None => "/rest/agile/1.0/backlog/issue".to_string(),
-        };
-        self.record("POST", &path, json!({ "issues": keys }))?;
-        if !self.applies("POST", &path) {
-            return Ok(());
-        }
-
-        // Reflect the move the way the server would, so the next fetch sees it.
-        let named = sprint.and_then(|id| {
-            read_json(&self.dir, "sprints.json")
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default()
-                .into_iter()
-                .find(|s| {
-                    s.get("id")
-                        .map(|i| i.to_string().trim_matches('"').to_string())
-                        == Some(id.to_string())
-                })
-        });
-        {
-            let mut issues = self.issues.lock().expect("fixture lock");
-            // An issue that has never been in a sprint has no such field to
-            // recognize, and a real server would still put one there. Borrowing
-            // the id from an issue that does have one is what lets a move onto
-            // an untouched issue be seen afterwards — without it the "server"
-            // accepted every such move and recorded none of them, which is
-            // precisely the silence this fixture now exists to catch.
-            let fallback = issues.values().find_map(sprint_field);
-            for key in keys {
-                let Some(issue) = issues.get_mut(key) else {
-                    continue;
-                };
-                let field = sprint_field(issue).or_else(|| fallback.clone());
-                match (&field, &named) {
-                    (Some(field), Some(sprint)) => issue["fields"][field] = json!([sprint]),
-                    (Some(field), None) => issue["fields"][field] = Value::Null,
-                    (None, _) => {}
-                }
-            }
-        }
-        for key in keys {
-            self.bump_updated(key);
-        }
-        Ok(())
-    }
-
     /// Recorded under the path the wizard's own step posts to, so a test can
     /// tell a move that was sent from one that was only planned — and so
     /// `ignored.json` can make this "server" answer it and do nothing, which
@@ -1866,41 +1550,6 @@ impl JiraApi for FixtureClient {
             .map_err(|e| JiredError::network(format!("fixture attachment {}: {e}", path.display())))
     }
 
-    /// The users a scope permits, from the narrowest recording that exists.
-    ///
-    /// `assignable-{key}.json`, then `assignable-{project}.json`, then
-    /// `users.json` — the same falling-back the sprints listing does. A fixture
-    /// that records only `users.json` therefore answers every scope with it,
-    /// which is what keeps a recording that predates the assignable search
-    /// working; a test that cares about the difference writes the narrower file.
-    async fn search_users(&self, query: &str, scope: UserScope<'_>) -> Result<Vec<UserRef>> {
-        let mut names: Vec<String> = Vec::new();
-        match scope {
-            UserScope::Any => {}
-            UserScope::Issue(key) => {
-                names.push(format!("assignable-{key}.json"));
-                if let Some((project, _)) = key.rsplit_once('-') {
-                    names.push(format!("assignable-{project}.json"));
-                }
-            }
-            UserScope::Project(project) => names.push(format!("assignable-{project}.json")),
-        }
-        names.push("users.json".to_string());
-
-        let users: Vec<UserRef> = names
-            .iter()
-            .find_map(|name| read_json(&self.dir, name))
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
-        let q = query.to_lowercase();
-        Ok(users
-            .into_iter()
-            .filter(|u| {
-                u.display_name.to_lowercase().contains(&q) || u.id.to_lowercase().contains(&q)
-            })
-            .collect())
-    }
-
     /// Watching is recorded on the issue itself, in the shape a real payload
     /// carries it: `fields.watches.isWatching` is what `jired watch` reads back
     /// and what the `watcher = currentUser()` clause below filters on.
@@ -1910,6 +1559,375 @@ impl JiraApi for FixtureClient {
 
     async fn unwatch(&self, key: &str, user_id: &str) -> Result<()> {
         self.set_watching(key, user_id, false)
+    }
+}
+
+#[async_trait]
+impl Agile for FixtureClient {
+    async fn boards(&self, _project: Option<&str>) -> Result<Vec<Board>> {
+        Ok(read_json(&self.dir, "boards.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default())
+    }
+
+    async fn board_columns(&self, board_id: &str) -> Result<Vec<BoardColumn>> {
+        Ok(
+            read_json(&self.dir, &format!("board-{board_id}-columns.json"))
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default(),
+        )
+    }
+
+    async fn board_project(&self, board_id: &str) -> Result<Option<String>> {
+        let located =
+            read_json(&self.dir, &format!("board-{board_id}-config.json")).and_then(|v| {
+                v.get("location")
+                    .and_then(|l| l.get("projectKey").or_else(|| l.get("key")))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        if located.is_some() {
+            return Ok(located);
+        }
+        // The Data Center shape: no `location` in the configuration, and the
+        // answer on the board's project listing instead. Read through the same
+        // function the real client uses, so a fixture cannot pass on a reading
+        // the server would not give.
+        Ok(
+            read_json(&self.dir, &format!("board-{board_id}-projects.json"))
+                .as_ref()
+                .and_then(crate::api::rest::single_project),
+        )
+    }
+
+    async fn sprints(&self, board_id: &str) -> Result<Vec<Sprint>> {
+        // Boards that share a sprint pool answer identically, which is what the
+        // single `sprints.json` stands for; a board with a pool of its own gets
+        // a file of its own.
+        Ok(read_json(&self.dir, &format!("sprints-{board_id}.json"))
+            .or_else(|| read_json(&self.dir, "sprints.json"))
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default())
+    }
+
+    async fn create_sprint(&self, input: &SprintInput) -> Result<Sprint> {
+        self.record("POST", "/rest/agile/1.0/sprint", input.to_body())?;
+        let sprint = Sprint {
+            id: self.next_id(),
+            name: input.name.clone(),
+            // Jira decides this, and a sprint nobody has started yet is future.
+            state: "future".to_string(),
+            board_id: Some(input.board_id.clone()),
+            start_date: input.start,
+            end_date: input.end,
+            goal: input.goal.clone(),
+        };
+        // Written back to the fixture directory, so the next process to run —
+        // a `jired sprints` in the same test — sees the sprint that was just
+        // created rather than the recording it started from.
+        let mut all: Vec<Sprint> = read_json(&self.dir, "sprints.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        all.push(sprint.clone());
+        self.save_sprints(&all);
+        Ok(sprint)
+    }
+
+    async fn sprint(&self, id: &str) -> Result<Sprint> {
+        self.stored_sprints()
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| {
+                JiredError::usage(format!("no sprint with id {id}")).with_hint(FIXTURE_HINT)
+            })
+    }
+
+    async fn update_sprint(&self, id: &str, update: &SprintUpdate) -> Result<Sprint> {
+        let path = format!("/rest/agile/1.0/sprint/{id}");
+        self.record("POST", &path, update.to_body())?;
+
+        let mut all = self.stored_sprints();
+        let found = all.iter_mut().find(|s| s.id == id).ok_or_else(|| {
+            JiredError::usage(format!("no sprint with id {id}")).with_hint(FIXTURE_HINT)
+        })?;
+        if !self.applies("POST", &path) {
+            return Ok(found.clone());
+        }
+        // Merged, not replaced, exactly as the endpoint behind it merges: a
+        // fixture that overwrote the unmentioned fields would let a caller that
+        // forgot to send one pass here and lose it against a real server.
+        if let Some(name) = &update.name {
+            found.name = name.clone();
+        }
+        if let Some(goal) = &update.goal {
+            found.goal = Some(goal.clone()).filter(|g| !g.is_empty());
+        }
+        if update.start.is_some() {
+            found.start_date = update.start;
+        }
+        if update.end.is_some() {
+            found.end_date = update.end;
+        }
+        if let Some(state) = &update.state {
+            found.state = state.clone();
+        }
+        let updated = found.clone();
+        self.save_sprints(&all);
+        Ok(updated)
+    }
+
+    async fn move_to_sprint(&self, sprint: Option<&str>, keys: &[String]) -> Result<()> {
+        let path = match sprint {
+            Some(id) => format!("/rest/agile/1.0/sprint/{id}/issue"),
+            None => "/rest/agile/1.0/backlog/issue".to_string(),
+        };
+        self.record("POST", &path, json!({ "issues": keys }))?;
+        if !self.applies("POST", &path) {
+            return Ok(());
+        }
+
+        // Reflect the move the way the server would, so the next fetch sees it.
+        let named = sprint.and_then(|id| {
+            read_json(&self.dir, "sprints.json")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default()
+                .into_iter()
+                .find(|s| {
+                    s.get("id")
+                        .map(|i| i.to_string().trim_matches('"').to_string())
+                        == Some(id.to_string())
+                })
+        });
+        {
+            let mut issues = self.issues.lock().expect("fixture lock");
+            // An issue that has never been in a sprint has no such field to
+            // recognize, and a real server would still put one there. Borrowing
+            // the id from an issue that does have one is what lets a move onto
+            // an untouched issue be seen afterwards — without it the "server"
+            // accepted every such move and recorded none of them, which is
+            // precisely the silence this fixture now exists to catch.
+            let fallback = issues.values().find_map(sprint_field);
+            for key in keys {
+                let Some(issue) = issues.get_mut(key) else {
+                    continue;
+                };
+                let field = sprint_field(issue).or_else(|| fallback.clone());
+                match (&field, &named) {
+                    (Some(field), Some(sprint)) => issue["fields"][field] = json!([sprint]),
+                    (Some(field), None) => issue["fields"][field] = Value::Null,
+                    (None, _) => {}
+                }
+            }
+        }
+        for key in keys {
+            self.bump_updated(key);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Projects for FixtureClient {
+    async fn projects(&self) -> Result<Vec<Project>> {
+        Ok(read_json(&self.dir, "projects.json")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default())
+    }
+
+    async fn project(&self, key: &str) -> Result<Project> {
+        self.projects()
+            .await?
+            .into_iter()
+            .find(|p| p.key.eq_ignore_ascii_case(key))
+            .ok_or_else(|| {
+                JiredError::usage(format!("no project with key {key}")).with_hint(FIXTURE_HINT)
+            })
+    }
+
+    async fn versions(&self, project: &str) -> Result<Vec<Version>> {
+        // A recording without the file is one that never asked, which is not
+        // the same answer as a project with no versions: an empty list here
+        // would have push refusing every name in `fix_versions:`.
+        if !self.dir.join("versions.json").is_file() {
+            return Err(JiredError::usage("versions.json was not recorded").with_hint(FIXTURE_HINT));
+        }
+        let id = self.project(project).await.ok().map(|p| p.id);
+        Ok(self
+            .stored_versions()
+            .into_iter()
+            // A recorded version that names no project belongs to whichever
+            // one is asked about: the fixture has one project worth asking.
+            .filter(|v| v.project_id.is_none() || v.project_id == id)
+            .collect())
+    }
+
+    async fn version(&self, id: &str) -> Result<Version> {
+        self.stored_versions()
+            .into_iter()
+            .find(|v| v.id == id)
+            .ok_or_else(|| {
+                JiredError::usage(format!("no version with id {id}")).with_hint(FIXTURE_HINT)
+            })
+    }
+
+    async fn create_version(&self, input: &VersionInput) -> Result<Version> {
+        let path = format!("{}/version", self.deployment.api_prefix());
+        self.record("POST", &path, input.to_body())?;
+        let mut all = self.stored_versions();
+        // Jira refuses a second version of one name in a project, and a fixture
+        // that took it would let a duplicate through to a real server.
+        if all.iter().any(|v| {
+            v.name.eq_ignore_ascii_case(&input.name)
+                && v.project_id.as_deref() == Some(input.project_id.as_str())
+        }) {
+            return Err(JiredError::generic(format!(
+                "A version with this name already exists in this project: {}",
+                input.name
+            )));
+        }
+        // Above every id already on disk rather than from a counter: each
+        // `jired` run is a fresh process, and a counter would start again.
+        let next = all
+            .iter()
+            .filter_map(|v| v.id.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
+            .max(90000)
+            + 1;
+        let version = Version {
+            id: next.to_string(),
+            name: input.name.clone(),
+            project_id: Some(input.project_id.clone()),
+            description: input.description.clone(),
+            released: false,
+            archived: false,
+            start_date: input.start,
+            release_date: input.release,
+        };
+        all.push(version.clone());
+        self.save_versions(&all);
+        Ok(version)
+    }
+
+    async fn update_version(&self, id: &str, update: &VersionUpdate) -> Result<Version> {
+        let path = format!("{}/version/{id}", self.deployment.api_prefix());
+        self.record("PUT", &path, update.to_body())?;
+        let mut all = self.stored_versions();
+        let found = all.iter_mut().find(|v| v.id == id).ok_or_else(|| {
+            JiredError::usage(format!("no version with id {id}")).with_hint(FIXTURE_HINT)
+        })?;
+        if !self.applies("PUT", &path) {
+            return Ok(found.clone());
+        }
+        // Merged, as the endpoint merges.
+        if let Some(name) = &update.name {
+            found.name = name.clone();
+        }
+        if let Some(text) = &update.description {
+            found.description = Some(text.clone()).filter(|t| !t.is_empty());
+        }
+        if update.start.is_some() {
+            found.start_date = update.start;
+        }
+        if update.release.is_some() {
+            found.release_date = update.release;
+        }
+        if let Some(released) = update.released {
+            found.released = released;
+        }
+        if let Some(archived) = update.archived {
+            found.archived = archived;
+        }
+        let updated = found.clone();
+        self.save_versions(&all);
+        Ok(updated)
+    }
+}
+
+#[async_trait]
+impl Filters for FixtureClient {
+    async fn filters(&self, listing: FilterListing<'_>) -> Result<Vec<Filter>> {
+        let all: Vec<Filter> = self
+            .stored_filters()
+            .iter()
+            .filter_map(crate::api::filter::filter_from_json)
+            .collect();
+        Ok(match self.deployment {
+            // The same narrowing the Data Center client does, so a test on
+            // that deployment meets the server's limits rather than this one's.
+            Deployment::DataCenter => crate::api::filter::narrow(
+                listing,
+                all.into_iter().filter(|f| f.favourite).collect(),
+            ),
+            Deployment::Cloud => all
+                .into_iter()
+                .filter(|f| match listing {
+                    FilterListing::Favourites => f.favourite,
+                    FilterListing::Owned(me) => f.owner.as_ref().is_some_and(|o| o.id == me),
+                    FilterListing::Named(name) => f.name.eq_ignore_ascii_case(name.trim()),
+                })
+                .collect(),
+        })
+    }
+
+    async fn filter(&self, id: &str) -> Result<Filter> {
+        self.stored_filters()
+            .iter()
+            .find(|f| filter_id(f) == id)
+            .and_then(crate::api::filter::filter_from_json)
+            .ok_or_else(unavailable_filter)
+    }
+
+    async fn create_filter(&self, input: &FilterInput) -> Result<Filter> {
+        let plan = crate::api::filter::create(self.deployment, input, crate::api::filter::NEW);
+        self.record(plan[0].method, &plan[0].path, plan[0].body.clone())?;
+        let owner = read_json(&self.dir, "myself.json").unwrap_or(Value::Null);
+        let me = normalize::user_ref(Some(&owner)).map(|u| u.id);
+        let mut all = self.stored_filters();
+        // Jira keeps one filter of a name per owner.
+        let clash = all.iter().any(|f| {
+            f.get("name").and_then(Value::as_str).map(str::to_lowercase)
+                == Some(input.name.to_lowercase())
+                && normalize::user_ref(f.get("owner")).map(|u| u.id) == me
+        });
+        if clash {
+            return Err(bad_request("Filter with same name already exists."));
+        }
+        let id = self.next_id();
+        let mut made = plan[0].body.clone();
+        made["id"] = json!(id);
+        made["owner"] = owner;
+        made["favourite"] = json!(made.get("favourite").and_then(Value::as_bool) == Some(true));
+        made["sharePermissions"] = json!([]);
+        all.push(made);
+        self.save_filters(&all);
+        for call in &crate::api::filter::create(self.deployment, input, &id)[1..] {
+            self.apply_filter_call(call)?;
+        }
+        self.filter(&id).await
+    }
+
+    async fn update_filter(&self, current: &Filter, update: &FilterUpdate) -> Result<Filter> {
+        for call in crate::api::filter::update(self.deployment, current, update) {
+            self.apply_filter_call(&call)?;
+        }
+        self.filter(&current.id).await
+    }
+
+    async fn delete_filter(&self, id: &str) -> Result<()> {
+        self.apply_filter_call(&crate::api::filter::delete(self.deployment, id))
+    }
+
+    async fn add_filter_share(&self, id: &str, share: &ShareInput) -> Result<()> {
+        self.apply_filter_call(&crate::api::filter::add_share(self.deployment, id, share))
+    }
+
+    async fn delete_filter_share(&self, id: &str, permission_id: &str) -> Result<()> {
+        self.apply_filter_call(&crate::api::filter::remove_share(
+            self.deployment,
+            id,
+            permission_id,
+        ))
     }
 }
 

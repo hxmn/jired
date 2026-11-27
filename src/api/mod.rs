@@ -21,7 +21,10 @@ pub mod rest;
 pub mod scrub;
 pub mod tls;
 
-pub use client::{ApiSpec, FieldSet, JiraApi, SearchPage, SearchQuery, SpecModule, UserScope};
+pub use client::{
+    Agile, ApiSpec, FieldSet, Filters, Issues, JiraApi, Projects, SearchPage, SearchQuery, Server,
+    SpecModule, UserScope, Users,
+};
 pub use http::TlsOptions;
 pub use model::*;
 

@@ -4,7 +4,7 @@
 //! Kept apart from the command, which parses its flags, calls these and
 //! prints what came back, so the rules can be read and tested without one.
 
-use crate::api::{Board, JiraApi, Sprint, SprintInput};
+use crate::api::{Agile, Board, JiraApi, Sprint, SprintInput};
 use crate::error::{JiredError, Result};
 use crate::tui::sprint::BoardSprint;
 use chrono::{DateTime, Utc};
@@ -175,7 +175,7 @@ pub(crate) fn needs_a_start() -> JiredError {
 /// Best-effort and per board, the way the fetch path caches them: a board that
 /// denies the agile API, or has no sprints at all, costs the form nothing more
 /// than a name it cannot offer.
-pub(crate) fn existing(client: &dyn JiraApi, boards: &[Board]) -> Vec<BoardSprint> {
+pub(crate) fn existing(client: &dyn Agile, boards: &[Board]) -> Vec<BoardSprint> {
     let mut out = Vec::new();
     for board in boards {
         let Ok(sprints) = crate::api::block_on(client.sprints(&board.id)) else {
