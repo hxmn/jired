@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.2] — 2026-11-27
+
+### Changed
+
+- Nothing in jired itself: CI pins its actions by commit, checks the
+  declared minimum Rust version (1.89) and the API docs, and tags each
+  release.
+
 ## [0.39.1] — 2026-11-27
 
 ### Fixed
