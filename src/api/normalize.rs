@@ -188,6 +188,14 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
     let key = str_at(v, "key")
         .ok_or_else(|| JiredError::generic("issue payload has no key"))?
         .to_string();
+    // The key names the issue's file and its attachment folder; one the
+    // server made up — `../x`, `/etc` — would be a path, not a name.
+    if !crate::doc::is_issue_key(&key) {
+        return Err(JiredError::generic(format!(
+            "the server sent an issue whose key `{key}` is not a Jira key"
+        ))
+        .with_detail("key", key));
+    }
     let id = str_at(v, "id").unwrap_or("").to_string();
     let f = v.get("fields").unwrap_or(&Value::Null);
 
@@ -421,7 +429,7 @@ pub fn attachments_from(v: Option<&Value>) -> Vec<RemoteAttachment> {
                 .filter_map(|x| {
                     Some(RemoteAttachment {
                         id: str_at(x, "id")?.to_string(),
-                        filename: str_at(x, "filename")?.to_string(),
+                        filename: crate::project::naming::file_component(str_at(x, "filename")?),
                         size: x.get("size").and_then(Value::as_u64).unwrap_or(0),
                         mime: str_at(x, "mimeType").map(str::to_string),
                         created: x
@@ -854,6 +862,19 @@ mod tests {
         assert_eq!(issue.fields.fix_versions, ["2.4.0"]);
         assert_eq!(issue.comments.len(), 1);
         assert_eq!(issue.attachments[0].filename, "trace.har");
+    }
+
+    /// What the server names becomes a path, so a key that is not a key is
+    /// refused and a file name is kept to one component.
+    #[test]
+    fn a_server_name_cannot_become_a_path() {
+        let mut v = cloud_issue();
+        v["fields"]["attachment"][0]["filename"] = "../../.ssh/authorized_keys".into();
+        let issue = issue_from_json(&v, Markup::Adf, &field_map()).unwrap();
+        assert_eq!(issue.attachments[0].filename, ".._.._.ssh_authorized_keys");
+
+        v["key"] = "../PROJ-1".into();
+        assert!(issue_from_json(&v, Markup::Adf, &field_map()).is_err());
     }
 
     /// The duration is the server's own text where it sent one, and rebuilt

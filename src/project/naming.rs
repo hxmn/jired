@@ -56,6 +56,32 @@ pub fn sanitize(summary: &str) -> String {
     out.trim().trim_end_matches('.').trim().to_string()
 }
 
+/// A name the server gave a file, as one component of a path in the
+/// attachment folder.
+///
+/// An attachment's `filename` is joined onto that folder and written, so a
+/// name holding `../` reached outside the workspace, and an absolute one
+/// replaced the folder altogether. Separators become `_`, and a name that is
+/// only dots or nothing is given one; any other name, spaces and all, is
+/// kept as it is, since it is how the description's image links name it.
+pub fn file_component(name: &str) -> String {
+    let flat: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | '\0') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    if flat.trim_matches('.').is_empty() {
+        format!("_{flat}")
+    } else {
+        flat
+    }
+}
+
 /// Truncate on grapheme boundaries so a cut never lands inside a character.
 pub fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
@@ -245,6 +271,16 @@ fn guard_reserved(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_server_file_name_stays_inside_its_folder() {
+        assert_eq!(file_component("shot 1.png"), "shot 1.png");
+        assert_eq!(file_component("../../.bashrc"), ".._.._.bashrc");
+        assert_eq!(file_component("/etc/passwd"), "_etc_passwd");
+        assert_eq!(file_component("a\\b"), "a_b");
+        assert_eq!(file_component(".."), "_..");
+        assert_eq!(file_component(""), "_");
+    }
 
     #[test]
     fn forbidden_characters_become_spaces() {
