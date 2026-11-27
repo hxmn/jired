@@ -602,30 +602,13 @@ pub fn run(ctx: &mut Context, args: &StatusOptions) -> Result<StatusReport> {
         conflicts: engine.state.conflicts()?,
         staged_transitions: staged,
         pending_ops: engine.state.pending_ops()?,
-        stale_agent_docs: stale_agent_docs(ctx.workspace.root()),
+        // Filled in by `jired status`: telling the instructions this build
+        // would write from the ones on disk takes the command definitions,
+        // which are the command line's, and no other caller wants them.
+        stale_agent_docs: Vec::new(),
         warnings,
         unchanged,
     })
-}
-
-/// Generated instructions in this workspace that another jired wrote.
-///
-/// Only a file that already carries the block is reported: a workspace that
-/// never had one asked for that, and `status` is not the place to sell it.
-fn stale_agent_docs(root: &std::path::Path) -> Vec<StaleAgentDoc> {
-    use crate::cli::cmd::init_agents::DocState;
-
-    crate::cli::cmd::init_agents::doc_states(root)
-        .into_iter()
-        .filter_map(|(file, state)| match state {
-            DocState::Stale { generated_by } => Some(StaleAgentDoc {
-                file: file.to_string(),
-                generated_by,
-                expected: env!("CARGO_PKG_VERSION").to_string(),
-            }),
-            DocState::Current | DocState::Missing => None,
-        })
-        .collect()
 }
 
 fn out_warn(ctx: &Context, message: &str) {
