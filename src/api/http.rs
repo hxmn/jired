@@ -263,8 +263,18 @@ impl HttpClient {
                         started.elapsed().as_millis()
                     );
                     if status.is_success() {
-                        // 204 and empty bodies are normal for PUT/DELETE.
-                        let text = resp.text().await.unwrap_or_default();
+                        // 204 and empty bodies are normal for PUT/DELETE. A
+                        // body that breaks off is not one of them: read as
+                        // empty, a search came back with no issues and every
+                        // issue in the project was marked deleted.
+                        let text = match resp.text().await {
+                            Ok(text) => text,
+                            Err(e) => {
+                                let err = network_error(&e, &method, path)
+                                    .with_detail("status", status.as_u16());
+                                return Err(repeat.unsettled(err));
+                            }
+                        };
                         if text.trim().is_empty() {
                             return Ok(serde_json::Value::Null);
                         }
@@ -945,5 +955,19 @@ mod tests {
             count.load(std::sync::atomic::Ordering::SeqCst),
             1 + MAX_RETRIES as usize
         );
+    }
+
+    /// A 200 whose body breaks off is a failure, not an empty answer.
+    #[tokio::test]
+    async fn a_body_that_breaks_off_is_an_error() {
+        let (url, _) = counting_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+             Content-Length: 500\r\nConnection: close\r\n\r\n{\"issues\": [",
+        );
+        let err = client(url)
+            .post_json_repeatable("/rest/api/2/search", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_json()["kind"], "network", "{err:?}");
     }
 }
