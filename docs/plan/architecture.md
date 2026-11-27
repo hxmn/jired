@@ -137,7 +137,11 @@ Migrations: numbered embedded SQL scripts applied in one transaction, gated on
 `PRAGMA user_version` (hand-rolled, ~50 lines).
 
 `state.db` is a **cache plus the `pending_op` journal**: deleting it and re-running
-`jired fetch` must always be a safe recovery path (D17). `viewed_at` is the one
+`jired fetch` must always be a safe recovery path (D17). What it cannot rebuild
+the files carry: `jired.content_hash` is the hash of the server rendering the
+file was written from, with the field empty, so a file that no longer matches
+it holds an edit and the pull after a rebuild treats it as one, and a `NEW-`
+file is given its row again when the workspace is opened. `viewed_at` is the one
 exception and a deliberate one — the server does not know when this machine last
 opened an issue and never will, so a fetch cannot rebuild it. It buys the issue
 picker's `viewed` column; losing it with the database costs a sort order and

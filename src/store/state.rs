@@ -431,6 +431,29 @@ impl StateStore {
         self.set_meta(&format!("new_issue_project:{key}"), project)
     }
 
+    /// Take in a `NEW-` file that has no row: what a rebuilt `state.db` leaves
+    /// of an issue created here and not yet pushed. Its project is not known
+    /// any more, so push falls back to `workspace.project`. Says whether the
+    /// row is new.
+    pub fn adopt_new_issue(&self, key: &str, file_path: &str) -> Result<bool> {
+        let known: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT key FROM issue WHERE key = ?1 OR file_path = ?2",
+                params![key, file_path],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if known.is_some() {
+            return Ok(false);
+        }
+        self.conn.execute(
+            "INSERT INTO issue (key, id, file_path) VALUES (?1, '', ?2)",
+            params![key, file_path],
+        )?;
+        Ok(true)
+    }
+
     /// Project a locally created issue belongs to.
     pub fn new_issue_project(&self, key: &str) -> Result<Option<String>> {
         self.get_meta(&format!("new_issue_project:{key}"))

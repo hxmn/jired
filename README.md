@@ -1181,6 +1181,12 @@ rm .jired/state.db && jired fetch
 ```
 
 Your `.md` files are not touched; `fetch` refills the snapshot from the server.
+The next `pull` tells the files you edited from the ones it can rewrite by the
+`content_hash` each file carries: an edited one is a conflict, as an edit
+meeting a server change is (`--strategy ours` keeps your file, `theirs` takes
+the server's), and the other files are written from the server as usual. Issues
+you created and have not pushed come back from their `NEW-` files. What is
+lost is the push journal, and unfinished work has to be pushed again.
 `session.db` is the other one: it holds the account and the credential reference,
 cannot be rebuilt from the server, and a corrupt one means `jired init --force`.
 `jired doctor` reports which of the two is at fault.

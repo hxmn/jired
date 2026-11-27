@@ -4189,7 +4189,10 @@ fn rewrite_keeping(
     let base_hash = seal(&mut base_doc)?;
     let mut doc = base_doc.clone();
     keep(&mut doc);
-    seal(&mut doc)?;
+    // Sealed with the base's hash, not its own: a file that kept a local
+    // edit has to read as edited by its own frontmatter too, which is all a
+    // rebuilt `state.db` has to go on.
+    doc.frontmatter.jired.content_hash = base_doc.frontmatter.jired.content_hash.clone();
 
     let outcome = engine.projector.write(&doc, Some(file))?;
     engine

@@ -36,13 +36,32 @@ impl Engine {
     pub fn open(ctx: &mut Context) -> Result<Self> {
         let session = SessionStore::open(&ctx.workspace)?;
         let account = session.require_account()?;
-        Ok(Self {
+        let engine = Self {
             state: StateStore::open(&ctx.workspace)?,
             projector: Projector::new(ctx.workspace.root()),
             account,
             ignored_custom_fields: ctx.resolver.get_list("ignored_custom_fields")?,
             checklist_field: ctx.resolver.get_value("checklist.field")?,
-        })
+        };
+        engine.adopt_new_issue_files()?;
+        Ok(engine)
+    }
+
+    /// Give every `NEW-` file on disk a row. A locally created issue exists
+    /// only as its file and its row, so after `state.db` was rebuilt, as its
+    /// own hints suggest, `status` and `push` iterate rows and never saw it,
+    /// and `push NEW-1` said it was not in the workspace.
+    fn adopt_new_issue_files(&self) -> Result<()> {
+        let Ok(files) = self.projector.scan() else {
+            return Ok(());
+        };
+        for (key, file) in files.range("NEW-".to_string()..) {
+            if !key.starts_with("NEW-") {
+                break;
+            }
+            self.state.adopt_new_issue(key, &file.relative)?;
+        }
+        Ok(())
     }
 
     pub fn markup(&self) -> Markup {

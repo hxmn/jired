@@ -353,6 +353,54 @@ pub fn run_scoped(
                 error: e.message.clone(),
             })
         };
+        // A file with no base is one the state forgot, as a rebuilt
+        // `state.db` forgets every one. Its own hash still says whether it
+        // was edited since jired wrote it; written fresh regardless, an edit
+        // was replaced by the server's copy, with no conflict and no warning.
+        if let (None, Some(file)) = (&row.base, &existing) {
+            let text = engine.projector.read_raw(file)?;
+            if !written_as_is(&text) {
+                match strategy {
+                    Strategy::Theirs => {}
+                    Strategy::Abort => {
+                        report.conflicts.push(Conflict {
+                            key: row.key.clone(),
+                            file: Some(file.clone()),
+                            fields: vec!["file".into()],
+                        });
+                        continue;
+                    }
+                    // Nothing to merge against: the file stands, and the
+                    // server's copy becomes the base it differs from.
+                    Strategy::Ours | Strategy::Merge => {
+                        let Ok(remote_doc) = convert(&remote_snapshot.raw).map_err(&mut fail)
+                        else {
+                            continue;
+                        };
+                        let working_doc = IssueDoc::parse(&text)
+                            .map_err(|e| JiredError::generic(format!("{file}: {}", e.message)))?;
+                        report.decided.push(Conflict {
+                            key: row.key.clone(),
+                            file: Some(file.clone()),
+                            fields: vec!["file".into()],
+                        });
+                        planned.push(PlannedWrite {
+                            key: row.key.clone(),
+                            base_doc: remote_doc.doc,
+                            doc: working_doc,
+                            description_storage: remote_doc.description_storage,
+                            description_raw: remote_doc.description_raw,
+                            body_raw: remote_doc.body_raw,
+                            previous: Some(file.clone()),
+                            kind: ChangeKind::Updated,
+                            fields: vec![],
+                            changes: vec![],
+                        });
+                        continue;
+                    }
+                }
+            }
+        }
         match (&row.base, &existing) {
             // Never seen locally: write it fresh.
             (None, _) | (Some(_), None) => {
@@ -525,11 +573,16 @@ pub fn run_scoped(
     for mut write in planned {
         writing.set_message(format!("writing {}", write.key));
         writing.inc();
-        // The hash in the frontmatter must describe the file that contains it,
-        // so it is written in two passes: render, hash, rewrite.
-        write.doc.frontmatter.jired.content_hash = String::new();
-        let provisional = write.doc.render()?;
-        write.doc.frontmatter.jired.content_hash = crate::store::state::content_hash(&provisional);
+        // The hash in the frontmatter is of the server's rendering, with the
+        // field empty: for a clean pull, the file that contains it. After a
+        // merge that kept a local value the file no longer matches it, which
+        // is how a file can say it holds edits when `state.db` cannot.
+        let sealed = {
+            let mut base_doc = write.base_doc.clone();
+            base_doc.frontmatter.jired.content_hash = String::new();
+            crate::store::state::content_hash(&base_doc.render()?)
+        };
+        write.doc.frontmatter.jired.content_hash = sealed;
 
         let outcome = engine
             .projector
@@ -1069,6 +1122,24 @@ fn change_names(changes: &[FieldChange]) -> Vec<String> {
         .collect();
     names.dedup();
     names
+}
+
+/// Whether `text` is the server's copy as jired last wrote it: its
+/// frontmatter's `content_hash` is the hash of that rendering with the field
+/// empty, so a file anyone edited since — or that a merge wrote with a local
+/// value kept — does not match it. A file that cannot say, unreadable or from
+/// before the hash, counts as edited: the cost of that mistake is a conflict
+/// to answer rather than an edit lost.
+fn written_as_is(text: &str) -> bool {
+    let Ok(mut doc) = IssueDoc::parse(text) else {
+        return false;
+    };
+    let sealed = std::mem::take(&mut doc.frontmatter.jired.content_hash);
+    if sealed.is_empty() {
+        return false;
+    }
+    doc.render()
+        .is_ok_and(|provisional| crate::store::state::content_hash(&provisional) == sealed)
 }
 
 pub struct MergeOutcome {

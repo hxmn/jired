@@ -2156,6 +2156,82 @@ fn a_comment_made_before_a_failure_is_not_posted_again() {
     assert!(!file.contains("### [new]"), "{file}");
 }
 
+/// `state.db` is a cache, and its hints say to delete it; what it knew about
+/// the files has to come back from the files. An edit made before it went
+/// was replaced by the server's copy on the next pull, with no conflict.
+#[test]
+fn a_rebuilt_state_db_does_not_cost_an_edit() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let edited = ws.read(ISSUE_FILE).replace(
+        "Steps to reproduce are below.",
+        "Steps to reproduce are below; see the IdP log.",
+    );
+    assert_ne!(edited, ws.read(ISSUE_FILE));
+    ws.write(ISSUE_FILE, &edited);
+    std::fs::remove_file(ws.path().join(".jired/state.db")).unwrap();
+    ws.json(&["fetch"]);
+
+    let report = ws.json_code(&["pull"], 5);
+    assert_eq!(report["conflicts"][0]["key"], "PROJ-142", "{report}");
+    assert_eq!(ws.read(ISSUE_FILE), edited, "the edit was overwritten");
+    // The files nobody edited are written as before.
+    assert!(ws.json(&["status"])["dirty"].as_array().unwrap().is_empty());
+
+    ws.json(&["pull", "--strategy", "ours"]);
+    assert!(ws.read(ISSUE_FILE).contains("see the IdP log"));
+    let status = ws.json(&["status"]);
+    assert_eq!(status["dirty"][0]["key"], "PROJ-142", "{status}");
+}
+
+/// A merge that kept a local value writes a file that is not the server's
+/// copy, and the file says so: a rebuilt `state.db` cannot.
+#[test]
+fn a_file_a_merge_kept_an_edit_in_reads_as_edited() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let edited = ws
+        .read(ISSUE_FILE)
+        .replace("priority: High", "priority: Low");
+    assert_ne!(edited, ws.read(ISSUE_FILE));
+    ws.write(ISSUE_FILE, &edited);
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["summary"] = "Fix login flow".into();
+        issue["fields"]["labels"] = serde_json::json!(["from-server"]);
+    });
+    ws.json(&["pull"]);
+    assert!(ws.read(ISSUE_FILE).contains("priority: Low"));
+
+    std::fs::remove_file(ws.path().join(".jired/state.db")).unwrap();
+    ws.json(&["fetch"]);
+    ws.json_code(&["pull"], 5);
+    assert!(ws.read(ISSUE_FILE).contains("priority: Low"));
+}
+
+/// A locally created issue is its file and a row; with the row gone it was
+/// invisible to `status` and `push`.
+#[test]
+fn a_new_issue_survives_a_rebuilt_state_db() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let created = ws.json(&["create", "--summary", "Audit the SSO config"]);
+    let temp_key = created["key"].as_str().unwrap().to_string();
+    std::fs::remove_file(ws.path().join(".jired/state.db")).unwrap();
+    ws.json(&["fetch"]);
+
+    let status = ws.json(&["status"]);
+    assert_eq!(status["new_issues"][0]["key"], temp_key, "{status}");
+    let push = ws.json(&["push", &temp_key]);
+    assert_eq!(push["results"][0]["ok"], true, "{push}");
+    assert!(push["results"][0]["new_key"]
+        .as_str()
+        .unwrap()
+        .starts_with("PROJ-"));
+}
+
 /// Change an issue on the "server" as of `minutes` ago, and say the last
 /// fetch was `watermark` minutes ago: the order of events a scoped pull can
 /// get wrong, without waiting out the five minutes a fetch looks back.
