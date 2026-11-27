@@ -8,6 +8,16 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.5] — 2026-11-27
+
+### Fixed
+
+- **Moving a sub-task to another parent works on Data Center.** The Move
+  wizard's form was posted to a malformed address — the configured URL with
+  the form's relative action glued on — so it failed with a DNS error or a
+  404. It is now posted beside the page it came from, and a form that points
+  at another site is refused.
+
 ## [0.31.4] — 2026-11-27
 
 ### Fixed
