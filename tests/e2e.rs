@@ -2509,10 +2509,11 @@ fn an_unwritable_file_is_named_in_the_json_error() {
     std::fs::create_dir_all(ws.path().join("AGENTS.md/in-the-way")).unwrap();
     let err = ws.json_err(&["init-agents"], 1);
     let message = err["message"].as_str().unwrap();
-    assert!(message.contains("AGENTS.md"), "{err}");
+    // The reason is the system's, in its words: "Is a directory" on Unix,
+    // "Access is denied" on Windows.
     assert!(
-        message.contains("directory"),
-        "the reason is part of it: {err}"
+        message.contains("AGENTS.md: "),
+        "the file and the reason: {err}"
     );
 }
 
@@ -5912,6 +5913,8 @@ fn a_status_is_coloured_by_its_category() {
 /// that is the 16th at 21:03, and from New York the 16th at 08:03 — but the
 /// JSON says the same thing from either chair, because agents and issue files
 /// need one instant rather than one per machine.
+// Windows takes its zone from the system, not from `TZ`.
+#[cfg(not(windows))]
 #[test]
 fn printed_times_follow_the_readers_timezone_and_json_does_not() {
     let ws = Ws::new();
@@ -5955,6 +5958,8 @@ fn printed_times_follow_the_readers_timezone_and_json_does_not() {
 /// A start time with no zone means the one the reader was just shown; one that
 /// names its zone is kept in the words it was written in. Either way what
 /// reaches Jira is the same instant.
+// Windows takes its zone from the system, not from `TZ`.
+#[cfg(not(windows))]
 #[test]
 fn a_worklog_start_time_is_read_in_the_readers_timezone() {
     let ws = Ws::new();
@@ -9234,6 +9239,9 @@ fn credentials_default_to_the_workspace_when_there_is_no_keychain() {
 
 /// `creds.storage` is a decision, not a description: changing it moves the
 /// credential rather than making the user authenticate again.
+// Windows finds the user config directory through the shell, not the
+// environment, so a test cannot give it one of its own.
+#[cfg(not(windows))]
 #[test]
 fn doctor_moves_the_credential_when_creds_storage_changes() {
     let ws = Ws::new();
@@ -9295,6 +9303,9 @@ fn doctor_moves_the_credential_when_creds_storage_changes() {
 }
 
 /// The point of the user-config store: one credential, many workspaces.
+// Windows finds the user config directory through the shell, not the
+// environment, so a test cannot give it one of its own.
+#[cfg(not(windows))]
 #[test]
 fn a_second_workspace_reuses_a_credential_from_the_user_config_store() {
     let first = Ws::new();
@@ -10969,6 +10980,9 @@ fn status_all_lists_unchanged_issues() {
 
 /// Config has to work before `init`, or the documented way to choose a
 /// credential store for a machine cannot be followed.
+// Windows finds the user config directory through the shell, not the
+// environment, so a test cannot give it one of its own.
+#[cfg(not(windows))]
 #[test]
 fn config_works_before_a_workspace_exists() {
     let dir = TempDir::new().unwrap();
