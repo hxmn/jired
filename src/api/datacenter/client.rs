@@ -12,8 +12,10 @@
 //!   serve; `project` answers with the whole array at once.
 //! - **`board_project`** — the board configuration's `location` is a Cloud
 //!   field Data Center omits, so the board's project listing is asked first.
-//! - **`worklogs`** — the description declares no paging on this route and the
-//!   server answers with every worklog, so it is one call, not a loop.
+//! - **`worklog_values`** — the description declares no paging on this route
+//!   and the server answers with every worklog, so it is one call, not a loop.
+//!   Below `worklogs` rather than beside it: completing a search's issues reads
+//!   these too, and once took Cloud's paged walk there.
 //! - **`search_users`** — `username`, where Cloud takes `query`.
 //! - **`filters`** — no `filter/search`; the favourites are the only listing.
 //! - **`move_subtask_parent`** — no REST route exists; the Move wizard does it.
@@ -24,6 +26,7 @@ use crate::api::model::*;
 use crate::api::normalize;
 use crate::api::rest::{Rest, Source};
 use crate::error::Result;
+use serde_json::Value;
 
 /// Data Center's user search: `username`, and the assignable route wherever the
 /// caller named something to be assigned to.
@@ -102,12 +105,14 @@ pub(crate) async fn filters(rest: &Rest, listing: FilterListing<'_>) -> Result<V
 /// the server answers with every worklog the issue has. Cloud's pages, and
 /// [`Rest`] loops for it; sending parameters here that the server never
 /// declared would be asking a question in a language it does not speak.
-pub(crate) async fn worklogs(rest: &Rest, key: &str) -> Result<Vec<RemoteWorklog>> {
+pub(crate) async fn worklog_values(rest: &Rest, key: &str) -> Result<Vec<Value>> {
     let v = rest
         .get(&routes::GET_WORKLOGS, &[("issueIdOrKey", key)], &[])
         .await?;
-    let (worklogs, _) = normalize::worklogs_from(Some(&v), rest.markup());
-    Ok(worklogs)
+    Ok(v.get("worklogs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
 }
 
 pub(crate) async fn search_users(

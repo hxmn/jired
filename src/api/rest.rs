@@ -232,6 +232,9 @@ impl Rest {
 
     /// Every worklog on an issue as the server sent it.
     pub(crate) async fn worklog_values(&self, key: &str) -> Result<Vec<Value>> {
+        if self.deployment == Deployment::DataCenter {
+            return crate::api::datacenter::client::worklog_values(self, key).await;
+        }
         let mut out: Vec<Value> = Vec::new();
         let mut start = 0usize;
         loop {
@@ -1038,9 +1041,6 @@ impl JiraApi for Rest {
     }
 
     async fn worklogs(&self, key: &str) -> Result<Vec<RemoteWorklog>> {
-        if self.deployment == Deployment::DataCenter {
-            return crate::api::datacenter::client::worklogs(self, key).await;
-        }
         let values = self.worklog_values(key).await?;
         Ok(normalize::worklogs_from(Some(&json!(values)), self.markup()).0)
     }
@@ -1786,6 +1786,52 @@ mod tests {
         let all = rest.comment_values("PROJ-1").await.unwrap();
         assert_eq!(all.len(), 5);
         assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    /// Data Center's worklog route declares no paging, and an issue whose
+    /// embedded worklogs were cut short is completed with the one call that
+    /// returns them all — not Cloud's paged walk, whose parameters the
+    /// server's description says not to send.
+    #[tokio::test]
+    async fn data_center_completes_worklogs_in_one_unpaged_call() {
+        let (url, seen) = loopback::serve(|r| {
+            if r.path.ends_with("/field") {
+                return Reply::Json(200, json!([]));
+            }
+            if r.path.contains("/worklog") {
+                let all: Vec<_> = (1..=3)
+                    .map(|n| {
+                        json!({"id": n.to_string(), "timeSpentSeconds": 60,
+                                    "started": "2026-01-01T00:00:00.000+0000"})
+                    })
+                    .collect();
+                return Reply::Json(200, json!({"startAt": 0, "total": 3, "worklogs": all}));
+            }
+            Reply::Json(
+                200,
+                json!({"startAt": 0, "total": 1, "issues": [
+                {"id": "1", "key": "DC-1", "fields": {
+                 "summary": "s", "updated": "2026-01-01T00:00:00.000+0000",
+                 "worklog": {"startAt": 0, "maxResults": 0, "total": 3, "worklogs": []}}}]}),
+            )
+        });
+        let rest = Rest::new(loopback::client(&url, Deployment::DataCenter));
+        let page = rest
+            .search(&SearchQuery {
+                jql: "project = DC".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.issues[0].worklogs.len(), 3, "{:?}", page.issues);
+        let calls: Vec<_> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.path.contains("/worklog"))
+            .map(|r| r.path.clone())
+            .collect();
+        assert_eq!(calls, ["/rest/api/2/issue/DC-1/worklog"]);
     }
 
     /// A page's issues have the rest of their comments read a few at a time:
