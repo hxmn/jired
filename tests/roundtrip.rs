@@ -254,14 +254,15 @@ proptest! {
         prop_assert_eq!(shape(&via_adf), shape(&doc));
         let again = adf::to_ast(&adf::from_ast(&via_adf, &store), &mut store);
         prop_assert_eq!(&again, &via_adf);
-        // Wiki the same: the shape holds, and a second trip changes nothing.
-        // Not equality — a wiki mention carries no display name, and a mark
-        // around a lone delimiter does not yet come back as one.
+        // Wiki gives the table back as it was, but for a mention, which wiki
+        // carries as the user and not the name shown for them.
         let text = wiki::from_ast(&doc, &store);
         let via_wiki = wiki::to_ast(&text, &mut store);
-        prop_assert_eq!(shape(&via_wiki), shape(&doc), "\n--- wiki ---\n{}", text);
-        let again = wiki::to_ast(&wiki::from_ast(&via_wiki, &store), &mut store);
-        prop_assert_eq!(&again, &via_wiki, "\n--- wiki ---\n{}", text);
+        if format!("{doc:?}").contains("Mention") {
+            prop_assert_eq!(shape(&via_wiki), shape(&doc), "\n--- wiki ---\n{}", text);
+        } else {
+            prop_assert_eq!(&via_wiki, &doc, "\n--- wiki ---\n{}", text);
+        }
     }
 
     /// Cloud content as a server holds it, the AST's shapes and those it has

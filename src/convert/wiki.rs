@@ -1008,12 +1008,15 @@ fn mark_close(text: &str, open: usize, delim: &str) -> Option<usize> {
     // escapes a literal `*` inside a mark as `\*`, and closing the mark there
     // cut it short.
     let mut prev = next;
+    // Whether `prev` came through a backslash, and so is text, not a run.
+    let mut prev_escaped = false;
     let mut chars = text[body..limit].char_indices().peekable();
     while let Some((rel, c)) = chars.next() {
         let i = body + rel;
         if c == '\\' {
             if let Some((_, escaped)) = chars.next_if(|(_, n)| n.is_ascii_punctuation()) {
                 prev = escaped;
+                prev_escaped = true;
                 continue;
             }
         }
@@ -1029,17 +1032,24 @@ fn mark_close(text: &str, open: usize, delim: &str) -> Option<usize> {
         if let Some(to) = skip_to {
             while chars.next_if(|(r, _)| body + r < to).is_some() {}
             prev = text[..to].chars().next_back().unwrap_or(c);
+            prev_escaped = false;
             continue;
         }
         // A delimiter straight after its own character is the end of a run,
-        // `--` or `**`, not a closing mark: Jira draws `--` as a dash.
-        if rel > 0 && text[i..limit].starts_with(delim) && !prev.is_whitespace() && prev != d {
+        // `--` or `**`, not a closing mark: Jira draws `--` as a dash. An
+        // escaped one before it is text, though, and `*\**` is a bold star.
+        if rel > 0
+            && text[i..limit].starts_with(delim)
+            && !prev.is_whitespace()
+            && (prev != d || prev_escaped)
+        {
             let after = text[i + delim.len()..].chars().next();
             if after.is_none_or(|a| !(a.is_alphanumeric() || a == d)) {
                 return Some(i);
             }
         }
         prev = c;
+        prev_escaped = false;
     }
     None
 }
@@ -2502,6 +2512,24 @@ mod review_cases {
             .map(|b| matches!(b, Block::Raw(_)))
             .collect();
         (raw, from_ast(&doc, &store))
+    }
+
+    /// A mark around nothing but an escaped copy of its own delimiter is that
+    /// mark: `*\**` came back as the text `***`.
+    #[test]
+    fn a_mark_around_a_lone_delimiter_is_the_mark() {
+        for (d, mark) in [
+            ('*', Inline::Strong as fn(Vec<Inline>) -> Inline),
+            ('_', Inline::Emphasis),
+            ('-', Inline::Strike),
+        ] {
+            let doc = Document::new(vec![Block::Paragraph(vec![mark(vec![Inline::Text(
+                d.to_string(),
+            )])])]);
+            let store = RawStore::new();
+            let text = from_ast(&doc, &store);
+            assert_eq!(to_ast(&text, &mut RawStore::new()), doc, "{text}");
+        }
     }
 
     /// A bold span that starts like a nested list marker keeps its star: the
