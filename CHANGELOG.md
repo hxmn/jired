@@ -8,6 +8,15 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.12] — 2026-11-27
+
+### Fixed
+
+- **An attachment is always written inside its issue's folder.** Its name
+  came from the server as it was, and a name holding `../` or starting with
+  `/` was written wherever it pointed. Path separators in an attachment's
+  name now become `_`, and an issue whose key is not a Jira key is refused.
+
 ## [0.28.11] — 2026-11-27
 
 ### Fixed
