@@ -2365,6 +2365,35 @@ fn a_closed_stdout_keeps_the_exit_code_and_the_error() {
     );
 }
 
+/// A name the filesystem refuses is a byte count, not a character count, and
+/// a file that cannot be written fails its own issue: eighty CJK characters
+/// of summary stopped the pull, and every issue after it went unwritten.
+#[test]
+fn a_long_summary_and_a_file_that_cannot_be_written_stop_nothing_else() {
+    let ws = Ws::new();
+    ws.init();
+    let summary = "日本語の要約".repeat(20);
+    ws.mutate_remote("PROJ-142", |issue| {
+        issue["fields"]["summary"] = summary.clone().into()
+    });
+    // Something is in the way of PROJ-143's file.
+    std::fs::create_dir_all(ws.path().join("PROJ-0143. Add integration test.md/x")).unwrap();
+
+    let report = ws.json_code(&["pull"], 1);
+    assert_eq!(report["failed"][0]["key"], "PROJ-143", "{report}");
+    assert!(ws
+        .path()
+        .join("PROJ-0150. Rotate IdP certificate.md")
+        .is_file());
+    let long = std::fs::read_dir(ws.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with("PROJ-0142."))
+        .expect("PROJ-142 was written");
+    assert!(long.len() < 255 && long.contains("日本語"), "{long}");
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();

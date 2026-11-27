@@ -584,9 +584,24 @@ pub fn run_scoped(
         };
         write.doc.frontmatter.jired.content_hash = sealed;
 
-        let outcome = engine
+        // A file that cannot be written fails its own issue, as one that
+        // cannot be converted does: a name the filesystem refused stopped the
+        // pull there, and every issue after it in key order went unwritten on
+        // every pull after that.
+        let outcome = match engine
             .projector
-            .write(&write.doc, write.previous.as_deref())?;
+            .write(&write.doc, write.previous.as_deref())
+        {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                report.failed.push(IssueFailure {
+                    key: write.key.clone(),
+                    file: write.previous.clone(),
+                    error: e.message.clone(),
+                });
+                continue;
+            }
+        };
         attachment_folders.push((write.key.clone(), outcome.relative.clone()));
         // Ours and theirs decide, so the recorded conflict is spent. Merge
         // deliberately does not: it writes markers precisely so the conflict
