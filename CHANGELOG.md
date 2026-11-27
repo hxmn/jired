@@ -8,6 +8,26 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.33.0] — 2026-11-27
+
+### Breaking
+
+- **Exit codes for throttling and conflicts.** A request Jira kept
+  answering with 429 is now a network error (exit 4, with a hint to wait),
+  and a 409 is a conflict (exit 5); both were exit 1.
+
+### Fixed
+
+- **A login page in front of Jira is reported as one.** A web page where the
+  API should have answered was "malformed JSON"; it is now an authentication
+  error that says a sign-in page is in the way.
+- **Downloads, uploads and document fetches ride out throttling** the way
+  other requests do, instead of failing on the first 429 or 503.
+- **Large attachments transfer.** The one-minute limit applied to the whole
+  transfer; it now applies to each wait for data.
+- A missing sprint, filter or version no longer says "the issue may not
+  exist".
+
 ## [0.32.0] — 2026-11-27
 
 ### Breaking
