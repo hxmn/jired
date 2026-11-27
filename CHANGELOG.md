@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.15] — 2026-11-27
+
+### Fixed
+
+- On Data Center, an issue with more worklogs than a search embeds had the
+  rest read with paging parameters the server's description does not declare;
+  they are now read in the one call that route answers with all of them.
+
 ## [0.39.14] — 2026-11-27
 
 ### Changed
