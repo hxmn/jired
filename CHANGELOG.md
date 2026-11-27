@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.10] — 2026-11-27
+
+### Fixed
+
+- **A file jired writes is never left half written.** Issue files,
+  attachments, config and the credentials file were truncated and then
+  written, so a crash, a killed `jired` or a full disk part way through
+  could cut an issue file holding unpushed edits short, or leave an
+  attachment truncated and counted as downloaded. Each is now written to a
+  hidden file beside it and renamed into place, and the credentials file is
+  created readable by you alone rather than restricted after the write.
+
 ## [0.28.9] — 2026-11-27
 
 ### Fixed
