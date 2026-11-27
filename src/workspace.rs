@@ -158,7 +158,6 @@ impl Workspace {
 #[derive(Debug)]
 pub struct WorkspaceLock {
     file: File,
-    path: PathBuf,
 }
 
 impl WorkspaceLock {
@@ -211,17 +210,17 @@ impl WorkspaceLock {
         );
         let _ = f.flush();
 
-        Ok(Self {
-            file,
-            path: path.to_path_buf(),
-        })
+        Ok(Self { file })
     }
 }
 
 impl Drop for WorkspaceLock {
+    /// Unlocks and leaves the file. Removing it let two processes hold the
+    /// lock at once: one that had opened the file before it went locked the
+    /// unlinked copy, and the next made a new file and locked that. A file
+    /// left behind blocks nobody, as a crashed run's does.
     fn drop(&mut self) {
         let _ = self.file.unlock();
-        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -447,6 +446,22 @@ mod tests {
         ws.create().unwrap();
         drop(ws.lock().unwrap());
         let _second = ws.lock().expect("lock should be free after drop");
+    }
+
+    /// The file a waiting process already has open is the one the next
+    /// holder locks: it stays where it is when a holder lets go.
+    #[test]
+    fn a_process_that_opened_the_lock_file_contends_for_the_same_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::at(dir.path());
+        ws.create().unwrap();
+        let first = ws.lock().unwrap();
+        let waiting = File::open(ws.lock_path()).unwrap();
+        drop(first);
+        assert!(ws.lock_path().exists());
+        let second = ws.lock().unwrap();
+        assert!(waiting.try_lock().is_err(), "two holders of one workspace");
+        drop(second);
     }
 
     #[test]
