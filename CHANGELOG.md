@@ -8,6 +8,18 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.33.1] — 2026-11-27
+
+### Fixed
+
+- **With `--json`, stderr carries only the structured error.** A mistyped
+  flag printed clap's text instead of a `jired/error/1`, a retry warning or
+  another log line could appear on stderr beside a successful result, and a
+  crash printed a Rust panic and exited 101. Warnings now go into the
+  document's `warnings`; a bad flag and a crash are `jired/error/1` like any
+  other error, the crash with exit 1. `-v` and `JIRED_LOG` still log to
+  stderr.
+
 ## [0.33.0] — 2026-11-27
 
 ### Breaking
