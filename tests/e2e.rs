@@ -3663,6 +3663,103 @@ fn create_makes_a_local_issue_that_push_turns_into_a_real_one() {
     assert!(created.contains("Check every tenant."));
 }
 
+/// A create whose answer is lost may have made the issue. The next push asks
+/// the server before creating, and finishes the one it finds: creating again
+/// made a second issue every time a slow server timed out.
+#[test]
+fn a_create_whose_answer_was_lost_is_not_made_twice() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let report = ws.json(&["create", "--summary", "Audit the SSO config"]);
+    let temp_key = report["key"].as_str().unwrap().to_string();
+
+    ws.write_fixture(
+        "faults.json",
+        serde_json::json!({
+            "POST /issue": { "kind": "network", "message": "timed out", "lost": true }
+        }),
+    );
+    let failed = ws.json_code(&["push"], 4);
+    assert_eq!(failed["results"][0]["ok"], false, "{failed}");
+    let pending = ws.json(&["status"])["pending_ops"].clone();
+    assert_eq!(pending[0]["kind"], "create_issue", "{pending}");
+    assert_eq!(pending[0]["status"], "pending", "{pending}");
+
+    std::fs::remove_file(ws.fixtures.join("faults.json")).unwrap();
+    let (push, calls) = journaled(&ws, &["push", "--resume"]);
+    let creates = calls
+        .iter()
+        .filter(|c| c["method"] == "POST" && c["path"] == "/issue")
+        .count();
+    assert_eq!(creates, 0, "the issue was created again: {calls:?}");
+    assert_eq!(push["results"][0]["key"], temp_key, "{push}");
+    assert_eq!(push["results"][0]["ok"], true, "{push}");
+    let new_key = push["results"][0]["new_key"].as_str().unwrap();
+    let status = ws.json(&["status"]);
+    assert!(
+        status["new_issues"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+    assert!(
+        status["pending_ops"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+    let number = new_key.rsplit('-').next().unwrap();
+    assert!(ws
+        .path()
+        .join(format!("PROJ-{number:0>4}. Audit the SSO config.md"))
+        .is_file());
+}
+
+/// The create went through and the re-read after it did not: the row has the
+/// real key and the file is still the `NEW-` one. Nothing listed that state,
+/// so the follow-ups were lost and a pull wrote a second file; the next push
+/// finishes it.
+#[test]
+fn a_create_whose_re_read_failed_is_finished_by_the_next_push() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.json(&["create", "--summary", "First"]);
+    let first = ws.json(&["push"]);
+    let first_key = first["results"][0]["new_key"].as_str().unwrap().to_string();
+    let (project, number) = first_key.rsplit_once('-').unwrap();
+    let next = format!("{project}-{}", number.parse::<u64>().unwrap() + 1);
+
+    let created = ws.json(&["create", "--summary", "Second"]);
+    let temp_file = created["file"].as_str().unwrap().to_string();
+    ws.write_fixture(
+        "faults.json",
+        serde_json::json!({ format!("GET /issue/{next}"): { "kind": "network", "message": "reset" } }),
+    );
+    let failed = ws.json_code(&["push"], 4);
+    assert_eq!(failed["results"][0]["new_key"], next, "{failed}");
+    assert!(ws.path().join(&temp_file).is_file());
+
+    std::fs::remove_file(ws.fixtures.join("faults.json")).unwrap();
+    let (push, calls) = journaled(&ws, &["push"]);
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c["method"] == "POST" && c["path"] == "/issue"),
+        "{calls:?}"
+    );
+    assert!(push["warnings"].to_string().contains(&next), "{push}");
+    assert!(
+        !ws.path().join(&temp_file).exists(),
+        "the NEW- file is left behind"
+    );
+    let number = next.rsplit('-').next().unwrap();
+    let file = ws.read(&format!("PROJ-{number:0>4}. Second.md"));
+    assert!(file.contains(&format!("key: {next}")), "{file}");
+    let status = ws.json(&["status"]);
+    assert!(
+        status["new_issues"].as_array().unwrap().is_empty(),
+        "{status}"
+    );
+}
+
 /// Everything the file says has to reach the server or be complained about.
 /// `assignee` was handled for updates and simply absent from the create call,
 /// so `diff` promised to send it, `push` reported clean success, and the value

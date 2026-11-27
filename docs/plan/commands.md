@@ -465,7 +465,16 @@ follow-up owns, which stays as the file said it. Base is the server's rendering,
 so `status` reports that part as an edit to an issue that exists, `pending_ops`
 carries the op under the real key, and `push --resume` (or a plain `push`)
 re-plans it as an ordinary update. The issue is not sent again in the push that
-created it. No follow-up is checked against an edit screen: the edit screen is
+created it.
+A create that went out and was never answered — the process stopped, or the
+answer was lost to a timeout or a proxy — leaves its `create_issue` row
+`pending`, and the next push searches the project for an issue this user made
+since then with the file's summary before it creates anything: one found is
+finished as if the create had answered, two or more stop that issue with a
+conflict naming them. A create that was answered but whose re-read failed
+leaves the row with the real key and no base beside the `NEW-` file; the next
+push rebuilds that file from the server under its key, keeping the follow-ups'
+parts as the file had them, and says so in a warning. No follow-up is checked against an edit screen: the edit screen is
 described per issue, and before the create there is none to ask about. None
 needs to be — Data Center's only follow-up write is the checklist property, and
 Cloud's screens are not checked.

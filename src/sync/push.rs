@@ -470,7 +470,7 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
     // id behind the name the file carries.
     let sprints = engine.state.sprints()?;
     let base_url = engine.base_url().to_string();
-    let files = engine.projector.scan()?;
+    let mut files = engine.projector.scan()?;
     let max_upload = ctx
         .resolver
         .get_u64("attachments.max_upload")?
@@ -509,7 +509,9 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             });
         }
         for key in &unfinished {
-            if !args.dry_run {
+            // A `NEW-` issue's journal is its create, which says whether one
+            // may already be on the server; `create_issue` reads it first.
+            if !args.dry_run && !key.starts_with("NEW-") {
                 engine.state.clear_ops(key)?;
             }
             if !wanted.contains(key) {
@@ -527,6 +529,21 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
         warnings: Vec::new(),
         verify: None,
     };
+
+    if !args.dry_run {
+        let finished = finish_unsettled_creates(
+            ctx,
+            &engine,
+            client.as_ref(),
+            &files,
+            &mut wanted,
+            &mut link_types,
+            &mut report,
+        )?;
+        if finished {
+            files = engine.projector.scan()?;
+        }
+    }
 
     // A key that was named and is not here is a failure of its own, not an
     // empty push: "nothing to push" for `jired push TSK-578` read as TSK-578
@@ -1231,16 +1248,47 @@ fn create_issue(
         ));
     }
 
-    let op_ids = engine
-        .state
-        .journal_ops(temp_key, &[("create_issue".into(), request.to_string())])?;
+    // A create that went out before and was never answered may have made the
+    // issue: the process stopped, or the answer was lost. Creating again made a
+    // second one, so the server is asked first.
+    let adopted = match engine.state.unsettled_create(temp_key)? {
+        Some(sent) => find_created(client, temp_key, &project, &doc.frontmatter.summary, sent)?,
+        None => None,
+    };
+    if let Some((key, _)) = &adopted {
+        ctx.out.warn(format!(
+            "{temp_key}: an earlier push created it as {key} without hearing back; \
+             finishing that one instead of creating another"
+        ));
+    }
 
-    let (new_key, new_id) = match crate::api::block_on(client.create_issue(payload)) {
+    let created = match adopted {
+        Some(found) => Ok(found),
+        None => {
+            engine.state.clear_ops(temp_key)?;
+            let op_ids = engine
+                .state
+                .journal_ops(temp_key, &[("create_issue".into(), request.to_string())])?;
+            let created = crate::api::block_on(client.create_issue(payload));
+            match &created {
+                Ok(_) => engine.state.mark_op(op_ids[0], "done", None)?,
+                // Left `pending`: it may have been made, and the next push
+                // looks before it creates.
+                Err(e) if e.details["outcome"] == "unknown" => {
+                    engine
+                        .state
+                        .mark_op(op_ids[0], "pending", Some(&e.message))?
+                }
+                Err(e) => engine
+                    .state
+                    .mark_op(op_ids[0], "failed", Some(&e.message))?,
+            }
+            created
+        }
+    };
+    let (new_key, new_id) = match created {
         Ok(created) => created,
         Err(e) => {
-            engine
-                .state
-                .mark_op(op_ids[0], "failed", Some(&e.message))?;
             return Ok((
                 IssueResult {
                     key: temp_key.to_string(),
@@ -1261,10 +1309,190 @@ fn create_issue(
             ));
         }
     };
-    engine.state.mark_op(op_ids[0], "done", None)?;
-
     engine.state.rekey_issue(temp_key, &new_key, &new_id)?;
     engine.state.forget_new_issue_project(temp_key)?;
+    // From here the issue exists under its key, and a failure leaves a row
+    // with that key, no base, and the `NEW-` file: what the next push finishes
+    // (see [`finish_unsettled_creates`]), so the hint says to run it.
+    let finished = finish_create(
+        ctx,
+        engine,
+        client,
+        temp_key,
+        &new_key,
+        &project,
+        file,
+        &doc,
+        &follow_ups,
+    );
+    finished.or_else(|e| {
+        Ok((
+            IssueResult {
+                key: temp_key.to_string(),
+                ok: false,
+                new_key: Some(new_key.clone()),
+                error: Some(format!("{new_key} was created, but: {}", e.message)),
+                error_kind: Some(e.kind.as_str().to_string()),
+                hint: Some(format!(
+                    "the issue exists; run `jired push` again to finish {new_key} \
+                     from its file"
+                )),
+                ops: vec![OpReport {
+                    kind: "create_issue",
+                    status: "done",
+                    summary: Some(format!("{project}: {}", doc.frontmatter.summary)),
+                    request: None,
+                    error: None,
+                }],
+            },
+            Vec::new(),
+        ))
+    })
+}
+
+/// Bring in the issues an earlier push created and did not finish: the row
+/// has the key Jira gave, no base, and its file is still the `NEW-` one,
+/// because the re-read after the create, or a step after it, failed. Nothing
+/// else lists such a row, so it went unreported, and a pull wrote the issue a
+/// second file beside the first.
+///
+/// The file is rebuilt from the server keeping what the follow-ups own —
+/// checklist, sprint, status, links — as the file has it: whichever of them
+/// did reach the server match, and the rest are ordinary edits the push then
+/// plans. Says whether any file was rewritten.
+fn finish_unsettled_creates(
+    ctx: &mut Context,
+    engine: &Engine,
+    client: &dyn JiraApi,
+    files: &BTreeMap<String, crate::project::FoundFile>,
+    wanted: &mut [String],
+    link_types: &mut LinkTypes<'_>,
+    report: &mut PushReport,
+) -> Result<bool> {
+    let base_url = engine.base_url().to_string();
+    let sprints = engine.state.sprints()?;
+    let field_map = engine.field_map()?;
+    let mut any = false;
+    for row in engine.state.issues()? {
+        if row.base.is_some() || row.key.starts_with("NEW-") {
+            continue;
+        }
+        let Some(path) = &row.file_path else {
+            continue;
+        };
+        let Some(temp_key) = crate::project::naming::key_from_file_name(path) else {
+            continue;
+        };
+        if !temp_key.starts_with("NEW-") || !files.contains_key(&temp_key) {
+            continue;
+        }
+        if !wanted.is_empty() && !wanted.iter().any(|k| *k == temp_key || *k == row.key) {
+            continue;
+        }
+        let finished = (|| -> Result<()> {
+            let doc = engine.projector.read(path)?;
+            let (follow_ups, _) = follow_ups_after_create(
+                &doc,
+                engine.account.deployment,
+                &sprints,
+                field_map.checklist_text.as_deref(),
+                link_types,
+            )?;
+            let confirmed = crate::api::block_on(client.issue(&row.key))?;
+            let confirmed = with_web_links(ctx, engine, client, confirmed);
+            rewrite_keeping(
+                engine,
+                &confirmed,
+                path,
+                engine.markup(),
+                &base_url,
+                |rebuilt| {
+                    for f in &follow_ups {
+                        keep_unapplied(rebuilt, &doc, &f.action);
+                    }
+                },
+            )
+        })();
+        match finished {
+            Ok(()) => {
+                any = true;
+                ctx.out.warn(format!(
+                    "{temp_key} was created as {} by an earlier push that did not finish; \
+                     its file now has that key",
+                    row.key
+                ));
+                for k in wanted.iter_mut().filter(|k| **k == temp_key) {
+                    *k = row.key.clone();
+                }
+            }
+            Err(e) => report.results.push(IssueResult::failed(&row.key, &e)),
+        }
+    }
+    Ok(any)
+}
+
+/// Look for the issue an unanswered create may have made: in the project, by
+/// this user, since the create went out, with the file's summary. More than
+/// one is a question a person has to answer.
+fn find_created(
+    client: &dyn JiraApi,
+    temp_key: &str,
+    project: &str,
+    summary: &str,
+    sent: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<(String, String)>> {
+    // Relative to the server's clock, so neither side's zone is involved;
+    // the margin covers the two clocks disagreeing.
+    let minutes = (chrono::Utc::now() - sent).num_minutes().max(0) + 10;
+    let query = crate::api::client::SearchQuery {
+        jql: format!(
+            "project = \"{project}\" AND reporter = currentUser() AND created >= -{minutes}m \
+             ORDER BY created DESC"
+        ),
+        fields: crate::api::client::FieldSet::Full,
+        ..Default::default()
+    };
+    let page = crate::api::block_on(client.search(&query))?;
+    let found: Vec<(String, String)> = page
+        .issues
+        .into_iter()
+        .filter(|i| i.summary() == summary)
+        .map(|i| (i.key, i.id))
+        .collect();
+    match found.len() {
+        0 | 1 => Ok(found.into_iter().next()),
+        _ => Err(JiredError::conflict(format!(
+            "{temp_key}: an earlier push may have created it, and {} issues match",
+            found.len()
+        ))
+        .with_detail("issue", temp_key)
+        .with_detail(
+            "candidates",
+            json!(found.iter().map(|(k, _)| k).collect::<Vec<_>>()),
+        )
+        .with_hint(
+            "delete the ones that should not exist in Jira, then push again; or delete \
+             the file and `jired pull` the one to keep",
+        )),
+    }
+}
+
+/// Everything after the create call: the follow-ups, the re-read, and the
+/// file rebuilt around the new key.
+#[allow(clippy::too_many_arguments)]
+fn finish_create(
+    ctx: &mut Context,
+    engine: &Engine,
+    client: &dyn JiraApi,
+    temp_key: &str,
+    new_key: &str,
+    project: &str,
+    file: &str,
+    doc: &IssueDoc,
+    follow_ups: &[FollowUp],
+) -> Result<(IssueResult, Vec<String>)> {
+    let new_key = new_key.to_string();
+    let markup = engine.markup();
 
     // The operations the create call could not carry, now that there is a key
     // to aim them at. One that fails does not stop the others — the issue
@@ -1281,7 +1509,7 @@ fn create_issue(
         request: None,
         error: None,
     }];
-    for f in &follow_ups {
+    for f in follow_ups {
         match perform(client, &new_key, &f.action) {
             Ok(_) => {
                 failure_kinds.push(None);
@@ -1361,7 +1589,7 @@ fn create_issue(
     let base_url = engine.base_url().to_string();
     rewrite_keeping(engine, &confirmed, file, markup, &base_url, |rebuilt| {
         for f in &failed {
-            keep_unapplied(rebuilt, &doc, &f.action);
+            keep_unapplied(rebuilt, doc, &f.action);
         }
     })?;
     engine.state.clear_ops(&new_key)?;

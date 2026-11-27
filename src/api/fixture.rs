@@ -116,6 +116,11 @@ pub struct FixtureClient {
 pub struct FixtureFault {
     pub kind: String,
     pub message: String,
+    /// The server does the work and the answer never arrives: a timeout, or a
+    /// proxy's 502, after Jira has acted. Only the create call honours it,
+    /// since that is the one a push has to reconcile.
+    #[serde(default)]
+    pub lost: bool,
 }
 
 impl FixtureClient {
@@ -240,12 +245,26 @@ impl FixtureClient {
         let Some(fault) = self.faults.get(&format!("{method} {path}")) else {
             return Ok(());
         };
+        if fault.lost {
+            return Ok(());
+        }
         Err(match fault.kind.as_str() {
             "auth" => JiredError::auth(fault.message.clone()),
             "network" => JiredError::network(fault.message.clone()),
             "conflict" => JiredError::conflict(fault.message.clone()),
             _ => JiredError::generic(fault.message.clone()),
         })
+    }
+
+    /// A `lost` fault, raised after the work is done, as the HTTP client
+    /// reports a POST whose answer did not come.
+    fn lost_answer(&self, method: &str, path: &str) -> Result<()> {
+        match self.faults.get(&format!("{method} {path}")) {
+            Some(fault) if fault.lost => {
+                Err(JiredError::network(fault.message.clone()).with_detail("outcome", "unknown"))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Whether this write is one the "server" acts on, or one it only answers.
@@ -1119,6 +1138,7 @@ impl JiraApi for FixtureClient {
     }
 
     async fn issue(&self, key: &str) -> Result<RemoteIssue> {
+        self.check_fault("GET", &format!("/issue/{key}"))?;
         self.read_once(Some(key));
         let v = served(&self.issue_value(key)?);
         let mut issue = normalize::issue_from_json(&v, self.markup(), &self.field_map)?;
@@ -1447,6 +1467,7 @@ impl JiraApi for FixtureClient {
             .expect("fixture lock")
             .insert(key.clone(), issue);
         self.persist();
+        self.lost_answer("POST", "/issue")?;
         Ok((key, id))
     }
 

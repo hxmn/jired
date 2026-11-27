@@ -1223,6 +1223,29 @@ impl StateStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// When a push sent `issue_key`'s create and never learned what came of
+    /// it: the row is still `pending`, because the process stopped before the
+    /// answer, or the answer was lost on the way.
+    pub fn unsettled_create(&self, issue_key: &str) -> Result<Option<DateTime<Utc>>> {
+        let at: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT created_at FROM pending_op
+                 WHERE issue_key = ?1 AND kind = 'create_issue' AND status = 'pending'
+                 ORDER BY id DESC LIMIT 1",
+                [issue_key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(at.map(|t| {
+            DateTime::parse_from_rfc3339(&t)
+                .map(|t| t.with_timezone(&Utc))
+                // An unreadable stamp still says a create went out; a day back
+                // is the window to look in.
+                .unwrap_or_else(|_| Utc::now() - chrono::Duration::days(1))
+        }))
+    }
+
     pub fn clear_ops(&self, issue_key: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM pending_op WHERE issue_key = ?1", [issue_key])?;
