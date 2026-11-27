@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.37.1] — 2026-11-27
+
+### Fixed
+
+- **Ctrl-C at the token prompt no longer leaves your terminal without
+  echo**, and on Windows the token you type or paste is now hidden too, as
+  the prompt says it is.
+
 ## [0.37.0] — 2026-11-27
 
 ### Breaking
