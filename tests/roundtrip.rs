@@ -144,8 +144,9 @@ fn document() -> impl Strategy<Value = Document> {
     prop::collection::vec(block(), 1..6).prop_map(Document::new)
 }
 
-/// Markdown-only constructs: GFM task lists and tables have no wiki equivalent
-/// and no plain-ADF-free representation, so they are exercised separately.
+/// Task lists and tables, apart from [`document`]: task lists have no wiki
+/// form at all, and a table holds only one line of inline content per cell,
+/// so neither fits the general block generator.
 fn task_item() -> impl Strategy<Value = TaskItem> {
     (any::<bool>(), inlines()).prop_map(|(checked, content)| TaskItem {
         checked,
@@ -190,8 +191,103 @@ fn assert_idempotent<T: PartialEq + std::fmt::Debug>(
     Ok(())
 }
 
+/// [`document`] without the shapes Markdown is documented to normalise — a
+/// bare issue key, which comes back as a key — so what comes back from it
+/// must be what went in, not merely stable.
+fn faithful_document() -> impl Strategy<Value = Document> {
+    document().prop_filter("holds a bare issue key", |doc| {
+        !format!("{doc:?}").contains("PROJ-1")
+    })
+}
+
+/// Cloud content beyond what the AST generator makes: nodes and marks the
+/// AST has no room for, which come in as read-only regions.
+fn adf_extra() -> impl Strategy<Value = serde_json::Value> {
+    use serde_json::json;
+    prop_oneof![
+        Just(json!({"type": "panel", "attrs": {"panelType": "info"},
+                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": "p"}]}]})),
+        Just(
+            json!({"type": "paragraph", "marks": [{"type": "alignment", "attrs": {"align": "center"}}],
+                    "content": [{"type": "text", "text": "c"}]})
+        ),
+        Just(json!({"type": "paragraph", "content": [
+            {"type": "text", "text": "u", "marks": [{"type": "underline"}]},
+            {"type": "emoji", "attrs": {"shortName": ":smile:"}}]})),
+        Just(
+            json!({"type": "table", "content": [{"type": "tableRow", "content": [
+            {"type": "tableHeader", "attrs": {"colspan": 2},
+             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "h"}]}]}]}]})
+        ),
+    ]
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(400))]
+
+    /// The Markdown module's own promise: `parse(render(doc)) == doc` for
+    /// what Markdown can say. Idempotence alone is passed by a converter that
+    /// returns an empty document.
+    #[test]
+    fn markdown_gives_back_what_it_was_given(doc in faithful_document()) {
+        let store = RawStore::new();
+        let text = markdown::render(&doc, &store);
+        prop_assert_eq!(markdown::parse(&text, &store), doc, "\n--- markdown ---\n{}", text);
+    }
+
+    /// Tables reach Jira too, through ADF and wiki alike.
+    #[test]
+    fn tables_survive_adf_and_wiki(t in table()) {
+        let doc = markdown::parse(
+            &markdown::render(&Document::new(vec![Block::Table(t)]), &RawStore::new()),
+            &RawStore::new(),
+        );
+        let mut store = RawStore::new();
+        // ADF folds a mark set into one order, and takes an image as a link
+        // to it, so on Cloud what has to hold is the table's shape, and that
+        // a second trip changes nothing.
+        let shape = |d: &Document| match &d.blocks[..] {
+            [Block::Table(t)] => Some((t.header.as_ref().map(Vec::len), t.rows.iter().map(Vec::len).collect::<Vec<_>>())),
+            _ => None,
+        };
+        let via_adf = adf::to_ast(&adf::from_ast(&doc, &store), &mut store);
+        prop_assert_eq!(shape(&via_adf), shape(&doc));
+        let again = adf::to_ast(&adf::from_ast(&via_adf, &store), &mut store);
+        prop_assert_eq!(&again, &via_adf);
+        // Wiki the same: the shape holds, and a second trip changes nothing.
+        // Not equality — a wiki mention carries no display name, and a mark
+        // around a lone delimiter does not yet come back as one.
+        let text = wiki::from_ast(&doc, &store);
+        let via_wiki = wiki::to_ast(&text, &mut store);
+        prop_assert_eq!(shape(&via_wiki), shape(&doc), "\n--- wiki ---\n{}", text);
+        let again = wiki::to_ast(&wiki::from_ast(&via_wiki, &store), &mut store);
+        prop_assert_eq!(&again, &via_wiki, "\n--- wiki ---\n{}", text);
+    }
+
+    /// Cloud content as a server holds it, the AST's shapes and those it has
+    /// no room for side by side, pushed back untouched through the file: what
+    /// goes out is what jired would send without the file in between, and a
+    /// region the AST could not hold goes out exactly as it came.
+    #[test]
+    fn untouched_cloud_content_goes_back_through_the_file_unchanged(
+        doc in document(),
+        extra in prop::collection::vec(adf_extra(), 0..3),
+    ) {
+        let mut content = adf::from_ast(&doc, &RawStore::new())["content"].as_array().unwrap().clone();
+        content.extend(extra.iter().cloned());
+        let stored = serde_json::json!({"type": "doc", "version": 1, "content": content});
+
+        let mut store = RawStore::new();
+        let read = adf::to_ast(&stored, &mut store);
+        let direct = adf::from_ast(&read, &store);
+        let md = markdown::render(&read, &store);
+        let pushed = adf::from_ast(&markdown::parse(&md, &store), &store);
+        prop_assert_eq!(&pushed, &direct, "\n--- markdown ---\n{}", md);
+        let sent = pushed.to_string();
+        for node in &extra {
+            prop_assert!(sent.contains(&node.to_string()), "{} lost from {}", node, sent);
+        }
+    }
 
     /// The working copy is Markdown; churn here means noisy diffs on every pull.
     #[test]
@@ -393,17 +489,45 @@ proptest! {
         )
         .unwrap();
         issue.description = md.clone();
+        for id in ["1", "2"] {
+            issue.comments.push(jired::doc::CommentBlock {
+                id: jired::doc::CommentId::Existing(id.into()),
+                author: "A".into(),
+                timestamp: "t".into(),
+                note: String::new(),
+                body: md.clone(),
+            });
+        }
         issue.comments.push(jired::doc::CommentBlock {
-            id: jired::doc::CommentId::Existing("1".into()),
-            author: "A".into(),
-            timestamp: "t".into(),
+            id: jired::doc::CommentId::New,
+            author: String::new(),
+            timestamp: String::new(),
             note: String::new(),
+            body: md.clone(),
+        });
+        issue.worklogs.push(jired::doc::WorklogEntry {
+            id: jired::doc::WorklogId::Existing("9".into()),
+            time_spent: "1h".into(),
+            author: "A".into(),
+            started: String::new(),
             body: md.clone(),
         });
         let file = issue.render().unwrap();
         let back = jired::doc::IssueDoc::parse(&file).unwrap();
         prop_assert_eq!(&back.description, &md, "\n--- file ---\n{}", file);
-        prop_assert_eq!(back.comments.len(), 1, "\n--- file ---\n{}", file);
+        let ids: Vec<_> = back.comments.iter().map(|c| c.id.clone()).collect();
+        prop_assert_eq!(
+            ids,
+            vec![
+                jired::doc::CommentId::Existing("1".into()),
+                jired::doc::CommentId::Existing("2".into()),
+                jired::doc::CommentId::New,
+            ],
+            "\n--- file ---\n{}", file
+        );
+        prop_assert!(back.comments.iter().all(|c| c.body == md), "\n--- file ---\n{}", file);
+        prop_assert_eq!(back.worklogs.len(), 1, "\n--- file ---\n{}", file);
+        prop_assert_eq!(&back.worklogs[0].body, &md, "\n--- file ---\n{}", file);
         prop_assert_eq!(&back.comments[0].body, &md, "\n--- file ---\n{}", file);
         prop_assert!(back.extra_sections.is_empty(), "\n--- file ---\n{}", file);
     }

@@ -24,3 +24,4 @@ cc d8059eaf5f3f311451b6f6d269a3f88748ce6d9ae20692efc6433b6c7175bec6 # shrinks to
 cc 433693aa39fda6f6050615753afb5a83f9e8db7b2dfbc7d3f905644e64886bc6 # shrinks to text = "|Ф"
 cc 63b02d3648583558e161f68c6c448315de6a6298fe2fe4a6ef29f68a9cab3fcb # shrinks to doc = Document { blocks: [Heading { level: 2, content: [Text("Description")] }] }
 cc 20d813aad84e6098be40f929cde63d942a736329c355b7d6f0ecba2c25df9cdd # shrinks to text = "[~]"
+cc 2dc3334aca64ec51f596f4159f1f03b5ad0bdde1e9065603c94f3a74550bb6ee # shrinks to t = Table { header: Some([[Paragraph([Text("0")])]]), rows: [[[Paragraph([Strong([Text("# 0")])])]]] }
