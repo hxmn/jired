@@ -8,6 +8,13 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.12] — 2026-11-27
+
+### Changed
+
+- Nothing in jired's behaviour: the interactive form screens share one
+  controller for their keys.
+
 ## [0.39.11] — 2026-11-27
 
 ### Changed
