@@ -58,7 +58,8 @@ push(issue):
   if live.updated != base.base_updated and not --force:
       mark issue failed(stale) → contributes exit 5; instruct `jired pull`; SKIP issue
   for op in ops:
-      execute; on success mark done
+      execute; on success mark done; a comment or worklog just made gets its
+               server id in the file at once (`[new]` → `[c-ID]`/`[w-ID]`)
       on failure: mark failed + record error; ABORT remaining ops for this issue
                   (base NOT advanced; file untouched; issue still dirty)
   if all ops done:
@@ -69,8 +70,12 @@ push(issue):
 
 - Partial failure: exit 1 with per-issue results; `.state.db` never claims success
   that didn't happen (base advances only per confirmed issue).
-- Crash recovery: `jired push --resume` replays `pending_op` rows still `pending`;
-  `jired status` shows the journal.
+- Crash recovery: `jired push --resume` re-plans the issues with `pending_op`
+  rows from their files; `jired status` shows the journal. Re-planning cannot
+  make a comment or worklog twice, because one the server already made carries
+  its id in the file by then, and an id the base does not know is neither
+  created nor updated; the pull that a stale resume calls for takes the
+  server's copy of it.
 - Comment updates additionally check the comment's own `base_updated`.
 - Known limitation: Jira has no compare-and-set for issue edits, so a GET→PUT race
   window remains (documented; window minimized, PUT response `updated` re-verified).

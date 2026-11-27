@@ -367,7 +367,12 @@ enum Action {
     Transition {
         to_status: String,
     },
-    CreateComment(RichText),
+    /// `entry` counts the `[new]` comments in the file, this one among them,
+    /// so the file can be given the comment's id the moment it exists.
+    CreateComment {
+        body: RichText,
+        entry: usize,
+    },
     UpdateComment {
         id: String,
         body: RichText,
@@ -375,7 +380,11 @@ enum Action {
     DeleteComment {
         id: String,
     },
-    CreateWorklog(WorklogInput),
+    /// `entry` as for [`Action::CreateComment`], among the `[new]` worklogs.
+    CreateWorklog {
+        worklog: WorklogInput,
+        entry: usize,
+    },
     UpdateWorklog {
         id: String,
         worklog: WorklogInput,
@@ -1274,7 +1283,7 @@ fn create_issue(
     }];
     for f in &follow_ups {
         match perform(client, &new_key, &f.action) {
-            Ok(()) => {
+            Ok(_) => {
                 failure_kinds.push(None);
                 reports.push(OpReport {
                     kind: f.kind,
@@ -3076,9 +3085,11 @@ fn plan(
 
     plan_links(bf, wf, base_raw, link_types, &mut ops, warnings)?;
 
+    let mut new_entries = 0..;
     for c in &working.comments {
         match &c.id {
             CommentId::New => {
+                let entry = new_entries.next().unwrap_or_default();
                 if c.body.trim().is_empty() {
                     continue;
                 }
@@ -3088,7 +3099,7 @@ fn plan(
                     summary: first_line(&c.body),
                     request: json!({"method": "POST", "path": "/issue/{key}/comment",
                                     "body": {"body": rich.to_field_value()}}),
-                    action: Action::CreateComment(rich),
+                    action: Action::CreateComment { body: rich, entry },
                 });
             }
             CommentId::Existing(id) => {
@@ -3115,7 +3126,12 @@ fn plan(
         }
     }
 
+    let mut new_entries = 0..;
     for w in &working.worklogs {
+        let entry = match w.id {
+            WorklogId::New => new_entries.next().unwrap_or_default(),
+            WorklogId::Existing(_) => 0,
+        };
         let duration = validate_duration(w, &base.frontmatter.key, warnings);
         match (&w.id, duration) {
             (_, None) => continue,
@@ -3126,7 +3142,10 @@ fn plan(
                     summary: summarize_worklog(w),
                     request: json!({"method": "POST", "path": "/issue/{key}/worklog",
                                     "body": input.to_body()}),
-                    action: Action::CreateWorklog(input),
+                    action: Action::CreateWorklog {
+                        worklog: input,
+                        entry,
+                    },
                 });
             }
             (WorklogId::Existing(id), Some(time_spent)) => {
@@ -3599,6 +3618,7 @@ fn execute(
 
     let mut reports = Vec::new();
     let mut failure: Option<JiredError> = None;
+    let mut marked = Marked::default();
 
     for (op, op_id) in ops.iter().zip(op_ids.iter()) {
         if failure.is_some() {
@@ -3613,7 +3633,10 @@ fn execute(
             continue;
         }
         match perform(client, key, &op.action) {
-            Ok(()) => {
+            Ok(created) => {
+                if let Some(id) = created {
+                    record_created(ctx, engine, file, &op.action, &id, &mut marked);
+                }
                 engine.state.mark_op(*op_id, "done", None)?;
                 reports.push(OpReport {
                     kind: op.kind,
@@ -3718,9 +3741,68 @@ fn execute(
     })
 }
 
-fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
-    crate::api::block_on(async {
+/// How many `[new]` entries this push has given an id, per section.
+#[derive(Default)]
+struct Marked {
+    comments: usize,
+    worklogs: usize,
+}
+
+/// Give a comment or a worklog the push just made its id in the file.
+///
+/// Base advances only when the whole issue has gone out, and until then the
+/// file is what the next push plans from: left `[new]`, an entry the server
+/// already holds was posted again by the push after a later operation failed,
+/// after the re-read failed, or after an interrupt. A file that cannot be
+/// marked is warned about rather than failing an operation that succeeded.
+fn record_created(
+    ctx: &mut Context,
+    engine: &Engine,
+    file: &str,
+    action: &Action,
+    id: &str,
+    marked: &mut Marked,
+) {
+    // Entries are made in file order, so each one marked before this one in
+    // its section is a `[new]` fewer ahead of it.
+    let (section, entry, marker) = match action {
+        Action::CreateComment { entry, .. } => (
+            crate::doc::SECTION_COMMENTS,
+            entry - marked.comments,
+            format!("c-{id}"),
+        ),
+        Action::CreateWorklog { entry, .. } => (
+            crate::doc::SECTION_WORKLOGS,
+            entry - marked.worklogs,
+            format!("w-{id}"),
+        ),
+        _ => return,
+    };
+    let path = engine.projector.path_of(file);
+    let written = engine
+        .projector
+        .read_raw(file)
+        .ok()
+        .and_then(|text| crate::doc::assign_entry_id(&text, section, entry, &marker))
+        .map(|text| std::fs::write(&path, text));
+    if matches!(written, Some(Ok(()))) {
         match action {
+            Action::CreateComment { .. } => marked.comments += 1,
+            _ => marked.worklogs += 1,
+        }
+    } else {
+        ctx.out.warn(format!(
+            "{file}: {marker} was created, but its `[new]` heading could not be given \
+             the id; change it to `[{marker}]` before pushing again, or it is sent twice"
+        ));
+    }
+}
+
+/// Carry out one operation; for one that makes a comment or a worklog, the
+/// id the server gave it.
+fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<Option<String>> {
+    crate::api::block_on(async {
+        let done: Result<()> = match action {
             Action::UpdateFields(fields) => client.update_fields(key, fields.clone()).await,
             Action::UpdateDescription(rich) => {
                 client
@@ -3808,12 +3890,16 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                 client.create_remote_link(key, url, title).await
             }
             Action::DeleteRemoteLink { id } => client.delete_remote_link(key, id).await,
-            Action::CreateComment(body) => client.add_comment(key, body).await.map(|_| ()),
+            Action::CreateComment { body, .. } => {
+                return client.add_comment(key, body).await.map(|c| Some(c.id));
+            }
             Action::UpdateComment { id, body } => {
                 client.update_comment(key, id, body).await.map(|_| ())
             }
             Action::DeleteComment { id } => client.delete_comment(key, id).await,
-            Action::CreateWorklog(worklog) => client.add_worklog(key, worklog).await.map(|_| ()),
+            Action::CreateWorklog { worklog, .. } => {
+                return client.add_worklog(key, worklog).await.map(|w| Some(w.id));
+            }
             Action::UpdateWorklog { id, worklog } => {
                 client.update_worklog(key, id, worklog).await.map(|_| ())
             }
@@ -3822,7 +3908,8 @@ fn perform(client: &dyn JiraApi, key: &str, action: &Action) -> Result<()> {
                 .upload_attachment(key, filename, bytes.clone())
                 .await
                 .map(|_| ()),
-        }
+        };
+        done.map(|()| None)
     })
 }
 

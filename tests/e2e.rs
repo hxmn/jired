@@ -2099,6 +2099,63 @@ fn an_interrupted_push_is_replayed_by_resume() {
         .contains("summary: Retried"));
 }
 
+/// A comment the server made before a later operation failed is in Jira,
+/// and the file has to say so: left `[new]`, the pull that the stale push
+/// sent the user to kept it beside the server's copy, and the next push
+/// posted it again.
+#[test]
+fn a_comment_made_before_a_failure_is_not_posted_again() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    ws.write_fixture(
+        "faults.json",
+        serde_json::json!({
+            "POST /issue/PROJ-142/worklog": { "kind": "generic", "message": "boom" }
+        }),
+    );
+    let text = ws
+        .read(ISSUE_FILE)
+        .replace("## Comments\n", "## Comments\n\n### [new]\n\nOn it.\n")
+        .replace(
+            "## Worklogs\n",
+            "## Worklogs\n\n### [new] 1h\n\nTraced it.\n",
+        );
+    ws.write(ISSUE_FILE, &text);
+
+    let report = ws.json_code(&["push"], 1);
+    let ops = report["results"][0]["ops"].as_array().unwrap();
+    assert!(
+        ops.iter()
+            .any(|o| o["kind"] == "create_comment" && o["status"] == "done"),
+        "{report}"
+    );
+    let file = ws.read(ISSUE_FILE);
+    assert!(!file.contains("### [new]\n\nOn it."), "{file}");
+    assert!(
+        file.contains("### [new] 1h"),
+        "the worklog was not made:\n{file}"
+    );
+
+    std::fs::remove_file(ws.fixtures.join("faults.json")).unwrap();
+    ws.json(&["pull"]);
+    let (report, calls) = journaled(&ws, &["push"]);
+    assert_eq!(report["summary"]["failed"], 0, "{report}");
+    let posted: Vec<_> = calls
+        .iter()
+        .filter(|c| c["method"] == "POST" && c["path"] == "/issue/PROJ-142/comment")
+        .collect();
+    assert!(posted.is_empty(), "the comment went out again: {posted:?}");
+    assert!(
+        calls.iter().any(|c| c["path"] == "/issue/PROJ-142/worklog"),
+        "{calls:?}"
+    );
+
+    let file = ws.read(ISSUE_FILE);
+    assert_eq!(file.matches("On it.").count(), 1, "{file}");
+    assert!(!file.contains("### [new]"), "{file}");
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();

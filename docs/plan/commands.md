@@ -256,7 +256,11 @@ every failure shares one kind (all-lossy → 6, all-auth → 3) and 1 when the c
 are mixed.
 A retry re-plans the same work from the same working copy — base never advanced
 for a failure — so its journal *replaces* the failed attempt's rows for that
-issue rather than piling a second identical set beside them. And work an earlier
+issue rather than piling a second identical set beside them. What the failed
+attempt did get done is not planned again where repeating it would add to it: a
+comment or worklog the server made is given its id in the file the moment it
+exists, `### [new]` becoming `### [c-ID]`, so neither the retry nor a pull in
+between takes it for one still to post. And work an earlier
 push left unfinished is named in `warnings` when this push did not touch its
 issue: `summary.failed: 0` is true of what was attempted now and silent about
 the queue, and a caller reading only the push report used to have no way to know

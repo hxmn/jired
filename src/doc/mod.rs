@@ -347,6 +347,61 @@ pub fn section_headings(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The file's text with its `nth` `[new]` entry under `section` given the
+/// server's id: `### [new] 45m` becomes `### [w-10500] 45m`. `None` when the
+/// file holds no such entry.
+///
+/// A push writes this as soon as the server has made the entry, before the
+/// rest of the issue goes out. Until then the file says the entry is still to
+/// be made, and a push that failed later on, or whose re-read failed, left it
+/// saying so: the next push made it again, and a pull kept it alongside the
+/// server's copy. Only the marker changes, so nothing else in the file is
+/// rewritten under the person editing it.
+pub fn assign_entry_id(text: &str, section: &str, nth: usize, id_marker: &str) -> Option<String> {
+    let (_, body) = split_frontmatter(text).ok()?;
+    let body_at = text.len() - body.len();
+    let mut tracker = Sections::default();
+    let mut current: Option<&str> = None;
+    let mut seen = 0usize;
+    let mut offset = body_at;
+    let raw_lines = text[body_at..].split_inclusive('\n');
+    for (line, raw) in ScanLines::new(&text[body_at..]).zip(raw_lines) {
+        let at = offset;
+        offset += raw.len();
+        let Scanned::Heading {
+            level,
+            text: heading,
+            ..
+        } = line
+        else {
+            continue;
+        };
+        let opens = tracker.opens(level, heading);
+        if level == 2 && opens {
+            current = Some(heading);
+            continue;
+        }
+        if level != 3 || current != Some(section) || !is_entry_heading(heading) {
+            continue;
+        }
+        let open = raw.find('[')?;
+        let close = open + raw[open..].find(']')?;
+        if !raw[open + 1..close].trim().eq_ignore_ascii_case("new") {
+            continue;
+        }
+        if seen == nth {
+            let mut out = String::with_capacity(text.len() + id_marker.len());
+            out.push_str(&text[..at + open]);
+            out.push('[');
+            out.push_str(id_marker);
+            out.push_str(&text[at + close..]);
+            return Some(out);
+        }
+        seen += 1;
+    }
+    None
+}
+
 /// Which `## ` headings in a body open a section of the file, and which are
 /// content of the section they sit in.
 ///
@@ -1272,6 +1327,24 @@ mod tests {
         // Backticks in the info string make it inline code, not a fence.
         assert!(Fence::opening("```a`b").is_none());
         assert!(Fence::opening("~~~a`b").is_some());
+    }
+
+    /// Only the marker of the entry asked for changes; a `[new]` inside a code
+    /// block, or under the other section, is not an entry to count.
+    #[test]
+    fn an_entry_made_on_the_server_is_given_its_id_in_place() {
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Comments\n\n### [new] first\n\n```\n### [new] code\n```\n\n");
+        s.push_str("### [ NEW ]\r\n\nsecond\n\n## Worklogs\n\n### [new] 1h\n\nnote\n");
+        let second = assign_entry_id(&s, SECTION_COMMENTS, 1, "c-7").unwrap();
+        assert_eq!(second, s.replace("### [ NEW ]", "### [c-7]"));
+        let doc = IssueDoc::parse(&second).unwrap();
+        assert_eq!(doc.comments[1].id, CommentId::Existing("7".into()));
+        assert_eq!(doc.comments[0].id, CommentId::New);
+
+        let worklog = assign_entry_id(&s, SECTION_WORKLOGS, 0, "w-9").unwrap();
+        assert!(worklog.contains("### [w-9] 1h\n"), "{worklog}");
+        assert!(assign_entry_id(&s, SECTION_COMMENTS, 2, "c-8").is_none());
     }
 
     /// Doctor tells an old file from a new one by which headings it carries, so
