@@ -16,6 +16,7 @@
 //! | [`style`] | terminal colour, decided once per stream |
 //! | [`sync`] | fetch/pull/push engine and three-way merge |
 //! | [`project`] | filesystem projector: names, files, links |
+//! | [`rules`] | sprint, release and filter rules, apart from their commands |
 //! | [`report`] | figures read back off the working copy |
 //! | [`tui`] | full-screen interactive screens |
 
@@ -29,6 +30,7 @@ pub mod error;
 pub mod json;
 pub mod project;
 pub mod report;
+pub mod rules;
 pub mod store;
 pub mod style;
 pub mod sync;

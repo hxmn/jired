@@ -4,6 +4,7 @@ use crate::cli::context::Context;
 use crate::cli::GlobalArgs;
 use crate::error::{ExitCode, Result};
 use crate::json::Out;
+use crate::rules::sprint::pick_board;
 use crate::style::{self, CYAN, DIM};
 use clap::Args;
 
@@ -108,54 +109,6 @@ pub fn run_boards(g: &GlobalArgs, args: &BoardsArgs, out: Out) -> Result<ExitCod
     Ok(ExitCode::Success)
 }
 
-/// The board a `--board` value names, out of the ones a project has.
-///
-/// Matching is by id first and then by name, because an id is what the API
-/// wants and a name is what a person has. With nothing named, a project with
-/// one board needs no flag — there is no choice to make.
-pub(crate) fn pick_board<'a>(
-    boards: &'a [crate::api::Board],
-    wanted: Option<&str>,
-) -> Result<&'a crate::api::Board> {
-    let Some(wanted) = wanted.map(str::trim).filter(|w| !w.is_empty()) else {
-        return match boards {
-            [only] => Ok(only),
-            [] => Err(
-                crate::error::JiredError::missing_value("this project has no boards")
-                    .with_hint("run `jired boards` to see what this account can address"),
-            ),
-            many => Err(
-                crate::error::JiredError::missing_value("a board is required")
-                    .with_detail("flag", "--board")
-                    .with_hint(format!("one of: {}", board_names(many))),
-            ),
-        };
-    };
-    if let Some(by_id) = boards.iter().find(|b| b.id == wanted) {
-        return Ok(by_id);
-    }
-    let mut named = boards
-        .iter()
-        .filter(|b| b.name.eq_ignore_ascii_case(wanted));
-    let Some(first) = named.next() else {
-        return Err(
-            crate::error::JiredError::usage(format!("no board called `{wanted}`"))
-                .with_detail("board", wanted.to_string())
-                .with_hint(format!("one of: {}", board_names(boards))),
-        );
-    };
-    match named.next() {
-        None => Ok(first),
-        // Two boards with one name: an id is the only thing that tells them
-        // apart, and guessing would create the sprint on the wrong one.
-        Some(_) => Err(crate::error::JiredError::usage(format!(
-            "several boards are called `{wanted}`"
-        ))
-        .with_detail("board", wanted.to_string())
-        .with_hint("name the one you mean by its id — `jired boards` lists them")),
-    }
-}
-
 /// The sprints every board agrees on, when there is such a thing.
 ///
 /// Several boards over one project's backlog commonly share a sprint pool — the
@@ -184,15 +137,6 @@ fn sprint_ids(sprints: &[crate::api::Sprint]) -> Vec<&str> {
     let mut ids: Vec<&str> = sprints.iter().map(|s| s.id.as_str()).collect();
     ids.sort_unstable();
     ids
-}
-
-/// Boards by name, for an error that has to say what the choices are.
-pub(crate) fn board_names(boards: &[crate::api::Board]) -> String {
-    boards
-        .iter()
-        .map(|b| format!("{} ({})", b.name, b.id))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 pub fn run_sprints(g: &GlobalArgs, args: &SprintsArgs, out: Out) -> Result<ExitCode> {
