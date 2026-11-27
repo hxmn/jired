@@ -8,6 +8,23 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.6] — 2026-11-27
+
+### Fixed
+
+- **An issue whose create was never answered is not created twice.** When
+  the answer to a create was lost (a timeout, a proxy's 502) or `jired`
+  stopped before it came, the next push created the issue again. It now
+  looks first for an issue you made in the project since then with the same
+  summary, and finishes that one; when several match, it stops that issue
+  and names them.
+- **An issue created by a push that then failed is finished by the next
+  one.** If the read-back after a create failed, the file stayed
+  `NEW-….md`, nothing listed it, and a later pull wrote the issue a second
+  file. The next push now renames it to the real key, keeps what had not yet
+  reached the server (status, sprint, checklist, links) and sends that as an
+  ordinary edit.
+
 ## [0.28.5] — 2026-11-27
 
 ### Fixed
