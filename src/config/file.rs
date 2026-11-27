@@ -32,8 +32,14 @@ impl ConfigFile {
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
             Ok(text) => {
-                let mut cfg = Self::from_toml(&text)
-                    .map_err(|e| JiredError::usage(format!("{}: {}", path.display(), e.message)))?;
+                let mut cfg = Self::from_toml(&text).map_err(|e| {
+                    let err = JiredError::usage(format!("{}: {}", path.display(), e.message))
+                        .with_detail("file", path.display().to_string());
+                    match &e.hint {
+                        Some(hint) => err.with_hint(hint.clone()),
+                        None => err,
+                    }
+                })?;
                 cfg.path = Some(path.to_path_buf());
                 Ok(cfg)
             }
@@ -85,17 +91,66 @@ impl ConfigFile {
             .with_detail("key", key)
             .with_hint("run `jired init` to store credentials in the keychain"));
         }
+        let item = self.table_for(key)?;
+        let last = key.rsplit('.').next().unwrap_or(key);
+        item[last] = Item::Value(parse_scalar(value));
+        Ok(())
+    }
+
+    /// The table a dotted key's last part goes in, made where missing. A part
+    /// that is already a value cannot hold another: `checklist = "x"` and
+    /// `config set checklist.field …` panicked indexing into the string.
+    fn table_for(&mut self, key: &str) -> Result<&mut Item> {
         let parts: Vec<&str> = key.split('.').collect();
-        let (last, tables) = parts.split_last().expect("non-empty key");
+        let (_, tables) = parts.split_last().expect("non-empty key");
         let mut item: &mut Item = self.doc.as_item_mut();
+        let mut path = String::new();
         for part in tables {
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(part);
             if item.get(part).is_none() {
                 item[*part] = Item::Table(Table::new());
             }
-            item = item.get_mut(part).expect("just inserted");
+            let next = item.get_mut(part).expect("just inserted");
+            if !next.is_table_like() {
+                return Err(JiredError::usage(format!(
+                    "`{path}` is set to a value, so `{key}` cannot go under it"
+                ))
+                .with_detail("key", key)
+                .with_hint(format!(
+                    "`jired config unset {path}`, or `jired config edit`"
+                )));
+            }
+            item = next;
         }
-        item[*last] = Item::Value(parse_scalar(value));
-        Ok(())
+        Ok(item)
+    }
+
+    /// Every dotted key the file sets that is not a jired setting: a typo such
+    /// as `[tsl]` read as configured and did nothing.
+    pub fn unknown_keys(&self) -> Vec<String> {
+        fn walk(prefix: &str, table: &dyn toml_edit::TableLike, out: &mut Vec<String>) {
+            for (name, item) in table.iter() {
+                let key = if prefix.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                match item.as_table_like() {
+                    Some(inner) if keys::lookup(&key).is_none() => walk(&key, inner, out),
+                    _ => {
+                        if keys::lookup(&key).is_none() {
+                            out.push(key);
+                        }
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk("", self.doc.as_table(), &mut out);
+        out
     }
 
     /// Write a dotted key that holds several values, as a TOML array.
@@ -103,15 +158,9 @@ impl ConfigFile {
     /// A root-level key lands above the first table, which is where TOML needs
     /// it to stay a root-level key.
     pub fn set_list(&mut self, key: &str, values: &[String]) -> Result<()> {
-        let parts: Vec<&str> = key.split('.').collect();
-        let (last, tables) = parts.split_last().expect("non-empty key");
-        let mut item: &mut Item = self.doc.as_item_mut();
-        for part in tables {
-            if item.get(part).is_none() {
-                item[*part] = Item::Table(Table::new());
-            }
-            item = item.get_mut(part).expect("just inserted");
-        }
+        let last = key.rsplit('.').next().unwrap_or(key).to_string();
+        let item = self.table_for(key)?;
+        let last = last.as_str();
         let mut array = Array::new();
         for value in values {
             array.push(value.as_str());
@@ -120,7 +169,7 @@ impl ConfigFile {
         // A blank line after it, so a root-level list does not read as part of
         // the table that follows it.
         *value.decor_mut() = Decor::new(" ", "\n");
-        item[*last] = Item::Value(value);
+        item[last] = Item::Value(value);
         self.document(key);
         Ok(())
     }

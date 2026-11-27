@@ -170,7 +170,9 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
             );
         }
         ConfigCmd::Path(a) => {
-            let ctx = Context::open_optional(g, out)?;
+            // Lenient: a file that does not parse is what this is asked
+            // about, and refusing to say where it is locked people out.
+            let ctx = Context::open_optional_lenient(g, out)?;
             let path = target_path(&ctx, a.global)?;
             out.say(path.display().to_string());
             out.emit(
@@ -181,7 +183,7 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
             );
         }
         ConfigCmd::Edit(a) => {
-            let ctx = Context::open_optional(g, out)?;
+            let ctx = Context::open_optional_lenient(g, out)?;
             let path = target_path(&ctx, a.global)?;
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(crate::error::io_ctx("create", parent))?;

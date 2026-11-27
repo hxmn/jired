@@ -41,7 +41,17 @@ impl Context {
             }
             None => Workspace::discover(&std::env::current_dir()?)?,
         };
-        Self::build(g, conn, out, workspace)
+        Self::build(g, conn, out, workspace, false)
+    }
+
+    /// [`Context::open_with`] for `doctor`, which has to run on a workspace
+    /// whose config does not parse: that is one of the things it is for.
+    pub fn open_with_lenient(g: &GlobalArgs, conn: &ConnectionArgs, out: Out) -> Result<Self> {
+        let workspace = match &g.dir {
+            Some(dir) => Workspace::at(dir),
+            None => Workspace::discover(&std::env::current_dir()?)?,
+        };
+        Self::build(g, conn, out, workspace, true)
     }
 
     /// Context for `init`: the workspace is *this* directory, whether or not it
@@ -60,7 +70,7 @@ impl Context {
             Some(dir) => dir.clone(),
             None => std::env::current_dir()?,
         };
-        Self::build(g, conn, out, Workspace::at(root))
+        Self::build(g, conn, out, Workspace::at(root), false)
     }
 
     /// Context for `config`, which has to work before `init` — setting
@@ -72,7 +82,19 @@ impl Context {
             None => std::env::current_dir()?,
         };
         let workspace = Workspace::discover(&root).unwrap_or_else(|_| Workspace::at(root));
-        Self::build(g, &ConnectionArgs::default(), out, workspace)
+        Self::build(g, &ConnectionArgs::default(), out, workspace, false)
+    }
+
+    /// [`Context::open_optional`] for `config edit` and `config path`, which
+    /// are how a broken config file gets mended: a file that does not parse
+    /// is read as empty, with a warning, instead of locking them out.
+    pub fn open_optional_lenient(g: &GlobalArgs, out: Out) -> Result<Self> {
+        let root = match &g.dir {
+            Some(dir) => dir.clone(),
+            None => std::env::current_dir()?,
+        };
+        let workspace = Workspace::discover(&root).unwrap_or_else(|_| Workspace::at(root));
+        Self::build(g, &ConnectionArgs::default(), out, workspace, true)
     }
 
     fn build(
@@ -80,8 +102,33 @@ impl Context {
         conn: &ConnectionArgs,
         out: Out,
         workspace: Workspace,
+        lenient: bool,
     ) -> Result<Self> {
         let local_path = workspace.is_initialized().then(|| workspace.config_path());
+        let load = |path: Option<std::path::PathBuf>| -> Result<ConfigFile> {
+            let Some(path) = path else {
+                return Ok(ConfigFile::empty());
+            };
+            match ConfigFile::load(&path) {
+                Ok(cfg) => {
+                    for key in cfg.unknown_keys() {
+                        out.warn(format!(
+                            "{}: `{key}` is not a jired setting and is ignored",
+                            path.display()
+                        ));
+                    }
+                    Ok(cfg)
+                }
+                Err(e) if lenient => {
+                    out.warn(format!("{e} — carrying on without it"));
+                    Ok(ConfigFile::empty())
+                }
+                Err(e) => Err(e),
+            }
+        };
+        let local = load(local_path)?;
+        let extra = load(g.config.clone())?;
+        let global = load(crate::config::global_config_path())?;
 
         // Two passes: whether we may prompt is itself a setting, so the chain has
         // to be resolvable before it is answered. The first resolver is built
@@ -89,9 +136,9 @@ impl Context {
         let mut probe = Resolver::builder()
             .flag_bool("ui.no_input", g.no_input)
             .env_from_process()
-            .local_file(local_path.clone())?
-            .extra_file(g.config.clone())?
-            .global_file(crate::config::global_config_path())?
+            .local(local.clone())
+            .extra(extra.clone())
+            .global(global.clone())
             .interactive(false)
             .build();
         let no_input = g.no_input || probe.get_bool("ui.no_input")?.unwrap_or(false);
@@ -114,9 +161,9 @@ impl Context {
             .flag_bool("tls.insecure", g.insecure)
             .flag_bool("ui.no_input", g.no_input)
             .env_from_process()
-            .local_file(local_path)?
-            .extra_file(g.config.clone())?
-            .global_file(crate::config::global_config_path())?
+            .local(local)
+            .extra(extra)
+            .global(global)
             .interactive(interactive)
             .prompter(Box::new(crate::cli::cmd::prompt::TerminalPrompter))
             .build();

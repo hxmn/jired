@@ -145,10 +145,21 @@ impl Resolver {
         }
     }
 
+    /// A yes-or-no setting. Anything that is neither is refused: read as
+    /// "no", `JIRED_NO_INPUT=ture` quietly left prompts on.
     pub fn get_bool(&mut self, key: &str) -> Result<Option<bool>> {
-        Ok(self
-            .get_value(key)?
-            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")))
+        let Some(v) = self.get_value(key)? else {
+            return Ok(None);
+        };
+        match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(Some(true)),
+            "0" | "false" | "no" | "off" | "" => Ok(Some(false)),
+            _ => Err(
+                JiredError::usage(format!("`{key}` is `{v}`, which is not yes or no"))
+                    .with_detail("key", key)
+                    .with_hint("use true or false"),
+            ),
+        }
     }
 
     /// Resolve a setting that holds several values.
@@ -270,6 +281,11 @@ impl ResolverBuilder {
             None => ConfigFile::empty(),
         });
         Ok(self)
+    }
+
+    pub fn extra(mut self, cfg: ConfigFile) -> Self {
+        self.extra = Some(cfg);
+        self
     }
 
     pub fn global_file(mut self, path: Option<PathBuf>) -> Result<Self> {
@@ -452,6 +468,22 @@ mod tests {
 
         let val = all(true, true, true, true, true).unwrap().0;
         assert_eq!(val, "https://flag");
+    }
+
+    /// A yes-or-no that is neither is refused, not read as no.
+    #[test]
+    fn a_boolean_that_is_neither_is_refused() {
+        let mut r = Resolver::builder()
+            .env_map(env(&[("JIRED_NO_INPUT", "ture")]))
+            .build();
+        assert_eq!(
+            r.get_bool("ui.no_input").unwrap_err().kind,
+            ErrorKind::Usage
+        );
+        let mut r = Resolver::builder()
+            .env_map(env(&[("JIRED_NO_INPUT", "off")]))
+            .build();
+        assert_eq!(r.get_bool("ui.no_input").unwrap(), Some(false));
     }
 
     #[test]

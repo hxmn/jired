@@ -2534,6 +2534,54 @@ fn a_config_file_named_by_flag_is_read_inside_a_workspace() {
     assert_eq!(got["source"], "local-config", "{got}");
 }
 
+/// The commands that mend a broken config have to run with one: `config
+/// path`, `config edit` and `doctor` exited 2 on a file that did not parse.
+#[test]
+fn a_broken_config_does_not_lock_out_what_mends_it() {
+    let ws = Ws::new();
+    ws.init();
+    let config = ws.path().join(".jired/config.toml");
+    let good = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, format!("{good}\n[[[ not toml\n")).unwrap();
+
+    let path = ws.json(&["config", "path"]);
+    assert!(
+        path["file"].as_str().unwrap().ends_with("config.toml"),
+        "{path}"
+    );
+    let out = ws.cmd(&["doctor", "--dry-run", "--json"]).output().unwrap();
+    let doc: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+    assert!(doc.to_string().contains("config edit"), "{doc}");
+}
+
+/// A key under a value, a misspelled table, a yes-or-no that is neither:
+/// a panic, silence and a quiet "no" before.
+#[test]
+fn config_mistakes_are_said_rather_than_crashed_on_or_ignored() {
+    let ws = Ws::new();
+    ws.init();
+    let config = ws.path().join(".jired/config.toml");
+    let good = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        format!("checklist = \"x\"\n{good}\n[tsl]\ninsecure = true\n"),
+    )
+    .unwrap();
+
+    let err = ws.json_err(&["config", "set", "checklist.field", "Checklist"], 2);
+    assert!(
+        err["message"].as_str().unwrap().contains("checklist"),
+        "{err}"
+    );
+
+    let got = ws.json(&["config", "get", "links.mode"]);
+    assert!(
+        got["warnings"].to_string().contains("tsl.insecure"),
+        "{got}"
+    );
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();

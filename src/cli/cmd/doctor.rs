@@ -110,7 +110,9 @@ struct DoctorReport {
 }
 
 pub fn run(g: &GlobalArgs, args: &DoctorArgs, out: Out) -> Result<ExitCode> {
-    let mut ctx = Context::open_with(g, &args.conn, out)?;
+    // Lenient, so a config file that does not parse is a finding rather than
+    // the reason doctor will not start.
+    let mut ctx = Context::open_with_lenient(g, &args.conn, out)?;
 
     // Always survey first. Doctor renames files, rewrites config and moves
     // credentials; someone typing `jired doctor` to find out what is wrong
@@ -346,7 +348,15 @@ fn insecure_mode(_ws: &crate::workspace::Workspace) -> bool {
 /// The config file names every setting, so nothing has to be guessed later.
 fn check_config(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
     let path = ctx.workspace.config_path();
-    let mut cfg = ctx.local_config()?;
+    let mut cfg = match ctx.local_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            return Ok(problem(
+                "config",
+                format!("{e} — `jired config edit` opens it"),
+            ))
+        }
+    };
     if cfg.get("server.url").is_none() {
         return Ok(problem(
             "config",
