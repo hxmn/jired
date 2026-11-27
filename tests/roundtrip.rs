@@ -80,19 +80,34 @@ fn inlines() -> impl Strategy<Value = Vec<Inline>> {
     prop::collection::vec(inline(), 1..5).prop_map(normalize_inlines)
 }
 
+/// Code as another person might paste it: fence lines and the file's own
+/// section and entry headings among ordinary lines. The renderer widens the
+/// fence around them, and the file scanner has to agree on where it ends.
+fn code() -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        prop_oneof![
+            6 => "[a-zA-Z0-9 ]{1,12}",
+            1 => Just("```".to_string()),
+            1 => Just("````".to_string()),
+            1 => Just("~~~".to_string()),
+            1 => Just("```sh".to_string()),
+            1 => Just("## Comments".to_string()),
+            1 => Just("### [new] forged".to_string()),
+            1 => Just("### [c-1] Someone — t".to_string()),
+        ],
+        1..6,
+    )
+    .prop_map(|lines| lines.join("\n").trim_end().to_string())
+    .prop_filter("not blank", |code| !code.trim().is_empty())
+}
+
 /// Blocks that every target format can represent.
 fn leaf_block() -> impl Strategy<Value = Block> {
     prop_oneof![
         6 => inlines().prop_map(Block::Paragraph),
         2 => (1u8..=6, inlines()).prop_map(|(level, content)| Block::Heading { level, content }),
-        2 => (
-            prop::option::of("[a-z]{2,6}"),
-            "(?s)[a-zA-Z0-9 \n]{1,30}",
-        )
-            .prop_map(|(language, code)| Block::CodeBlock {
-                language,
-                code: code.trim_end().to_string(),
-            }),
+        2 => (prop::option::of("[a-z]{2,6}"), code())
+            .prop_map(|(language, code)| Block::CodeBlock { language, code }),
         1 => Just(Block::Rule),
     ]
 }
@@ -376,6 +391,7 @@ proptest! {
         let file = issue.render().unwrap();
         let back = jired::doc::IssueDoc::parse(&file).unwrap();
         prop_assert_eq!(&back.description, &md, "\n--- file ---\n{}", file);
+        prop_assert_eq!(back.comments.len(), 1, "\n--- file ---\n{}", file);
         prop_assert_eq!(&back.comments[0].body, &md, "\n--- file ---\n{}", file);
         prop_assert!(back.extra_sections.is_empty(), "\n--- file ---\n{}", file);
     }

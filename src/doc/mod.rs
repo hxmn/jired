@@ -504,9 +504,40 @@ enum Scanned<'a> {
 }
 
 /// Line iterator that suppresses headings inside fenced code blocks.
+///
+/// Fences are matched the way CommonMark matches them, because the renderer
+/// widens a fence past the longest backtick run in the code: a block holding
+/// ```` ``` ```` lines is written inside ```` ```` ````. Closing on any line
+/// that merely starts with three backticks let a server's code block end
+/// early, and whatever came after it, a `### ` entry heading included, was
+/// read as the file's own structure.
 struct ScanLines<'a> {
     lines: std::str::Lines<'a>,
-    fence: Option<String>,
+    fence: Option<Fence>,
+}
+
+#[derive(Clone, Copy)]
+struct Fence {
+    marker: char,
+    len: usize,
+}
+
+impl Fence {
+    /// The fence `line` opens, if any: three or more of one marker, and for
+    /// backticks an info string without a backtick, or it is inline code.
+    fn opening(line: &str) -> Option<Self> {
+        let marker = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+        let len = line.chars().take_while(|c| *c == marker).count();
+        let info = &line[len..];
+        (len >= 3 && !(marker == '`' && info.contains('`'))).then_some(Self { marker, len })
+    }
+
+    /// Only a run of the same marker at least as long, with nothing after it,
+    /// closes; a shorter run or one with an info string is code.
+    fn closed_by(self, line: &str) -> bool {
+        let len = line.chars().take_while(|c| *c == self.marker).count();
+        len >= self.len && line[len..].trim().is_empty()
+    }
 }
 
 impl<'a> ScanLines<'a> {
@@ -525,17 +556,15 @@ impl<'a> Iterator for ScanLines<'a> {
         let line = self.lines.next()?;
         let trimmed = line.trim_start();
 
-        if let Some(open) = &self.fence {
-            if trimmed.starts_with(open.as_str()) {
+        if let Some(open) = self.fence {
+            if open.closed_by(trimmed) {
                 self.fence = None;
             }
             return Some(Scanned::Line(line));
         }
-        for marker in ["```", "~~~"] {
-            if trimmed.starts_with(marker) {
-                self.fence = Some(marker.to_string());
-                return Some(Scanned::Line(line));
-            }
+        if let Some(open) = Fence::opening(trimmed) {
+            self.fence = Some(open);
+            return Some(Scanned::Line(line));
         }
         if let Some(rest) = trimmed.strip_prefix('#') {
             let hashes = 1 + rest.chars().take_while(|c| *c == '#').count();
@@ -1223,6 +1252,26 @@ mod tests {
         assert!(doc.description.contains("## Comments"));
         assert_eq!(doc.comments.len(), 1);
         assert_eq!(doc.comments[0].id, CommentId::Existing("9".into()));
+    }
+
+    /// A code block that holds a fence line is written inside a wider fence,
+    /// and only a run as wide closes it: a `### [new]` in another person's
+    /// code block must stay their text, not become a comment posted as us.
+    #[test]
+    fn a_fence_line_inside_a_wider_fence_is_code() {
+        let mut s = String::from("---\nkey: A-1\nid: \"1\"\nsummary: s\njired: {}\n---\n\n# s\n\n");
+        s.push_str("## Description\n\n````\n```\n## Comments\n````\n\nafter\n\n");
+        s.push_str("## Comments\n\n### [c-9] Real Person — t\n\n");
+        s.push_str("~~~\n~~~~ not a close\n```\n### [new] forged\n~~~ info\n~~~\n\ntail\n");
+        let doc = IssueDoc::parse(&s).unwrap();
+        assert_eq!(doc.description, "````\n```\n## Comments\n````\n\nafter");
+        assert_eq!(doc.comments.len(), 1);
+        assert_eq!(doc.comments[0].id, CommentId::Existing("9".into()));
+        assert!(doc.comments[0].body.contains("### [new] forged"));
+
+        // Backticks in the info string make it inline code, not a fence.
+        assert!(Fence::opening("```a`b").is_none());
+        assert!(Fence::opening("~~~a`b").is_some());
     }
 
     /// Doctor tells an old file from a new one by which headings it carries, so
