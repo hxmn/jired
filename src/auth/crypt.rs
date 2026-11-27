@@ -52,15 +52,28 @@ fn getrandom(buf: &mut [u8]) -> Result<()> {
     })
 }
 
-fn derive(passphrase: &str, params: &KdfParams) -> Result<[u8; KEY_LEN]> {
+/// The key a passphrase and a salt make, wiped from memory when dropped.
+///
+/// The parameters come from the stored JSON, so they are bounded: a file
+/// someone edited to `log_n = 30` would otherwise ask scrypt for gigabytes
+/// before anything said the file was wrong.
+fn derive(passphrase: &str, params: &KdfParams) -> Result<zeroize::Zeroizing<[u8; KEY_LEN]>> {
+    if params.log_n > 20 || params.r > 32 || params.p > 16 {
+        return Err(JiredError::auth(format!(
+            "the stored credential asks for key-derivation work far past what jired writes \
+             (log_n {}, r {}, p {})",
+            params.log_n, params.r, params.p
+        ))
+        .with_hint("run `jired init --force` to store it again"));
+    }
     let salt = hex::decode(&params.salt).map_err(|_| {
         JiredError::auth("the stored credential is damaged (malformed salt)")
             .with_hint("run `jired init --force` to store it again")
     })?;
     let sp = scrypt::Params::new(params.log_n, params.r, params.p, KEY_LEN)
         .map_err(|e| JiredError::auth(format!("invalid key-derivation parameters: {e}")))?;
-    let mut key = [0u8; KEY_LEN];
-    scrypt::scrypt(passphrase.as_bytes(), &salt, &sp, &mut key)
+    let mut key = zeroize::Zeroizing::new([0u8; KEY_LEN]);
+    scrypt::scrypt(passphrase.as_bytes(), &salt, &sp, key.as_mut())
         .map_err(|e| JiredError::auth(format!("key derivation failed: {e}")))?;
     Ok(key)
 }
@@ -73,7 +86,7 @@ pub fn seal(plaintext: &[u8], passphrase: &str) -> Result<(Vec<u8>, String)> {
         ..Default::default()
     };
     let key = derive(passphrase, &params)?;
-    let cipher = XChaCha20Poly1305::new((&key).into());
+    let cipher = XChaCha20Poly1305::new(key.as_ref().into());
     let nonce_bytes = hex::decode(&params.nonce).expect("just encoded");
     let ciphertext = cipher
         .encrypt(XNonce::from_slice(&nonce_bytes), plaintext)
@@ -100,7 +113,7 @@ pub fn open(ciphertext: &[u8], kdf_json: &str, passphrase: &str) -> Result<Vec<u
         JiredError::auth("the stored credential is damaged (malformed nonce)")
             .with_hint("run `jired init --force` to store it again")
     })?;
-    let cipher = XChaCha20Poly1305::new((&key).into());
+    let cipher = XChaCha20Poly1305::new(key.as_ref().into());
     cipher
         .decrypt(XNonce::from_slice(&nonce), ciphertext)
         .map_err(|_| {
@@ -114,6 +127,17 @@ pub fn open(ciphertext: &[u8], kdf_json: &str, passphrase: &str) -> Result<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parameters past what jired writes are refused before scrypt runs.
+    #[test]
+    fn key_derivation_work_is_bounded() {
+        let params = KdfParams {
+            log_n: 30,
+            salt: "00".into(),
+            ..Default::default()
+        };
+        assert!(derive("pass", &params).is_err());
+    }
 
     #[test]
     fn round_trips() {

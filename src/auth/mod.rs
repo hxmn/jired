@@ -100,7 +100,7 @@ impl SecretStorage {
 /// What `session.db` persists for a credential. Never contains a live secret
 /// unless storage is [`SecretStorage::Plaintext`] and the store is
 /// [`CredStore::LocalDb`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StoredSecret {
     pub store: CredStore,
     /// Entry name in the keychain or the user credential file.
@@ -109,6 +109,22 @@ pub struct StoredSecret {
     pub blob: Option<Vec<u8>>,
     /// Encryption parameters; absent means the bytes are the raw token.
     pub kdf: Option<String>,
+}
+
+/// By hand, so the bytes never print: under `--insecure-store` they are the
+/// token itself.
+impl std::fmt::Debug for StoredSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredSecret")
+            .field("store", &self.store)
+            .field("reference", &self.reference)
+            .field(
+                "blob",
+                &self.blob.as_ref().map(|b| format!("<{} bytes>", b.len())),
+            )
+            .field("kdf", &self.kdf.is_some())
+            .finish()
+    }
 }
 
 impl Default for StoredSecret {

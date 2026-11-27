@@ -59,6 +59,10 @@ fn read(path: &Path) -> Result<DocumentMut> {
 /// Write one account's secret, leaving every other entry untouched.
 pub fn save(name: &str, blob: &[u8], kdf: Option<&str>) -> Result<PathBuf> {
     let path = require_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = lock(&path)?;
     let mut doc = read(&path)?;
 
     let mut table = Table::new();
@@ -119,11 +123,28 @@ pub fn remove(name: &str) {
     if !path.is_file() {
         return;
     }
+    let Ok(_lock) = lock(&path) else { return };
     let Ok(mut doc) = read(&path) else { return };
     if doc.as_table_mut().remove(name).is_none() {
         return;
     }
     let _ = crate::workspace::write_private(&path, render(&doc));
+}
+
+/// Hold the credential file for one read-modify-write. Every workspace on the
+/// machine shares it, and two `init`s at once each wrote back what they had
+/// read, so one's entry was lost.
+fn lock(path: &std::path::Path) -> Result<std::fs::File> {
+    let lock_path = path.with_extension("toml.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(crate::error::io_ctx("open", &lock_path))?;
+    file.lock()
+        .map_err(crate::error::io_ctx("lock", &lock_path))?;
+    Ok(file)
 }
 
 /// Render the file with exactly one copy of the header.

@@ -642,11 +642,18 @@ fn auth_header(
     let token = conn.token.expose_secret();
     let mut value = match conn.auth_kind {
         // Cloud API tokens authenticate as basic auth with the account email.
+        // The strings the header is built from hold the token too, and are
+        // wiped when dropped rather than left in freed memory.
         AuthKind::ApiToken | AuthKind::Basic => {
             let user = conn.identity.clone().unwrap_or_default();
-            HeaderValue::from_str(&format!("Basic {}", b64(&format!("{user}:{token}"))))?
+            let pair = zeroize::Zeroizing::new(format!("{user}:{token}"));
+            let encoded = zeroize::Zeroizing::new(b64(&pair));
+            let header = zeroize::Zeroizing::new(format!("Basic {}", encoded.as_str()));
+            HeaderValue::from_str(&header)?
         }
-        AuthKind::Pat | AuthKind::OAuth2 => HeaderValue::from_str(&format!("Bearer {token}"))?,
+        AuthKind::Pat | AuthKind::OAuth2 => {
+            HeaderValue::from_str(&zeroize::Zeroizing::new(format!("Bearer {token}")))?
+        }
         AuthKind::Cookie => HeaderValue::from_str(token)?,
     };
     // Marking the header sensitive keeps it out of reqwest's own debug output.

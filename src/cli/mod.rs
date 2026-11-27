@@ -169,7 +169,7 @@ impl GlobalArgs {
 /// `init` stored. Keeping them off the global list is what stops
 /// `jired pull --url other` from looking like it switches servers when it does
 /// not.
-#[derive(Args, Debug, Clone, Default)]
+#[derive(Args, Clone, Default)]
 #[command(next_help_heading = "Connection")]
 pub struct ConnectionArgs {
     /// Jira base URL [env: JIRED_URL] [config: server.url]
@@ -195,6 +195,19 @@ pub struct ConnectionArgs {
     /// Store credentials unencrypted when no keychain is available
     #[arg(long)]
     pub insecure_store: bool,
+}
+
+/// By hand, so `--token` never prints.
+impl std::fmt::Debug for ConnectionArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionArgs")
+            .field("url", &self.url)
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("email", &self.email)
+            .field("auth", &self.auth)
+            .field("deployment", &self.deployment)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Every command, in the order `--help` lists them: alphabetical.
@@ -553,6 +566,21 @@ pub(crate) fn not_yet(what: &str, milestone: &str, instead: &str) -> JiredError 
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// The token never prints, whatever formats the arguments.
+    #[test]
+    fn a_token_on_the_command_line_does_not_print() {
+        let args = ConnectionArgs {
+            token: Some("s3cret-token".into()),
+            ..Default::default()
+        };
+        assert!(!format!("{args:?}").contains("s3cret-token"));
+        let stored = crate::auth::StoredSecret {
+            blob: Some(b"s3cret-token".to_vec()),
+            ..Default::default()
+        };
+        assert!(!format!("{stored:?}").contains("115"), "{stored:?}");
+    }
 
     #[test]
     fn cli_definition_is_valid() {

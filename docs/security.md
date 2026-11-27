@@ -80,9 +80,21 @@ sentinels so your own entries survive regeneration:
 ```
 
 `.jired/` is created mode `0700` and `session.db` mode `0600`; so is
-`credentials.toml` and the directory holding it. The mode is re-checked and
-repaired on every open, so a careless `chmod` is corrected rather than
-tolerated.
+`credentials.toml` and the directory holding it, the file created with that
+mode rather than restricted after it is written, and written whole through a
+rename under a lock, since every workspace on the machine shares it. The mode
+is re-checked and repaired on every open, so a careless `chmod` is corrected
+rather than tolerated.
+
+On Windows none of that applies: jired sets no ACL, and the files take the
+permissions of the folder they are in — your profile, which other users cannot
+read by default. Prefer the OS keychain there (`creds.storage = keychain`),
+which is the default when one is available.
+
+The key derived from `JIRED_SECRET_KEY` and the strings an `Authorization`
+header is built from are wiped from memory when dropped, and the stored
+key-derivation parameters are bounded, so an edited file cannot make the read
+ask for gigabytes.
 
 Attachment folders (`.PROJ-0142. Summary/`) are **not** ignored: they hold issue
 content, and whether that belongs in your repository is your call.
