@@ -148,12 +148,18 @@ pub fn parse(md: &str, store: &RawStore) -> Document {
 
     let (prepared, regions) = prescan(md);
     let arena = Arena::new();
+    let root = parse_document(&arena, &prepared, &options());
+    Document::new(convert_blocks(root, &regions))
+}
+
+/// The dialect the file is read in: CommonMark with GFM tables,
+/// strikethrough and task lists.
+fn options() -> comrak::Options<'static> {
     let mut options = comrak::Options::default();
     options.extension.table = true;
     options.extension.strikethrough = true;
     options.extension.tasklist = true;
-    let root = parse_document(&arena, &prepared, &options);
-    Document::new(convert_blocks(root, &regions))
+    options
 }
 
 /// The text currently between a region's markers, used to detect that a user
@@ -880,12 +886,15 @@ fn render_href(href: &str, ctx: Ctx<'_>) -> String {
     if pointy {
         out.push('<');
     }
-    for c in href.chars() {
+    for (at, c) in href.char_indices() {
         match c {
             '<' | '>' | '\\' => {
                 out.push('\\');
                 out.push(c);
             }
+            // Only where it would read as an entity: `&amp;` in a target came
+            // back as `&`, and `?a=1&b=2` is common enough to keep readable.
+            '&' if starts_entity(&href[at..]) => out.push_str("&amp;"),
             '|' if ctx.in_table => out.push_str("\\|"),
             '\n' | '\r' => out.push(' '),
             _ => out.push(c),
@@ -895,6 +904,15 @@ fn render_href(href: &str, ctx: Ctx<'_>) -> String {
         out.push('>');
     }
     out
+}
+
+/// Whether `text`, which starts with `&`, reads as a character reference.
+fn starts_entity(text: &str) -> bool {
+    let body = &text[1..];
+    let name = body.find(';').map(|end| &body[..end]).unwrap_or_default();
+    !name.is_empty()
+        && name.len() <= 32
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
 }
 
 /// Whether `href` can be written as `<href>` and read back unchanged.
@@ -1096,6 +1114,52 @@ struct Region {
     block: bool,
 }
 
+/// What `md` says that the AST cannot carry, one reason each: a task item
+/// holding more than its line — a nested list, a second paragraph — or a
+/// list mixing task items with plain ones. Parsed, the rest of the item was
+/// dropped and a plain item became a task; push asks before sending that.
+pub fn unrepresentable(md: &str) -> Vec<String> {
+    let arena = Arena::new();
+    let (text, _) = prescan(md);
+    let root = parse_document(&arena, &text, &options());
+    let mut out = Vec::new();
+    for node in root.descendants() {
+        if !matches!(node.data.borrow().value, NodeValue::List(_)) {
+            continue;
+        }
+        let tasks = node
+            .children()
+            .filter(|c| matches!(c.data.borrow().value, NodeValue::TaskItem(_)))
+            .count();
+        if tasks == 0 {
+            continue;
+        }
+        if tasks < node.children().count() {
+            out.push("a list mixes task items with plain ones".to_string());
+        }
+        for item in node.children() {
+            if matches!(item.data.borrow().value, NodeValue::TaskItem(_))
+                && item.children().count() > 1
+            {
+                out.push(format!(
+                    "a task item holds more than its line: {}",
+                    first_line(&inline_text(&first_paragraph_inlines(item, &[])))
+                ));
+            }
+        }
+    }
+    out
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(60)
+        .collect()
+}
+
 /// Replace every complete marker pair with an opaque word before comrak sees
 /// the text.
 ///
@@ -1230,6 +1294,19 @@ fn convert_blocks<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Block> {
             NodeValue::HtmlBlock(html) if is_break_tag(&html.literal) => {
                 out.push(Block::Paragraph(vec![Inline::LineBreak]))
             }
+            // An HTML block other than a comment is text someone wrote: a
+            // `<details>` went missing whole. Jira has no HTML, so it goes as
+            // the text it is, a line at a time.
+            NodeValue::HtmlBlock(html) if !html.literal.trim_start().starts_with("<!--") => {
+                let mut inlines = Vec::new();
+                for (n, line) in html.literal.trim_end().lines().enumerate() {
+                    if n > 0 {
+                        inlines.push(Inline::LineBreak);
+                    }
+                    push_text(&mut inlines, line, regions);
+                }
+                out.push(Block::Paragraph(normalize_inlines(inlines)));
+            }
             NodeValue::BlockQuote => out.push(Block::BlockQuote(convert_blocks(child, regions))),
             NodeValue::List(list) => out.push(convert_list(child, &list, regions)),
             NodeValue::ThematicBreak => out.push(Block::Rule),
@@ -1348,14 +1425,17 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>, regions: &[Region]) -> Vec<Inline>
             NodeValue::Strong => out.push(Inline::Strong(convert_inlines(child, regions))),
             NodeValue::Strikethrough => out.push(Inline::Strike(convert_inlines(child, regions))),
             NodeValue::Escaped => out.extend(convert_inlines(child, regions)),
-            // Every other raw tag is dropped: it has no AST equivalent and the
-            // gap comments this module writes must not survive.
             NodeValue::HtmlInline(html) if is_break_tag(&html) => out.push(Inline::LineBreak),
-            // A gap is written to keep text apart, a key from the word beside
-            // it among other things, so the text on either side is not merged.
-            NodeValue::HtmlInline(_) => done.extend(split_issue_keys(normalize_inlines(
-                std::mem::take(&mut out),
-            ))),
+            // A comment is a gap — this module writes `<!-- -->` to keep text
+            // apart, a key from the word beside it among other things — so the
+            // text on either side is not merged.
+            NodeValue::HtmlInline(html) if html.starts_with("<!--") => done.extend(
+                split_issue_keys(normalize_inlines(std::mem::take(&mut out))),
+            ),
+            // Anything else in angle brackets is what was typed: dropped as a
+            // tag, `http://<host>:<port>/api` came back `http://:/api`, and
+            // `Vec<String>` came back `Vec`.
+            NodeValue::HtmlInline(html) => push_text(&mut out, &html, regions),
             NodeValue::Image(link) => out.push(Inline::Image {
                 src: attachment_name(&restore(&link.url, regions))
                     .map(str::to_string)
@@ -1934,6 +2014,45 @@ mod tests {
         };
         assert_eq!(inlines[0], Inline::Text("a .jiredrawregion0end. b ".into()));
         assert!(matches!(inlines[1], Inline::Raw(_)));
+    }
+
+    /// What the converter used to drop without a word: angle-bracket text
+    /// that is not a tag, an HTML block, and an entity in a link target.
+    #[test]
+    fn what_was_typed_in_angle_brackets_is_kept() {
+        let store = RawStore::new();
+        let text = |md: &str| {
+            inline_text(&match &parse(md, &store).blocks[..] {
+                [Block::Paragraph(i)] => i.clone(),
+                other => panic!("{other:?}"),
+            })
+        };
+        assert_eq!(
+            text("curl http://<host>:<port>/api"),
+            "curl http://<host>:<port>/api"
+        );
+        assert_eq!(text("a Vec<String> here"), "a Vec<String> here");
+        // A line break stands between the lines of a block.
+        assert_eq!(
+            text("<details>\n<summary>More</summary>\n</details>"),
+            "<details> <summary>More</summary> </details>"
+        );
+
+        let link = Document::new(vec![Block::Paragraph(vec![Inline::Link {
+            text: vec![Inline::Text("q".into())],
+            href: "https://x.example/?a=1&amp;b=2&c=3".into(),
+        }])]);
+        assert_eq!(parse(&render(&link, &store), &store), link);
+    }
+
+    /// A task item with more than its line, or a list mixing tasks with plain
+    /// items, cannot be a task list; push is told rather than sending less.
+    #[test]
+    fn a_task_list_the_ast_cannot_hold_is_named() {
+        assert!(unrepresentable("- [ ] one\n- [x] two").is_empty());
+        assert_eq!(unrepresentable("- [ ] one\n  - nested").len(), 1);
+        assert_eq!(unrepresentable("- [ ] one\n- plain").len(), 1);
+        assert!(unrepresentable("- a\n  - b").is_empty());
     }
 
     #[test]
