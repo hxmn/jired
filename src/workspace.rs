@@ -436,6 +436,9 @@ mod tests {
         let _held = ws.lock().unwrap();
         let err = ws.lock().unwrap_err();
         assert_eq!(err.exit_code().as_i32(), 8);
+        // Windows does not let another handle read a file locked this way,
+        // so there the holder's pid cannot be told.
+        #[cfg(not(windows))]
         assert_eq!(err.details["pid"], std::process::id());
     }
 

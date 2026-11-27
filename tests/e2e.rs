@@ -9206,15 +9206,23 @@ fn doctor_moves_the_credential_when_creds_storage_changes() {
     let ws = Ws::new();
     let home = TempDir::new().unwrap();
     let xdg = home.path().to_str().unwrap();
-    let credentials = home.path().join("jired/credentials.toml");
     ws.init();
+    // Where the user config directory is, asked of jired: under
+    // `XDG_CONFIG_HOME` on Linux, under `HOME` on macOS, which ignores it.
+    let global = json_with(
+        &ws,
+        &[("XDG_CONFIG_HOME", xdg), ("HOME", xdg)],
+        &["config", "path", "--global"],
+    );
+    let credentials =
+        std::path::Path::new(global["file"].as_str().unwrap()).with_file_name("credentials.toml");
 
     json_with(
         &ws,
-        &[("XDG_CONFIG_HOME", xdg)],
+        &[("XDG_CONFIG_HOME", xdg), ("HOME", xdg)],
         &["config", "set", "creds.storage", "user-config"],
     );
-    let report = json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["doctor"]);
+    let report = json_with(&ws, &[("XDG_CONFIG_HOME", xdg), ("HOME", xdg)], &["doctor"]);
     assert_eq!(report["problems"], 0);
     let check = report["checks"]
         .as_array()
@@ -9232,23 +9240,23 @@ fn doctor_moves_the_credential_when_creds_storage_changes() {
         "the token is not in the clear"
     );
 
-    let who = json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["whoami"]);
+    let who = json_with(&ws, &[("XDG_CONFIG_HOME", xdg), ("HOME", xdg)], &["whoami"]);
     assert_eq!(who["secret_location"], "user_config");
 
     // And a command that needs the token still finds it.
-    json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["pull"]);
+    json_with(&ws, &[("XDG_CONFIG_HOME", xdg), ("HOME", xdg)], &["pull"]);
 
     // Moving it back leaves nothing behind in the shared file.
     json_with(
         &ws,
-        &[("XDG_CONFIG_HOME", xdg)],
+        &[("XDG_CONFIG_HOME", xdg), ("HOME", xdg)],
         &["config", "set", "creds.storage", "local_db"],
     );
-    json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["doctor"]);
+    json_with(&ws, &[("XDG_CONFIG_HOME", xdg), ("HOME", xdg)], &["doctor"]);
     let file = std::fs::read_to_string(&credentials).unwrap();
     assert!(!file.contains("fixture.invalid"), "{file}");
     assert_eq!(
-        json_with(&ws, &[("XDG_CONFIG_HOME", xdg)], &["whoami"])["secret_location"],
+        json_with(&ws, &[("XDG_CONFIG_HOME", xdg), ("HOME", xdg)], &["whoami"])["secret_location"],
         "local_db"
     );
 }
@@ -9259,8 +9267,10 @@ fn a_second_workspace_reuses_a_credential_from_the_user_config_store() {
     let first = Ws::new();
     let home = TempDir::new().unwrap();
     let xdg = home.path().to_str().unwrap();
+    // `HOME` too: macOS keeps the user config under it and ignores XDG.
     let env: &[(&str, &str)] = &[
         ("XDG_CONFIG_HOME", xdg),
+        ("HOME", xdg),
         ("JIRED_CREDS_STORAGE", "user_config"),
     ];
 
@@ -11421,7 +11431,12 @@ fn fetch_spec_writes_one_file_per_described_rest_module() {
     // the `base` URL and nests the resources under it, so the flat
     // `path="api/2/search"` an older Jira wrote does not occur here.
     assert!(text.contains(r#"id="searchUsingSearchRequest""#), "{text}");
-    assert_eq!(report["specs"][0]["file"], file.display().to_string());
+    // Compared as files, not spellings: macOS's temp directory is reached
+    // through a symlink, `/var` to `/private/var`.
+    assert_eq!(
+        std::fs::canonicalize(report["specs"][0]["file"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&file).unwrap()
+    );
     assert_eq!(report["specs"][0]["bytes"], text.len());
 
     // A module this Jira does not describe is reported, not invented.

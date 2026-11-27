@@ -166,7 +166,11 @@ mod tests {
     fn a_guarded_panic_comes_back_as_its_message_and_place() {
         let caught = guarded(|| -> usize { "Ф"[1..].len() }).unwrap_err();
         assert!(caught.contains("is not a char boundary"), "{caught}");
-        assert!(caught.contains("src/convert/mod.rs:"), "{caught}");
+        // Windows names the file with backslashes.
+        assert!(
+            caught.replace('\\', "/").contains("src/convert/mod.rs:"),
+            "{caught}"
+        );
         assert_eq!(guarded(|| 7), Ok(7));
     }
 
