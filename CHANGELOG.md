@@ -8,6 +8,19 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.31.7] — 2026-11-27
+
+### Fixed
+
+- **What you type in angle brackets reaches Jira.** `http://<host>:<port>`
+  went as `http://:`, `Vec<String>` as `Vec`, and an HTML block such as
+  `<details>` vanished. They are sent as the text they are. A link whose
+  address contains `&amp;` keeps it.
+- **A task item with a list or a second paragraph under it is not sent
+  short.** Only its first line was sent, and a plain item in a task list
+  became a task; `push` now stops that issue (exit 6) and names it, and
+  `--allow-lossy` sends it anyway.
+
 ## [0.31.6] — 2026-11-27
 
 ### Fixed
