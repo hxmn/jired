@@ -614,6 +614,12 @@ fn connect(
         None if ui.interactive() => ask_url(ui)?,
         None => normalize_url(&ctx.resolver.require("server.url")?),
     };
+    if sends_in_the_clear(&base_url) {
+        ui.caution(format!(
+            "{base_url} is plain http: your token goes over the network unencrypted \
+             with every request"
+        ));
+    }
     let mut identity = ctx.resolver.get_quiet("auth.email")?;
     let mut deployment = fixed_deployment.unwrap_or_else(|| Deployment::guess_from_url(&base_url));
     let mut auth_kind = fixed_auth.unwrap_or_else(|| default_auth(deployment, identity.is_some()));
@@ -1112,6 +1118,19 @@ fn normalize_url(url: &str) -> String {
     }
 }
 
+/// An `http://` server that is not this machine, where a credential travels
+/// in the clear.
+fn sends_in_the_clear(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let host = match rest.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => rest.split(['/', ':']).next().unwrap_or(""),
+    };
+    !(host == "localhost" || host == "::1" || host.starts_with("127."))
+}
+
 /// Normalize what the user typed, or explain what is wrong with it.
 fn validate_url(raw: &str) -> std::result::Result<String, String> {
     let url = normalize_url(raw);
@@ -1159,6 +1178,12 @@ mod tests {
             validate_url("http://localhost:8080/jira"),
             Ok("http://localhost:8080/jira".to_string())
         );
+        assert!(sends_in_the_clear("http://jira.corp/jira"));
+        assert!(!sends_in_the_clear("http://localhost:8080/jira"));
+        assert!(!sends_in_the_clear("http://127.0.0.1:2990"));
+        assert!(!sends_in_the_clear("https://jira.corp"));
+        assert!(!sends_in_the_clear("http://[::1]:8080"));
+        assert!(sends_in_the_clear("http://[2001:db8::1]/jira"));
         assert!(validate_url("").is_err());
         assert!(validate_url("jira corp").is_err());
         assert!(validate_url("jira").is_err());
