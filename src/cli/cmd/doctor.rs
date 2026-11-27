@@ -634,7 +634,7 @@ fn check_sections(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
             continue;
         }
         if !args.dry_run {
-            std::fs::write(projector.path_of(&file.relative), &rewritten)?;
+            crate::workspace::write_atomic(&projector.path_of(&file.relative), &rewritten)?;
             // A file that was in sync stays in sync: nothing about the issue
             // changed, only the shape of the file holding it.
             if was_in_sync(&state, key, &text)? {
@@ -771,7 +771,7 @@ fn check_custom_fields(ctx: &mut Context, args: &DoctorArgs) -> Result<Check> {
 
         let rewritten = doc.render()?;
         if !args.dry_run {
-            std::fs::write(projector.path_of(&file.relative), &rewritten)?;
+            crate::workspace::write_atomic(&projector.path_of(&file.relative), &rewritten)?;
             if in_sync {
                 state.set_base_md_hash(key, &crate::store::state::content_hash(&rewritten))?;
             }

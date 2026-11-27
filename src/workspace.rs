@@ -149,7 +149,7 @@ impl Workspace {
         if updated == existing {
             return Ok(false);
         }
-        fs::write(&path, updated)?;
+        write_atomic(&path, updated)?;
         Ok(true)
     }
 }
@@ -267,9 +267,131 @@ pub fn restrict_file_mode(_path: &Path) -> Result<bool> {
     Ok(false)
 }
 
+/// Replace `path` with `bytes` so that it is either the old file or the new
+/// one, never a part of either.
+///
+/// A plain `fs::write` truncates the file first, and a crash, a full disk or
+/// a killed process after that left an issue file holding unpushed edits
+/// half written, or an attachment cut short that then read as downloaded.
+/// The bytes go to a hidden file beside the target — the same filesystem,
+/// so the rename is atomic — are flushed, and are renamed over it. A file
+/// that exists keeps its permissions.
+pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    write_replacing(path, bytes.as_ref(), None)
+}
+
+/// [`write_atomic`] for a file only its owner may read, created that way: a
+/// credential written first and restricted afterwards was readable in
+/// between.
+pub fn write_private(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    write_replacing(path, bytes.as_ref(), Some(0o600))
+}
+
+fn write_replacing(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = dir.join(format!(
+        ".{name}.jired-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Some(mode) = mode {
+            options.mode(mode);
+        }
+    }
+    let written = (|| {
+        let mut file = options.open(&temp)?;
+        if mode.is_none() {
+            if let Ok(meta) = fs::metadata(path) {
+                file.set_permissions(meta.permissions())?;
+            }
+        }
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temp, path)
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&temp);
+        return written;
+    }
+    // The rename is durable only once the directory entry is; a directory
+    // that cannot be opened for this (Windows) has nothing to sync.
+    if let Ok(d) = File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The new bytes replace the old whole, an existing file keeps its mode,
+    /// a private one is created private, and nothing is left beside it.
+    #[test]
+    fn an_atomic_write_replaces_the_file_and_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("PROJ-1. A.md");
+        fs::write(&path, "old text that is longer").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        write_atomic(&path, "new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let secret = dir.path().join("credentials.toml");
+        write_private(&secret, "s").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o640
+            );
+            assert_eq!(
+                fs::metadata(&secret).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+    }
+
+    /// A write that cannot finish leaves the old file as it was.
+    #[test]
+    fn a_write_that_fails_leaves_the_old_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.md");
+        fs::write(&path, "kept").unwrap();
+        // A directory where the file is cannot be renamed over.
+        let blocked = dir.path().join("sub");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("x"), "x").unwrap();
+        assert!(write_atomic(&blocked, "new").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "kept");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
 
     #[test]
     fn create_makes_layout_and_restricts_mode() {

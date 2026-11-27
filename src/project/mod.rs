@@ -147,7 +147,8 @@ impl Projector {
         if !unchanged {
             std::fs::create_dir_all(&self.root)
                 .map_err(crate::error::io_ctx("create", &self.root))?;
-            std::fs::write(&path, &text).map_err(crate::error::io_ctx("write", &path))?;
+            crate::workspace::write_atomic(&path, &text)
+                .map_err(crate::error::io_ctx("write", &path))?;
         }
 
         Ok(WriteOutcome {

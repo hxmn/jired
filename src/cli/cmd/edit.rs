@@ -295,7 +295,8 @@ impl Snapshot {
                 }
             }
             let path = engine.projector.path_of(&relative);
-            std::fs::write(&path, text).map_err(crate::error::io_ctx("write", &path))?;
+            crate::workspace::write_atomic(&path, text)
+                .map_err(crate::error::io_ctx("write", &path))?;
         }
         Ok(())
     }

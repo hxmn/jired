@@ -82,7 +82,7 @@ pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
             .and_then(|n| n.to_str())
             .ok_or_else(|| JiredError::usage(format!("{} has no filename", source.display())))?;
         replaced.push((name.to_string(), std::fs::read(dir.join(name)).ok()));
-        std::fs::write(dir.join(name), &bytes)?;
+        crate::workspace::write_atomic(&dir.join(name), &bytes)?;
         staged.push(name.to_string());
         out.say(format!(
             "staged {name} ({})",
@@ -98,7 +98,7 @@ pub fn run(g: &GlobalArgs, args: &AttachArgs, out: Out) -> Result<ExitCode> {
             for (name, previous) in replaced.iter().rev() {
                 let path = dir.join(name);
                 match previous {
-                    Some(bytes) => std::fs::write(&path, bytes)?,
+                    Some(bytes) => crate::workspace::write_atomic(&path, bytes)?,
                     None => std::fs::remove_file(&path)?,
                 }
             }

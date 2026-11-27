@@ -375,7 +375,7 @@ pub fn write_block(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, updated)?;
+    crate::workspace::write_atomic(path, updated)?;
     Ok(true)
 }
 
@@ -458,7 +458,7 @@ fn write_claude_settings(path: &Path) -> Result<bool> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, updated)?;
+    crate::workspace::write_atomic(path, updated)?;
     Ok(true)
 }
 

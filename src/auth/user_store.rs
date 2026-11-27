@@ -73,8 +73,10 @@ pub fn save(name: &str, blob: &[u8], kdf: Option<&str>) -> Result<PathBuf> {
         // The directory holds credentials even if other tools put files here.
         let _ = crate::workspace::restrict_dir_mode(parent);
     }
-    std::fs::write(&path, render(&doc))
+    crate::workspace::write_private(&path, render(&doc))
         .map_err(|e| JiredError::auth(format!("cannot write {}: {e}", path.display())))?;
+    // `write_private` keeps the mode it creates with; an older file that was
+    // looser is replaced, not reused.
     crate::workspace::restrict_file_mode(&path)?;
     Ok(path)
 }
@@ -121,7 +123,7 @@ pub fn remove(name: &str) {
     if doc.as_table_mut().remove(name).is_none() {
         return;
     }
-    let _ = std::fs::write(&path, render(&doc));
+    let _ = crate::workspace::write_private(&path, render(&doc));
 }
 
 /// Render the file with exactly one copy of the header.

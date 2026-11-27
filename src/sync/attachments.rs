@@ -85,7 +85,7 @@ pub fn sync_folder(
             }
         }
         if !stub.exists() {
-            std::fs::write(
+            crate::workspace::write_atomic(
                 &stub,
                 format!("{}\n", serde_json::to_string_pretty(&Stub::of(a))?),
             )?;
@@ -114,7 +114,7 @@ pub fn download_one(
         .with_hint("re-run `jired attachments pull` — a truncated download is usually transient"));
     }
     std::fs::create_dir_all(dir).map_err(crate::error::io_ctx("create", dir))?;
-    std::fs::write(dir.join(&attachment.filename), &bytes)?;
+    crate::workspace::write_atomic(&dir.join(&attachment.filename), &bytes)?;
     state.mark_attachment_downloaded(issue_key, &attachment.id, &sha256(&bytes))?;
     Ok(())
 }

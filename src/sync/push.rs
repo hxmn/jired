@@ -4012,7 +4012,7 @@ fn record_created(
         .read_raw(file)
         .ok()
         .and_then(|text| crate::doc::assign_entry_id(&text, section, entry, &marker))
-        .map(|text| std::fs::write(&path, text));
+        .map(|text| crate::workspace::write_atomic(&path, text));
     if matches!(written, Some(Ok(()))) {
         match action {
             Action::CreateComment { .. } => marked.comments += 1,

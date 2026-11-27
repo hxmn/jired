@@ -202,7 +202,8 @@ impl ConfigFile {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(crate::error::io_ctx("create", parent))?;
         }
-        std::fs::write(path, self.to_toml()).map_err(crate::error::io_ctx("write", path))?;
+        crate::workspace::write_atomic(path, self.to_toml())
+            .map_err(crate::error::io_ctx("write", path))?;
         Ok(())
     }
 
