@@ -726,6 +726,26 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
             let edited: Vec<String> = touched.iter().map(|(id, _)| id.clone()).collect();
             let labels: Vec<String> = touched.into_iter().map(|(_, label)| label).collect();
 
+            let cannot = unrepresentable(&base_doc, &working);
+            if !cannot.is_empty() && !args.allow_lossy {
+                return Err(JiredError::lossy(format!(
+                    "{}: {} cannot be sent as written: {}",
+                    row.key, cannot[0].0, cannot[0].1
+                ))
+                .with_detail("issue", row.key.clone())
+                .with_detail(
+                    "reasons",
+                    json!(cannot
+                        .iter()
+                        .map(|(t, r)| format!("{t}: {r}"))
+                        .collect::<Vec<_>>()),
+                )
+                .with_hint(
+                    "give the task item a line of its own, or pass --allow-lossy to send only \
+                     the first line of it",
+                ));
+            }
+
             let foreign = foreign_regions(&engine.state, &row.key, &working)?;
             if !foreign.is_empty() {
                 return Err(JiredError::usage(format!(
@@ -986,6 +1006,42 @@ pub fn run(ctx: &mut Context, args: &PushArgs) -> Result<PushReport> {
 /// changed. A note nobody touched cannot have had its regions edited, and
 /// checking it anyway would let some later difference in how it renders block a
 /// push that has nothing to do with it.
+/// What an edited text says that the AST cannot carry, with the text it is
+/// in: see [`crate::convert::markdown::unrepresentable`]. Only texts that
+/// changed are looked at; what jired wrote from the server is carried.
+fn unrepresentable(base: &IssueDoc, working: &IssueDoc) -> Vec<(String, String)> {
+    let mut texts: Vec<(String, &str)> = Vec::new();
+    if working.description != base.description {
+        texts.push(("the description".into(), &working.description));
+    }
+    for c in &working.comments {
+        let changed = match &c.id {
+            CommentId::Existing(id) => base.comment(id).is_none_or(|b| b.body != c.body),
+            CommentId::New => true,
+        };
+        if changed {
+            texts.push(("a comment".into(), &c.body));
+        }
+    }
+    for w in &working.worklogs {
+        let changed = match &w.id {
+            WorklogId::Existing(id) => base.worklog(id).is_none_or(|b| b.body != w.body),
+            WorklogId::New => true,
+        };
+        if changed {
+            texts.push(("a worklog".into(), &w.body));
+        }
+    }
+    texts
+        .into_iter()
+        .flat_map(|(name, text)| {
+            crate::convert::markdown::unrepresentable(text)
+                .into_iter()
+                .map(move |reason| (name.clone(), reason))
+        })
+        .collect()
+}
+
 /// Regions a text holds that its own store does not: see
 /// [`convert::unknown_regions`]. Each with the text it is in.
 fn foreign_regions(

@@ -2421,6 +2421,30 @@ fn a_region_copied_into_a_new_comment_is_refused_not_dropped() {
     );
 }
 
+/// A task item with a list under it has nowhere to go in a task list, and
+/// the nested item went missing on push; now the push says so first.
+#[test]
+fn a_task_item_with_a_list_under_it_is_not_sent_short() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let edited = ws.read(ISSUE_FILE).replace(
+        "Steps to reproduce are below.",
+        "Steps to reproduce are below.\n\n- [ ] log in\n  - with SSO on",
+    );
+    ws.write(ISSUE_FILE, &edited);
+    let report = ws.json_code(&["push"], 6);
+    assert!(
+        report["results"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("task item"),
+        "{report}"
+    );
+    let report = ws.json(&["push", "--allow-lossy", "--dry-run"]);
+    assert_eq!(report["results"][0]["ok"], true, "{report}");
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();
