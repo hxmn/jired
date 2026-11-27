@@ -35,38 +35,53 @@ impl Prompter for TerminalPrompter {
     }
 }
 
-/// Read a line with terminal echo disabled, so a pasted token never lands in
-/// the scrollback buffer.
+/// Read a line without showing it, so a pasted token never lands in the
+/// scrollback buffer.
 ///
-/// `libc::termios` has no safe wrapper in this dependency set; the unsafe calls
-/// are confined to this function and the original settings are always restored.
-#[cfg(unix)]
-#[allow(unsafe_code)]
+/// In raw mode behind a guard that restores the terminal however this ends:
+/// echo was turned off through `termios` and back on after `read_line`, so
+/// Ctrl-C — which the prompt itself suggests — left the terminal with echo
+/// off; and on Windows nothing was hidden at all. Ctrl-C here is read as a
+/// key and cancels. Input that is not a terminal is read as a line, since
+/// there is nothing to echo it.
 fn read_secret() -> Result<String> {
-    use std::os::unix::io::AsRawFd;
-    let fd = std::io::stdin().as_raw_fd();
-    let mut term: libc::termios = unsafe { std::mem::zeroed() };
-    let has_term = unsafe { libc::tcgetattr(fd, &mut term) } == 0;
-    let saved = term;
-    if has_term {
-        term.c_lflag &= !libc::ECHO;
-        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) };
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        let mut buf = String::new();
+        std::io::stdin().lock().read_line(&mut buf)?;
+        return Ok(buf);
     }
-    let mut buf = String::new();
-    let res = std::io::stdin().lock().read_line(&mut buf);
-    if has_term {
-        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &saved) };
-        eprintln!();
-    }
-    res?;
-    Ok(buf)
-}
 
-#[cfg(not(unix))]
-fn read_secret() -> Result<String> {
+    struct Raw;
+    impl Drop for Raw {
+        fn drop(&mut self) {
+            let _ = crossterm::terminal::disable_raw_mode();
+            eprintln!();
+        }
+    }
+    crossterm::terminal::enable_raw_mode()?;
+    let _raw = Raw;
+
     let mut buf = String::new();
-    std::io::stdin().lock().read_line(&mut buf)?;
-    Ok(buf)
+    loop {
+        match event::read()? {
+            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+                KeyCode::Enter => return Ok(buf),
+                KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Err(JiredError::usage("cancelled at the prompt"));
+                }
+                KeyCode::Char(c) => buf.push(c),
+                KeyCode::Backspace => {
+                    buf.pop();
+                }
+                KeyCode::Esc => return Err(JiredError::usage("cancelled at the prompt")),
+                _ => {}
+            },
+            Event::Paste(text) => buf.push_str(&text),
+            _ => {}
+        }
+    }
 }
 
 /// Line-based chrome for an interactive command.
