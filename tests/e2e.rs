@@ -2510,7 +2510,28 @@ fn an_unwritable_file_is_named_in_the_json_error() {
     let err = ws.json_err(&["init-agents"], 1);
     let message = err["message"].as_str().unwrap();
     assert!(message.contains("AGENTS.md"), "{err}");
-    assert!(message.contains("directory"), "the reason is part of it: {err}");
+    assert!(
+        message.contains("directory"),
+        "the reason is part of it: {err}"
+    );
+}
+
+/// `--config FILE` is read inside a workspace too, before the workspace's
+/// own file: there it was ignored, and a setting in it never took effect.
+#[test]
+fn a_config_file_named_by_flag_is_read_inside_a_workspace() {
+    let ws = Ws::new();
+    ws.init();
+    let extra = ws.home.path().join("other.toml");
+    std::fs::write(&extra, "[links]\nmode = \"stub\"\n").unwrap();
+    let flag = extra.display().to_string();
+    let got = ws.json(&["config", "get", "links.mode", "--config", &flag]);
+    assert_eq!(got["value"], "stub", "{got}");
+    assert_eq!(got["source"], "extra-config", "{got}");
+
+    // Without the flag, the workspace's file answers as before.
+    let got = ws.json(&["config", "get", "links.mode"]);
+    assert_eq!(got["source"], "local-config", "{got}");
 }
 
 #[test]

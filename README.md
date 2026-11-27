@@ -1194,7 +1194,7 @@ cannot be rebuilt from the server, and a corrupt one means `jired init --force`.
 ## Configuration
 
 Resolution order, highest first: CLI flag → `JIRED_*` environment variable →
-`.jired/config.toml` → `$XDG_CONFIG_HOME/jired/config.toml` → built-in default →
+the file `--config PATH` names → `.jired/config.toml` → `$XDG_CONFIG_HOME/jired/config.toml` → built-in default →
 interactive prompt. `init` writes every setting into `.jired/config.toml` with its
 documentation as a comment, so the file is the whole picture; only the four values a
 person actually has to supply — URL, email, token, project — are ever prompted for.

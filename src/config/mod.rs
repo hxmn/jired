@@ -32,6 +32,7 @@ pub struct Resolver {
     flags: HashMap<String, String>,
     env: HashMap<String, String>,
     local: ConfigFile,
+    extra: ConfigFile,
     global: ConfigFile,
     defaults: HashMap<String, String>,
     interactive: bool,
@@ -69,6 +70,9 @@ impl Resolver {
                     return Ok(Some((v.clone(), Source::Env)));
                 }
             }
+        }
+        if let Some(v) = self.extra.get(key) {
+            return Ok(Some((v, Source::ExtraConfig)));
         }
         if let Some(v) = self.local.get(key) {
             return Ok(Some((v, Source::LocalConfig)));
@@ -208,6 +212,7 @@ pub struct ResolverBuilder {
     flags: HashMap<String, String>,
     env: Option<HashMap<String, String>>,
     local: Option<ConfigFile>,
+    extra: Option<ConfigFile>,
     global: Option<ConfigFile>,
     defaults: HashMap<String, String>,
     interactive: bool,
@@ -254,6 +259,19 @@ impl ResolverBuilder {
         Ok(self)
     }
 
+    /// The file `--config` names: a layer of its own, above the workspace's
+    /// file, since naming it on the command line is asking for it, and the
+    /// workspace's file holds every setting `init` wrote, so below it nothing
+    /// in this one would show. It stood in for the workspace's file when there
+    /// was none and was ignored when there was.
+    pub fn extra_file(mut self, path: Option<PathBuf>) -> Result<Self> {
+        self.extra = Some(match path {
+            Some(p) => ConfigFile::load(&p)?,
+            None => ConfigFile::empty(),
+        });
+        Ok(self)
+    }
+
     pub fn global_file(mut self, path: Option<PathBuf>) -> Result<Self> {
         self.global = Some(match path {
             Some(p) => ConfigFile::load(&p)?,
@@ -292,6 +310,7 @@ impl ResolverBuilder {
             flags: self.flags,
             env: self.env.unwrap_or_default(),
             local: self.local.unwrap_or_else(ConfigFile::empty),
+            extra: self.extra.unwrap_or_else(ConfigFile::empty),
             global: self.global.unwrap_or_else(ConfigFile::empty),
             defaults: builtin_defaults(self.defaults),
             interactive: self.interactive,

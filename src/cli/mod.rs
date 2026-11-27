@@ -130,7 +130,7 @@ pub struct GlobalArgs {
     #[arg(long, global = true, value_name = "PATH", value_hint = clap::ValueHint::DirPath)]
     pub dir: Option<PathBuf>,
 
-    /// Additional config file to read before the global one
+    /// Another config file, read before the workspace's and the user's
     #[arg(long, global = true, value_name = "PATH", value_hint = clap::ValueHint::FilePath)]
     pub config: Option<PathBuf>,
 

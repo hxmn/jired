@@ -81,10 +81,7 @@ impl Context {
         out: Out,
         workspace: Workspace,
     ) -> Result<Self> {
-        let local_path = workspace
-            .is_initialized()
-            .then(|| workspace.config_path())
-            .or_else(|| g.config.clone());
+        let local_path = workspace.is_initialized().then(|| workspace.config_path());
 
         // Two passes: whether we may prompt is itself a setting, so the chain has
         // to be resolvable before it is answered. The first resolver is built
@@ -93,6 +90,7 @@ impl Context {
             .flag_bool("ui.no_input", g.no_input)
             .env_from_process()
             .local_file(local_path.clone())?
+            .extra_file(g.config.clone())?
             .global_file(crate::config::global_config_path())?
             .interactive(false)
             .build();
@@ -117,6 +115,7 @@ impl Context {
             .flag_bool("ui.no_input", g.no_input)
             .env_from_process()
             .local_file(local_path)?
+            .extra_file(g.config.clone())?
             .global_file(crate::config::global_config_path())?
             .interactive(interactive)
             .prompter(Box::new(crate::cli::cmd::prompt::TerminalPrompter))

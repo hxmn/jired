@@ -71,7 +71,8 @@ case) or the path to its file — `jired comment "PROJ-0142. Fix login flow.md"`
 comma- or space-separated positional list; `--issues` survives on `fetch`/`pull`
 as the same thing spelled as a flag.
 
-**Resolution chain (highest first):** CLI flag → `JIRED_*` env → `.jired/config.toml`
+**Resolution chain (highest first):** CLI flag → `JIRED_*` env → the file
+`--config PATH` names (source `extra-config`) → `.jired/config.toml`
 → `$XDG_CONFIG_HOME/jired/config.toml` → built-in default → prompt. `--no-input` (or
 non-TTY) disables the last rung; a missing required value then exits 7 with a JSON
 error on stderr. Only `server.url`, `auth.email`, `auth.token` and

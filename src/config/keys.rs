@@ -9,6 +9,9 @@ pub enum Source {
     Flag,
     Env,
     LocalConfig,
+    /// The file `--config` named, read before the workspace's and the
+    /// user's.
+    ExtraConfig,
     GlobalConfig,
     Prompt,
     Default,
@@ -20,6 +23,7 @@ impl Source {
             Source::Flag => "flag",
             Source::Env => "env",
             Source::LocalConfig => "local-config",
+            Source::ExtraConfig => "extra-config",
             Source::GlobalConfig => "global-config",
             Source::Prompt => "prompt",
             Source::Default => "default",

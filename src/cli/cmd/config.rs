@@ -219,6 +219,9 @@ pub fn run(g: &GlobalArgs, cmd: &ConfigCmd, out: Out) -> Result<ExitCode> {
                     // when a workspace, a global config and --config are in play.
                     let file = match source {
                         keys::Source::LocalConfig => Some(local.display().to_string()),
+                        keys::Source::ExtraConfig => {
+                            g.config.as_ref().map(|p| p.display().to_string())
+                        }
                         keys::Source::GlobalConfig => {
                             global.as_ref().map(|p| p.display().to_string())
                         }
