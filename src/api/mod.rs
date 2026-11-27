@@ -271,7 +271,10 @@ fn fixture_dir() -> Option<std::path::PathBuf> {
 pub fn open_client(conn: Connection) -> Result<Box<dyn JiraApi>> {
     #[cfg(feature = "fixtures")]
     if let Some(dir) = fixture_dir() {
-        return Ok(Box::new(fixture::FixtureClient::open(&dir, conn.deployment)?));
+        return Ok(Box::new(fixture::FixtureClient::open(
+            &dir,
+            conn.deployment,
+        )?));
     }
     make_client(conn)
 }
