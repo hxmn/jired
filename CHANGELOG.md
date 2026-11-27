@@ -8,6 +8,24 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.34.0] — 2026-11-27
+
+### Added
+
+- **`jired schema NAME --json`** returns `jired/schema/1`, the schema under
+  `document`; it printed nothing before. `jired schema --json` is
+  `jired/schemas/1` through the same path as every other document, so
+  `--fields` works on it.
+- **`jired init-agents --print --json`** returns what it would write, by
+  path, under `printed`.
+
+### Fixed
+
+- **`--quiet` no longer hides what a reading command was run for.**
+  `jired schema push -q` printed nothing; `show`, `list`, `search`, `log`,
+  `status`, `schema` and the other commands that only read now print their
+  answer under `--quiet`, which drops only narration and progress.
+
 ## [0.33.1] — 2026-11-27
 
 ### Fixed
