@@ -8,6 +8,19 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.28.5] — 2026-11-27
+
+### Fixed
+
+- **A comment or worklog is not posted twice after a push that failed part
+  way.** When a later operation on the issue failed, the re-read after the
+  push failed, or the push was interrupted, the file still had `### [new]`
+  for an entry Jira already held: the pull that followed kept both copies,
+  and the next push, or `push --force`, posted it again. Each comment and
+  worklog now gets its server id in the file (`### [c-10900]`,
+  `### [w-10500]`) the moment it is made, and nothing else in the file is
+  rewritten until the issue has gone out.
+
 ## [0.28.4] — 2026-11-27
 
 ### Fixed
