@@ -6,6 +6,7 @@
 //! exit code 7 that names the value.
 
 pub mod file;
+pub mod issue_list;
 pub mod keys;
 
 use crate::error::{JiredError, Result};

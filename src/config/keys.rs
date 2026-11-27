@@ -479,12 +479,12 @@ fn whole_seconds(value: &str) -> Option<String> {
 
 /// `<column>:asc|desc` for the issue picker, canonicalized.
 fn issue_sort(value: &str) -> Option<String> {
-    crate::tui::pick::Sort::parse(value).map(|s| s.to_string())
+    super::issue_list::Sort::parse(value).map(|s| s.to_string())
 }
 
 /// `all`, `category:<key>` or `status:<name>` for the issue picker.
 fn issue_filter(value: &str) -> Option<String> {
-    crate::tui::pick::Scope::parse(value).map(|s| s.to_string())
+    super::issue_list::Scope::parse(value).map(|s| s.to_string())
 }
 
 #[cfg(test)]
