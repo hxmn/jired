@@ -8,6 +8,16 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.3] — 2026-11-27
+
+### Fixed
+
+- **Pasting into an interactive screen no longer submits it.** A line break
+  in pasted text acted as Enter, so a form ended with half the paste — and
+  `sprint add` created a sprint named after the first line — while the rest
+  spilled into the shell. A paste is now typed into the field you are in,
+  line breaks as spaces, except in a description, which keeps them.
+
 ## [0.39.2] — 2026-11-27
 
 ### Changed
