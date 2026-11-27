@@ -1126,10 +1126,16 @@ fn guard_block_starts(text: &str) -> String {
                 || trimmed.starts_with("bq.")
                 || list_marker(trimmed).is_some()
                 || heading_at(trimmed).is_some();
-            if needs_guard {
-                format!("\\{line}")
-            } else {
-                line.to_string()
+            // A marker of two or more is broken at its last character, not its
+            // first: a bold span that starts `*# …*` lost its opening star to
+            // the backslash, and went to Jira as literal text.
+            match list_marker(trimmed) {
+                Some((marker, _)) if marker.len() > 1 => {
+                    let at = line.len() - trimmed.len() + marker.len() - 1;
+                    format!("{}\\{}", &line[..at], &line[at..])
+                }
+                _ if needs_guard => format!("\\{line}"),
+                _ => line.to_string(),
             }
         })
         .collect::<Vec<_>>()
@@ -2496,6 +2502,19 @@ mod review_cases {
             .map(|b| matches!(b, Block::Raw(_)))
             .collect();
         (raw, from_ast(&doc, &store))
+    }
+
+    /// A bold span that starts like a nested list marker keeps its star: the
+    /// guard against the list breaks the marker at its last character.
+    #[test]
+    fn bold_that_starts_like_a_list_marker_stays_bold() {
+        let doc = Document::new(vec![Block::Paragraph(vec![Inline::Strong(vec![
+            Inline::Text("# 0".into()),
+        ])])]);
+        let store = RawStore::new();
+        let text = from_ast(&doc, &store);
+        assert_eq!(text, "*\\# 0*");
+        assert_eq!(to_ast(&text, &mut RawStore::new()), doc);
     }
 
     /// The review's list of Data Center markup that came back changed. Each
