@@ -310,6 +310,26 @@ impl StateStore {
         Ok(())
     }
 
+    /// How far an unfinished fetch of the whole project got: the newest
+    /// `updated` it stored, its pages coming oldest first. The next fetch
+    /// asks only for what came after.
+    pub fn fetch_resume_at(&self) -> Result<Option<DateTime<Utc>>> {
+        Ok(self
+            .get_meta("fetch_resume_at")?
+            .and_then(|s| parse_timestamp(&s)))
+    }
+
+    pub fn set_fetch_resume_at(&self, at: Option<&DateTime<Utc>>) -> Result<()> {
+        match at {
+            Some(at) => self.set_meta("fetch_resume_at", &crate::api::model::format_timestamp(at)),
+            None => {
+                self.conn
+                    .execute("DELETE FROM workspace WHERE key = 'fetch_resume_at'", [])?;
+                Ok(())
+            }
+        }
+    }
+
     pub fn last_fetch_at(&self) -> Result<Option<DateTime<Utc>>> {
         Ok(self
             .get_meta("last_fetch_at")?

@@ -2582,6 +2582,39 @@ fn config_mistakes_are_said_rather_than_crashed_on_or_ignored() {
     );
 }
 
+/// A fetch the network drops part way keeps the pages it had, and the next
+/// one goes on from there: every page was held in memory and stored at the
+/// end, so a failure on the last page of a first fetch kept nothing.
+#[test]
+fn an_interrupted_fetch_keeps_its_pages_and_goes_on_from_them() {
+    let ws = Ws::new();
+    ws.init();
+    ws.write_fixture("search-page.json", serde_json::json!({"max": 1}));
+    ws.write_fixture(
+        "faults.json",
+        serde_json::json!({"POST /search": {"kind": "network", "message": "reset", "after": 2}}),
+    );
+    ws.json_err(&["fetch"], 4);
+    let stored = |ws: &Ws| -> i64 {
+        let db = rusqlite::Connection::open(ws.path().join(".jired/state.db")).unwrap();
+        db.query_row(
+            "SELECT count(*) FROM issue WHERE remote_raw IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(stored(&ws), 2, "the two pages that arrived are kept");
+
+    std::fs::remove_file(ws.fixtures.join("faults.json")).unwrap();
+    let report = ws.json(&["fetch"]);
+    assert_eq!(report["resumed"], true, "{report}");
+    assert_eq!(stored(&ws), 3);
+    // Finished, so the next one is an ordinary incremental fetch.
+    let report = ws.json(&["fetch"]);
+    assert_eq!(report["resumed"], false, "{report}");
+}
+
 #[test]
 fn resume_with_nothing_pending_is_a_no_op() {
     let ws = Ws::new();

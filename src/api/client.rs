@@ -363,7 +363,7 @@ pub async fn search_all(
 }
 
 #[derive(Debug, PartialEq)]
-enum Page {
+pub(crate) enum Page {
     /// Ask again, with this token if the server gave one.
     Next(Option<String>),
     Done,
@@ -372,7 +372,7 @@ enum Page {
 }
 
 /// What follows a page of `count` issues, with `seen` read so far.
-fn next_page(
+pub(crate) fn next_page(
     count: usize,
     seen: usize,
     total: usize,

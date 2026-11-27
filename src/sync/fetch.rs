@@ -1,10 +1,10 @@
 //! `jired fetch` [M1.8] — refresh the remote snapshot.
 //!
-//! Never writes a working-copy file. Partial progress is committed as pages
-//! arrive, so a fetch interrupted by a network failure resumes rather than
-//! starting over.
+//! Never writes a working-copy file. Each page is stored as it arrives, oldest
+//! `updated` first, so a fetch interrupted by a network failure resumes from
+//! the last page it stored rather than starting over.
 
-use crate::api::client::{search_all, FieldSet, SearchQuery};
+use crate::api::client::{next_page, FieldSet, Page, SearchQuery};
 use crate::api::model::jql_timestamp;
 use crate::cli::cmd::fetch::FetchArgs;
 use crate::cli::context::Context;
@@ -21,6 +21,8 @@ pub struct FetchReport {
     pub changed: usize,
     pub deleted: usize,
     pub incremental: bool,
+    /// The fetch went on from where an earlier one stopped part way.
+    pub resumed: bool,
     pub since: Option<String>,
     pub keys: Vec<String>,
     pub fetched_at: String,
@@ -98,7 +100,17 @@ pub fn run_with(
     // Issues asked for by key are read whatever their `updated`: one the
     // watermark had already passed was otherwise never fetched at all.
     let incremental = !args.full && !named && args.updated_since.is_none() && watermark.is_some();
-    let since = incremental.then(|| skew_adjusted(watermark.expect("checked")));
+    // A fetch of the whole project that stopped part way left the newest
+    // `updated` it stored; going on from there is the rest of that walk.
+    let resume = (scope_is_whole_project && !args.full && args.updated_since.is_none())
+        .then(|| engine.state.fetch_resume_at())
+        .transpose()?
+        .flatten();
+    let from = match (incremental.then(|| watermark.expect("checked")), resume) {
+        (Some(w), Some(r)) => Some(w.max(r)),
+        (w, r) => w.or(r),
+    };
+    let since = from.map(skew_adjusted);
 
     let jql = build_jql(ctx, args, since.as_ref())?;
     tracing::debug!(%jql, "searching");
@@ -106,68 +118,67 @@ pub fn run_with(
     // A first fetch of a few hundred issues is several round trips; without
     // this it looks like a hang.
     let progress = crate::sync::progress::Progress::spinner(ctx.out, "searching");
-    let issues = crate::api::block_on(search_all(
-        client,
-        SearchQuery {
-            jql: jql.clone(),
-            start_at: 0,
-            max_results: 100,
-            fields: FieldSet::Full,
-            expand_changelog: false,
-            page_token: None,
-        },
-        |page| {
-            let seen = page.start_at + page.issues.len();
-            tracing::debug!("page: {} of {} issues", seen, page.total);
-            progress.set_message(format!("fetched {seen} of {} issue(s)", page.total));
-        },
-    ))?;
-    progress.finish();
-
-    let storing = crate::sync::progress::Progress::bar(ctx.out, issues.len(), "storing");
+    let mut query = SearchQuery {
+        jql: jql.clone(),
+        start_at: 0,
+        max_results: 100,
+        fields: FieldSet::Full,
+        expand_changelog: false,
+        page_token: None,
+    };
+    let mut token: Option<String> = None;
+    let mut present: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut fetched = 0usize;
     let mut changed_keys = Vec::new();
-    for mut issue in issues.iter().cloned() {
-        // Web links are a resource of their own, one more call per issue, so
-        // they are read only for an issue that changed and only when changelogs
-        // are wanted too; otherwise the last snapshot's are carried forward. A
-        // read that fails is the same: carried, and said, but no reason to fail
-        // a fetch whose issues all arrived.
-        let previous = engine.state.issue(&issue.key)?.and_then(|row| row.remote);
-        // Decided the way `upsert_remote` decides what changed: the stored
-        // second, and the payload's own milliseconds when the seconds tie.
-        let stamp = crate::api::model::format_timestamp;
-        let exact = crate::store::state::exact_updated;
-        let moved = previous.as_ref().is_none_or(|p| {
-            stamp(&p.updated) != stamp(&issue.updated)
-                || matches!((exact(&p.raw), exact(&issue.raw)), (Some(a), Some(b)) if a != b)
-        });
-        if moved && !args.slim {
-            match crate::api::block_on(client.remote_links(&issue.key)) {
-                Ok(links) => crate::api::normalize::set_remote_links(&mut issue, links),
-                Err(e) => ctx.out.warn(format!(
-                    "{}: cannot read its web links: {} — the last ones seen are kept",
-                    issue.key, e.message
-                )),
+    let mut newest = resume;
+    loop {
+        let page = crate::api::block_on(client.search(&query))?;
+        let count = page.issues.len();
+        fetched += count;
+        tracing::debug!("page: {fetched} of {} issues", page.total);
+        progress.set_message(format!("fetched {fetched} of {} issue(s)", page.total));
+        for issue in page.issues {
+            newest = Some(newest.map_or(issue.updated, |n| n.max(issue.updated)));
+            let key = issue.key.clone();
+            // Once each: an issue edited during the walk moves to its end,
+            // and is met again there.
+            if store(ctx, engine, client, args, issue)? && !changed_keys.contains(&key) {
+                changed_keys.push(key.clone());
+            }
+            present.insert(key);
+        }
+        // Committed page by page: interrupted after this, the next fetch asks
+        // only for what is newer than the newest stored.
+        if scope_is_whole_project && args.updated_since.is_none() {
+            engine.state.set_fetch_resume_at(newest.as_ref())?;
+        }
+        match next_page(count, fetched, page.total, page.next_page_token, &token) {
+            Page::Next(next) => {
+                query.page_token = next.clone();
+                token = next;
+                query.start_at += count;
+            }
+            Page::Done => break,
+            Page::Short => {
+                return Err(JiredError::network(format!(
+                    "the search stopped after {fetched} of the {} issues it matched",
+                    page.total
+                ))
+                .with_detail("jql", jql.clone())
+                .with_hint("run `jired fetch` again: it goes on from the last page it stored"));
             }
         }
-        if let Some(previous) = &previous {
-            crate::api::normalize::carry_remote_links(&mut issue, &previous.raw);
-        }
-        if engine.state.upsert_remote(&issue)? {
-            changed_keys.push(issue.key.clone());
-        }
-        storing.inc();
     }
-    storing.finish();
+    progress.finish();
     changed_keys.sort();
     // A parent is not part of an incremental fetch when only its sub-tasks
     // changed, so the list it carries is brought up to date from theirs.
     engine.state.reconcile_subtasks()?;
 
-    // Only a full-scope fetch can tell "gone" from "outside this query".
-    let deleted = if scope_is_whole_project && !incremental {
-        let present: std::collections::HashSet<&str> =
-            issues.iter().map(|i| i.key.as_str()).collect();
+    // Only a walk of the whole project from the start can tell "gone" from
+    // "outside this query"; one that went on from an earlier stop saw only
+    // what changed since.
+    let deleted = if scope_is_whole_project && since.is_none() {
         let missing: Vec<String> = engine
             .state
             .issues()?
@@ -185,18 +196,57 @@ pub fn run_with(
     // choosing, which may be later than the watermark.
     if scope_is_whole_project && args.updated_since.is_none() {
         engine.state.set_last_fetch_at(&started)?;
+        engine.state.set_fetch_resume_at(None)?;
     }
 
     Ok(FetchReport {
         jql: Some(jql),
-        fetched: issues.len(),
+        fetched,
         changed: changed_keys.len(),
         deleted,
-        incremental,
+        incremental: since.is_some(),
+        resumed: resume.is_some(),
         since: since.as_ref().map(crate::api::model::format_timestamp),
         keys: changed_keys,
         fetched_at: crate::api::model::format_timestamp(&started),
     })
+}
+
+/// Store one fetched issue's snapshot; whether it changed.
+fn store(
+    ctx: &mut Context,
+    engine: &Engine,
+    client: &dyn crate::api::JiraApi,
+    args: &FetchArgs,
+    mut issue: crate::api::model::RemoteIssue,
+) -> Result<bool> {
+    // Web links are a resource of their own, one more call per issue, so they
+    // are read only for an issue that changed and only when changelogs are
+    // wanted too; otherwise the last snapshot's are carried forward. A read
+    // that fails is the same: carried, and said, but no reason to fail a
+    // fetch whose issues all arrived.
+    let previous = engine.state.issue(&issue.key)?.and_then(|row| row.remote);
+    // Decided the way `upsert_remote` decides what changed: the stored
+    // second, and the payload's own milliseconds when the seconds tie.
+    let stamp = crate::api::model::format_timestamp;
+    let exact = crate::store::state::exact_updated;
+    let moved = previous.as_ref().is_none_or(|p| {
+        stamp(&p.updated) != stamp(&issue.updated)
+            || matches!((exact(&p.raw), exact(&issue.raw)), (Some(a), Some(b)) if a != b)
+    });
+    if moved && !args.slim {
+        match crate::api::block_on(client.remote_links(&issue.key)) {
+            Ok(links) => crate::api::normalize::set_remote_links(&mut issue, links),
+            Err(e) => ctx.out.warn(format!(
+                "{}: cannot read its web links: {} — the last ones seen are kept",
+                issue.key, e.message
+            )),
+        }
+    }
+    if let Some(previous) = &previous {
+        crate::api::normalize::carry_remote_links(&mut issue, &previous.raw);
+    }
+    engine.state.upsert_remote(&issue)
 }
 
 /// Cache boards, their column mapping, and sprints.

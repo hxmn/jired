@@ -111,6 +111,11 @@ pub struct FixtureClient {
     /// waits only as long as jired's own back-off does.
     late: BTreeMap<String, u64>,
     next_id: Mutex<u64>,
+    /// Calls answered so far per fault with an `after`.
+    answered: Mutex<BTreeMap<String, usize>>,
+    /// `search-page.json`'s `{"max": N}`: the most issues a search page
+    /// holds, as a server that clamps `maxResults` answers.
+    page_size: Option<usize>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -122,6 +127,10 @@ pub struct FixtureFault {
     /// since that is the one a push has to reconcile.
     #[serde(default)]
     pub lost: bool,
+    /// Answer this many calls first, then fail: the network dropping part
+    /// way through a walk of pages.
+    #[serde(default)]
+    pub after: usize,
 }
 
 impl FixtureClient {
@@ -209,6 +218,10 @@ impl FixtureClient {
             ignored,
             late,
             next_id: Mutex::new(first_id),
+            answered: Mutex::new(BTreeMap::new()),
+            page_size: read_json(dir, "search-page.json")
+                .and_then(|v| v.get("max").and_then(Value::as_u64))
+                .map(|n| n as usize),
         })
     }
 
@@ -243,11 +256,20 @@ impl FixtureClient {
     }
 
     fn check_fault(&self, method: &str, path: &str) -> Result<()> {
-        let Some(fault) = self.faults.get(&format!("{method} {path}")) else {
+        let key = format!("{method} {path}");
+        let Some(fault) = self.faults.get(&key) else {
             return Ok(());
         };
         if fault.lost {
             return Ok(());
+        }
+        if fault.after > 0 {
+            let mut seen = self.answered.lock().expect("fixture lock");
+            let n = seen.entry(key).or_insert(0);
+            if *n < fault.after {
+                *n += 1;
+                return Ok(());
+            }
         }
         Err(match fault.kind.as_str() {
             "auth" => JiredError::auth(fault.message.clone()),
@@ -1108,18 +1130,30 @@ impl JiraApi for FixtureClient {
             .cloned()
             .collect();
         // Deterministic ordering: fixtures must not depend on map iteration.
+        // By `updated` where the query asks for that, as fetch does: a walk
+        // that resumes from the newest it stored relies on it.
+        let by_updated = query.jql.to_lowercase().contains("order by updated");
         matching.sort_by_key(|v| {
-            v.get("key")
+            let key = v
+                .get("key")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string()
+                .to_string();
+            let updated = if by_updated {
+                v.pointer("/fields/updated")
+                    .and_then(Value::as_str)
+                    .and_then(parse_timestamp)
+            } else {
+                None
+            };
+            (updated, key)
         });
 
         let total = matching.len();
         let page: Vec<Value> = matching
             .into_iter()
             .skip(query.start_at)
-            .take(query.max_results)
+            .take(query.max_results.min(self.page_size.unwrap_or(usize::MAX)))
             .collect();
 
         let mut parsed = page
