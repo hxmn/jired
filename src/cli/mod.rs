@@ -337,13 +337,11 @@ pub fn run(cli: Cli) -> ExitCode {
         out.warn(INSECURE_TLS_WARNING);
     }
 
+    // A reader that closed the pipe (`jired status | head`) only stops what
+    // goes to stdout: the writes after it are dropped, and the command's own
+    // result stands. Turning it into success hid `jired push | head` failing
+    // on a later issue, with nothing on stderr, which was still open.
     let result = dispatch(&cli, out);
-
-    // A reader that closed the pipe (`jired status | head`) is not an error;
-    // the work finished, nobody is listening any more.
-    if crate::json::stdout_is_closed() {
-        return ExitCode::Success;
-    }
 
     match result {
         Ok(code) => code,

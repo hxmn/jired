@@ -31,7 +31,13 @@ const KEPT: &[&str] = &[
 /// The binary, with an environment of nothing but [`KEPT`] and a home in
 /// `home`.
 pub fn jired(home: &Path) -> Command {
-    let mut cmd = Command::cargo_bin("jired").expect("binary");
+    Command::from_std(jired_std(home))
+}
+
+/// [`jired`] as a plain `std` command, for what `assert_cmd` does not offer:
+/// a stdout of the test's choosing.
+pub fn jired_std(home: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin("jired"));
     cmd.env_clear();
     for name in KEPT {
         if let Some(value) = std::env::var_os(name) {

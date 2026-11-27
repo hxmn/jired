@@ -186,8 +186,8 @@ static PARKED_WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// pointless, and the process should end quietly rather than on a panic.
 static STDOUT_CLOSED: AtomicBool = AtomicBool::new(false);
 
-/// True when a downstream reader closed the pipe; `cli::run` turns this into a
-/// success exit rather than a broken-pipe panic.
+/// True when a downstream reader closed the pipe: what would go to stdout is
+/// dropped from then on, and nothing else changes.
 pub fn stdout_is_closed() -> bool {
     STDOUT_CLOSED.load(Ordering::Relaxed)
 }

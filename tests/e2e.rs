@@ -147,7 +147,12 @@ impl Ws {
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
-        let mut cmd = common::jired(self.home.path());
+        Command::from_std(self.std_cmd(args))
+    }
+
+    /// [`Ws::cmd`] as a plain `std` command.
+    fn std_cmd(&self, args: &[&str]) -> std::process::Command {
+        let mut cmd = common::jired_std(self.home.path());
         cmd.current_dir(self.path())
             .env("JIRED_FIXTURES", &self.fixtures)
             .env("JIRED_NO_KEYRING", "1")
@@ -2316,6 +2321,47 @@ fn a_test_command_has_a_home_of_its_own() {
         std::path::Path::new(&path).starts_with(ws.home.path()),
         "the user config is {path}, outside {}",
         ws.home.path().display()
+    );
+}
+
+/// Run with a stdout nobody reads: the pipe's reader is gone before the
+/// command writes a byte, as with `jired push | head` once `head` is done.
+fn with_stdout_closed(ws: &Ws, args: &[&str]) -> std::process::Output {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    ws.std_cmd(args)
+        .stdout(writer)
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap()
+}
+
+/// A reader closing the pipe stops the output, not the result: the exit
+/// code is the command's own, and an error still reaches stderr. It used to
+/// be 0, with nothing said, whatever happened after the reader left.
+#[test]
+fn a_closed_stdout_keeps_the_exit_code_and_the_error() {
+    let ws = Ws::new();
+    ws.init();
+    ws.json(&["pull"]);
+    let edited = ws
+        .read(ISSUE_FILE)
+        .replace("priority: High", "priority: Low");
+    ws.write(ISSUE_FILE, &edited);
+
+    let out = with_stdout_closed(&ws, &["diff", "--exit-code"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = with_stdout_closed(&ws, &["show", "PROJ-999"]);
+    assert_ne!(out.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("PROJ-999"),
+        "{out:?}"
     );
 }
 
