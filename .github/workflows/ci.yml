@@ -5,24 +5,39 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only unless a job says otherwise: only the release job writes, a tag.
+permissions:
+  contents: read
+
+# A newer push to the same ref makes the run for the older one moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   # Tests must never touch a developer's or runner's real keychain.
   JIRED_NO_KEYRING: "1"
   JIRED_SECRET_KEY: ci-test-passphrase
 
+# Actions are pinned by commit, with the version they were at beside each:
+# a tag can be moved to other code, a commit cannot. Dependabot proposes the
+# bumps (.github/dependabot.yml).
 jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # `--locked` everywhere: what users build is `cargo install --locked`,
       # and a version bump pushed without its lockfile passed CI and then
       # failed that command for everyone.
@@ -33,38 +48,60 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --locked -- -D warnings
+      # Intra-doc links are checked nowhere else.
+      - run: cargo doc --no-deps --document-private-items --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # `rust-version` in Cargo.toml is a promise; clippy's `incompatible_msrv`
+  # catches a std API too new for it, not a language feature or a dependency
+  # that moved past it after `cargo update`.
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: "1.89"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo check --all-targets --locked
 
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo install cargo-deny --locked
-      - run: cargo deny check
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Prebuilt, rather than compiling cargo-deny on every run.
+      - uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2
 
   # Every push to main is a release. Build it the way users do — the release
   # profile, `--locked` — and tag the version, so each one maps to a commit.
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, lint]
+    needs: [test, lint, msrv]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo build --release --locked
       - name: Tag the version
         run: |

@@ -34,3 +34,9 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
+
+[sources]
+# crates.io only: a git or alternative-registry dependency is a decision to
+# make in review, not one to slip in through the lockfile.
+unknown-registry = "deny"
+unknown-git = "deny"
