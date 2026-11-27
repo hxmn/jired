@@ -142,7 +142,10 @@ impl HttpClient {
             // `atl_token` in the form is checked against.
             .cookie_store(true)
             .user_agent(concat!("jired/", env!("CARGO_PKG_VERSION")))
-            .timeout(Duration::from_secs(60))
+            // Per read, not per request: a total deadline covered the body too,
+            // so an attachment that took longer than a minute to move could
+            // never be downloaded or uploaded at all.
+            .read_timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(15));
 
         if conn.tls.insecure {
@@ -263,26 +266,84 @@ impl HttpClient {
         repeat: Repeat,
     ) -> Result<serde_json::Value> {
         let url = self.url(path);
+        // The body at `-vv`: it can carry issue content, and a token never
+        // travels in one.
+        if let Some(b) = &body {
+            tracing::trace!("{method} {path} body: {b}");
+        }
+        let resp = self
+            .send_retrying(&method, path, repeat, || {
+                let req = self.request(method.clone(), &url);
+                match &body {
+                    Some(b) => req.header(CONTENT_TYPE, "application/json").json(b),
+                    None => req,
+                }
+            })
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let err = self.status_error(status, &method, path, resp).await;
+            return Err(if should_retry_status(status) {
+                repeat.unsettled(err)
+            } else {
+                err
+            });
+        }
+        let html = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|t| t.starts_with("text/html"));
+        // 204 and empty bodies are normal for PUT/DELETE. A body that breaks
+        // off is not one of them: read as empty, a search came back with no
+        // issues and every issue in the project was marked deleted.
+        let text = match resp.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                let err = network_error(&e, &method, path).with_detail("status", status.as_u16());
+                return Err(repeat.unsettled(err));
+            }
+        };
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        // A web page where JSON was asked for is a login or single sign-on
+        // page a proxy put in front of the API, not a server bug: it was
+        // reported as "malformed JSON", which sent people looking at jired.
+        if html || text.trim_start().starts_with('<') {
+            return Err(JiredError::auth(format!(
+                "{method} {path}: the server answered with a web page, not the API"
+            ))
+            .with_detail("status", status.as_u16())
+            .with_hint(
+                "a login or single sign-on page is in front of the REST API; check \
+                 server.url and that the credential is accepted without a browser",
+            ));
+        }
+        serde_json::from_str(&text)
+            .map_err(|e| JiredError::generic(format!("{method} {path}: malformed JSON: {e}")))
+    }
+
+    /// Send what `build` makes until it is answered, retrying what `repeat`
+    /// allows: throttling and a failing gateway for a read, only what cannot
+    /// have reached Jira for a write. The answer is returned whatever its
+    /// status, for the caller to read. Every path uses it: only the JSON calls
+    /// did, so a download or an upload failed on the first 429.
+    async fn send_retrying(
+        &self,
+        method: &Method,
+        path: &str,
+        repeat: Repeat,
+        build: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
         let mut attempt = 0u32;
         loop {
             self.limiter.acquire().await;
-            let mut req = self.request(method.clone(), &url);
-            if let Some(b) = &body {
-                req = req.header(CONTENT_TYPE, "application/json").json(b);
-            }
-            // Every request, at `-v`. Without this, `-v` promised REST paths
-            // and printed nothing, so the way to find out whether a call was
-            // even made was to read the source — which is exactly the question
-            // a debug flag exists to answer. The body stays at `-vv`: it can
-            // carry issue content, and a token never travels in one.
-            let started = std::time::Instant::now();
+            // Every request, at `-v`: the way to find out whether a call was
+            // even made should not be reading the source.
+            let started = Instant::now();
             tracing::debug!("{method} {path}");
-            if let Some(b) = &body {
-                tracing::trace!("{method} {path} body: {b}");
-            }
-            let response = req.send().await;
-
-            match response {
+            match build().send().await {
                 Ok(resp) => {
                     let status = resp.status();
                     tracing::debug!(
@@ -290,28 +351,10 @@ impl HttpClient {
                         status.as_u16(),
                         started.elapsed().as_millis()
                     );
-                    if status.is_success() {
-                        // 204 and empty bodies are normal for PUT/DELETE. A
-                        // body that breaks off is not one of them: read as
-                        // empty, a search came back with no issues and every
-                        // issue in the project was marked deleted.
-                        let text = match resp.text().await {
-                            Ok(text) => text,
-                            Err(e) => {
-                                let err = network_error(&e, &method, path)
-                                    .with_detail("status", status.as_u16());
-                                return Err(repeat.unsettled(err));
-                            }
-                        };
-                        if text.trim().is_empty() {
-                            return Ok(serde_json::Value::Null);
-                        }
-                        return serde_json::from_str(&text).map_err(|e| {
-                            JiredError::generic(format!("{method} {path}: malformed JSON: {e}"))
-                        });
-                    }
-
-                    if repeat.may_retry_status(status) && attempt < MAX_RETRIES {
+                    if !status.is_success()
+                        && repeat.may_retry_status(status)
+                        && attempt < MAX_RETRIES
+                    {
                         let wait = retry_after(&resp).unwrap_or_else(|| backoff(attempt));
                         tracing::warn!(
                             "{method} {path} returned {status}; retrying in {:.1}s \
@@ -323,12 +366,7 @@ impl HttpClient {
                         attempt += 1;
                         continue;
                     }
-                    let err = self.status_error(status, &method, path, resp).await;
-                    return Err(if should_retry_status(status) {
-                        repeat.unsettled(err)
-                    } else {
-                        err
-                    });
+                    return Ok(resp);
                 }
                 Err(e) => {
                     if repeat.may_retry_error(&e) && attempt < MAX_RETRIES {
@@ -341,7 +379,7 @@ impl HttpClient {
                         attempt += 1;
                         continue;
                     }
-                    let err = network_error(&e, &method, path);
+                    let err = network_error(&e, method, path);
                     return Err(if e.is_timeout() {
                         repeat.unsettled(err)
                     } else {
@@ -433,24 +471,15 @@ impl HttpClient {
     /// that answer rather than a failure worth reporting. No retry loop — this
     /// is a one-shot fetch, not part of a sync that has to survive a flaky link.
     pub async fn get_document(&self, path: &str, accept: &str) -> Result<Option<Document>> {
-        self.limiter.acquire().await;
         let url = self.url(path);
-        let started = Instant::now();
-        tracing::debug!("GET {path}");
         // A per-request `Accept` wins over the client's default: reqwest fills
         // in default headers only where the request left the key vacant.
         let resp = self
-            .request(Method::GET, &url)
-            .header(ACCEPT, accept)
-            .send()
-            .await
-            .map_err(|e| network_error(&e, &Method::GET, path))?;
+            .send_retrying(&Method::GET, path, Repeat::Safe, || {
+                self.request(Method::GET, &url).header(ACCEPT, accept)
+            })
+            .await?;
         let status = resp.status();
-        tracing::debug!(
-            "GET {path} → {} in {}ms",
-            status.as_u16(),
-            started.elapsed().as_millis()
-        );
         if status == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -466,28 +495,25 @@ impl HttpClient {
         let bytes = resp
             .bytes()
             .await
-            .map_err(|e| JiredError::network(format!("reading {path}: {e}")))?
+            .map_err(|e| network_error(&e, &Method::GET, path))?
             .to_vec();
         Ok(Some(Document { media_type, bytes }))
     }
 
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        self.limiter.acquire().await;
         let resp = self
-            .request(Method::GET, url)
-            .send()
-            .await
-            .map_err(|e| network_error(&e, &Method::GET, url))?;
+            .send_retrying(&Method::GET, url, Repeat::Safe, || {
+                self.request(Method::GET, url)
+            })
+            .await?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(JiredError::network(format!(
-                "GET {url} failed with {status}"
-            )));
+            return Err(self.status_error(status, &Method::GET, url, resp).await);
         }
         Ok(resp
             .bytes()
             .await
-            .map_err(|e| JiredError::network(format!("reading {url}: {e}")))?
+            .map_err(|e| network_error(&e, &Method::GET, url))?
             .to_vec())
     }
 
@@ -498,23 +524,26 @@ impl HttpClient {
         filename: &str,
         bytes: Vec<u8>,
     ) -> Result<serde_json::Value> {
-        self.limiter.acquire().await;
         let mime = mime_guess::from_path(filename)
             .first_or_octet_stream()
             .to_string();
-        let part = reqwest::multipart::Part::bytes(bytes)
-            .file_name(filename.to_string())
+        // Checked once, here, so building the form for each try cannot fail.
+        reqwest::multipart::Part::bytes(Vec::new())
             .mime_str(&mime)
             .map_err(|e| JiredError::generic(format!("invalid MIME type for {filename}: {e}")))?;
-        let form = reqwest::multipart::Form::new().part("file", part);
         let url = self.url(path);
-
+        // An upload adds an attachment, so it goes again only when Jira cannot
+        // have taken it; the form is built anew for each try.
         let resp = self
-            .request(Method::POST, &url)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|e| network_error(&e, &Method::POST, path))?;
+            .send_retrying(&Method::POST, path, Repeat::Unsafe, || {
+                let part = reqwest::multipart::Part::bytes(bytes.clone())
+                    .file_name(filename.to_string())
+                    .mime_str(&mime)
+                    .expect("checked above");
+                let form = reqwest::multipart::Form::new().part("file", part);
+                self.request(Method::POST, &url).multipart(form)
+            })
+            .await?;
         let status = resp.status();
         if !status.is_success() {
             return Err(self.status_error(status, &Method::POST, path, resp).await);
@@ -562,8 +591,15 @@ impl HttpClient {
                 "check server.url — it should be the site root, e.g. https://acme.atlassian.net",
             ),
             // The user typed the key; a key that does not resolve is their input.
-            StatusCode::NOT_FOUND => JiredError::usage(message)
+            StatusCode::NOT_FOUND if path.contains("/issue/") => JiredError::usage(message)
                 .with_hint("the issue may not exist, or the account cannot see it"),
+            StatusCode::NOT_FOUND => JiredError::usage(message)
+                .with_hint("it may not exist, or the account cannot see it"),
+            // What a caller acts on: wait and go again, not report a bug.
+            StatusCode::TOO_MANY_REQUESTS => JiredError::network(message)
+                .with_hint("Jira is limiting requests; wait a minute and run it again"),
+            StatusCode::CONFLICT => JiredError::conflict(message)
+                .with_hint("the server holds something that conflicts; `jired pull` and look"),
             s if s.is_server_error() => JiredError::network(message)
                 .with_hint("the server failed, not jired — retrying later usually works"),
             _ => JiredError::generic(message),
@@ -1028,6 +1064,58 @@ mod tests {
                 err.message
             );
         }
+    }
+
+    /// Throttling that outlasts the retries is `network`, a conflict is
+    /// `conflict`, a missing sprint is not called a missing issue, and a login
+    /// page where JSON was asked for is `auth`, not "malformed JSON".
+    #[tokio::test]
+    async fn what_a_caller_acts_on_is_the_kind() {
+        let (url, _) = loopback::serve(|r| {
+            let json = vec![
+                "Content-Type: application/json".to_string(),
+                "Retry-After: 0".into(),
+            ];
+            match r.path.as_str() {
+                "/throttled" => Reply::With(429, json, "{}".into()),
+                "/conflict" => Reply::With(409, json, "{}".into()),
+                "/rest/agile/1.0/sprint/9" => Reply::With(404, json, "{}".into()),
+                _ => Reply::With(
+                    200,
+                    vec!["Content-Type: text/html".into()],
+                    "<html><body>Log in</body></html>".into(),
+                ),
+            }
+        });
+        let http = client(&url);
+        let kind = |e: JiredError| e.to_json();
+        let e = kind(http.get_json("/throttled").await.unwrap_err());
+        assert_eq!(e["kind"], "network", "{e}");
+        let e = kind(http.get_json("/conflict").await.unwrap_err());
+        assert_eq!(e["kind"], "conflict", "{e}");
+        let e = kind(http.get_json("/rest/agile/1.0/sprint/9").await.unwrap_err());
+        assert!(!e["hint"].as_str().unwrap_or("").contains("issue"), "{e}");
+        let e = kind(http.get_json("/rest/api/2/myself").await.unwrap_err());
+        assert_eq!(e["kind"], "auth", "{e}");
+    }
+
+    /// A download rides out throttling as a JSON read does.
+    #[tokio::test]
+    async fn a_download_is_retried_through_throttling() {
+        let (url, seen) = loopback::serve(|r| {
+            if r.path.ends_with("first") {
+                Reply::With(429, vec!["Retry-After: 0".into()], String::new())
+            } else {
+                Reply::With(200, vec![], "body".into())
+            }
+        });
+        let http = client(&url);
+        assert!(http.get_bytes(&format!("{url}/a/first")).await.is_err());
+        assert_eq!(seen.lock().unwrap().len(), 1 + MAX_RETRIES as usize);
+        assert_eq!(
+            http.get_bytes(&format!("{url}/a/b")).await.unwrap(),
+            b"body"
+        );
     }
 
     /// An upload goes as multipart with the header Jira wants before it
