@@ -8,7 +8,8 @@
 //! * every schema is a valid JSON Schema whose `$id` matches its filename;
 //! * the documents commands actually produce validate against them.
 
-use assert_cmd::Command;
+mod common;
+
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -106,8 +107,7 @@ fn every_published_schema_is_reachable_from_the_cli() {
 
 #[test]
 fn schema_command_lists_exactly_what_is_published() {
-    let out = Command::cargo_bin("jired")
-        .unwrap()
+    let out = common::jired(&common::process_home())
         .arg("schema")
         .output()
         .unwrap();
@@ -159,7 +159,7 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Option<Value> {
-        let mut cmd = Command::cargo_bin("jired").unwrap();
+        let mut cmd = common::jired(&common::process_home());
         cmd.current_dir(self.dir.path())
             .env("JIRED_FIXTURES", &self.fixtures)
             .env("JIRED_NO_KEYRING", "1")

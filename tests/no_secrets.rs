@@ -9,7 +9,8 @@
 //! the server it came from in its `base` URL and again in the link it offers
 //! to its own detailed form.
 
-use assert_cmd::Command;
+mod common;
+
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -129,8 +130,7 @@ fn no_command_output_or_config_contains_the_token() {
     }
 
     let run = |args: &[&str]| -> String {
-        let out = Command::cargo_bin("jired")
-            .unwrap()
+        let out = common::jired(&common::process_home())
             .current_dir(dir.path())
             .env("JIRED_FIXTURES", &fixtures)
             .env("JIRED_NO_KEYRING", "1")
@@ -219,8 +219,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 #[test]
 fn insecure_tls_warns_on_every_run() {
     let dir = TempDir::new().unwrap();
-    let out = Command::cargo_bin("jired")
-        .unwrap()
+    let out = common::jired(&common::process_home())
         .current_dir(dir.path())
         .args(["status", "--insecure", "--no-input"])
         .output()
@@ -252,8 +251,7 @@ fn the_session_database_is_private() {
     }
 
     let run = |args: &[&str]| {
-        Command::cargo_bin("jired")
-            .unwrap()
+        common::jired(&common::process_home())
             .current_dir(dir.path())
             .env("JIRED_FIXTURES", &fixtures)
             .env("JIRED_NO_KEYRING", "1")

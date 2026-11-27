@@ -4,6 +4,8 @@
 //! client, so what is exercised is exactly what a user or an agent would run —
 //! including exit codes, stdout/stderr separation, and the JSON contract.
 
+mod common;
+
 use assert_cmd::Command;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -84,6 +86,8 @@ fn fixtures_for(deployment: Deployment) -> PathBuf {
 /// A workspace directory plus a `jired` invoker wired to the fixture server.
 struct Ws {
     dir: TempDir,
+    /// The user's home for this test's commands: see `common`.
+    home: TempDir,
     fixtures: PathBuf,
     deployment: Deployment,
     /// How the workspace authenticates. Data Center defaults to a personal
@@ -116,6 +120,7 @@ impl Ws {
         }
         Self {
             dir,
+            home: TempDir::new().expect("tempdir"),
             fixtures,
             deployment,
             auth: "pat",
@@ -142,7 +147,7 @@ impl Ws {
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::cargo_bin("jired").expect("binary");
+        let mut cmd = common::jired(self.home.path());
         cmd.current_dir(self.path())
             .env("JIRED_FIXTURES", &self.fixtures)
             .env("JIRED_NO_KEYRING", "1")
@@ -316,8 +321,7 @@ const ISSUE_FILE: &str = "PROJ-0142. Fix login flow.md";
 /// commit and the build time, not just the release number.
 #[test]
 fn version_names_the_commit_and_when_it_was_built() {
-    let short = Command::cargo_bin("jired")
-        .unwrap()
+    let short = common::jired(&common::process_home())
         .arg("-V")
         .output()
         .unwrap();
@@ -334,8 +338,7 @@ fn version_names_the_commit_and_when_it_was_built() {
     assert!(!commit.is_empty(), "{line}");
     assert_timestamp(timestamp);
 
-    let long = Command::cargo_bin("jired")
-        .unwrap()
+    let long = common::jired(&common::process_home())
         .arg("--version")
         .output()
         .unwrap();
@@ -355,8 +358,7 @@ fn version_names_the_commit_and_when_it_was_built() {
 #[test]
 fn the_binary_carries_the_changelog_it_was_built_from() {
     let run = |args: &[&str]| {
-        let out = Command::cargo_bin("jired")
-            .unwrap()
+        let out = common::jired(&common::process_home())
             .args(args)
             .output()
             .unwrap();
@@ -395,8 +397,7 @@ fn the_binary_carries_the_changelog_it_was_built_from() {
 /// nothing it already knows.
 #[test]
 fn the_changelog_can_be_read_from_a_version_on() {
-    let out = Command::cargo_bin("jired")
-        .unwrap()
+    let out = common::jired(&common::process_home())
         .args(["version", "--changelog", "--since", "0.20.0"])
         .output()
         .unwrap();
@@ -736,8 +737,7 @@ fn init_lists_the_servers_it_cannot_choose_between() {
 #[test]
 fn init_help_says_what_it_works_out_and_shows_a_call_without_prompts() {
     for flag in ["-h", "--help"] {
-        let out = Command::cargo_bin("jired")
-            .unwrap()
+        let out = common::jired(&common::process_home())
             .args(["init", flag])
             .output()
             .unwrap();
@@ -864,7 +864,7 @@ fn a_second_init_without_force_is_a_usage_error() {
 #[test]
 fn a_missing_required_value_exits_7_and_names_it() {
     let ws = Ws::new();
-    let mut cmd = Command::cargo_bin("jired").unwrap();
+    let mut cmd = common::jired(&common::process_home());
     let out = cmd
         .current_dir(ws.path())
         .env_clear()
@@ -1978,14 +1978,14 @@ fn every_json_output_validates_against_its_published_schema() {
 #[test]
 fn the_schema_command_lists_and_prints_schemas() {
     let ws = Ws::new();
-    let mut cmd = Command::cargo_bin("jired").unwrap();
+    let mut cmd = common::jired(&common::process_home());
     let out = cmd.arg("schema").output().unwrap();
     assert!(out.status.success());
     let listing = String::from_utf8_lossy(&out.stdout);
     assert!(listing.contains("frontmatter"));
     assert!(listing.contains("pull"));
 
-    let mut cmd = Command::cargo_bin("jired").unwrap();
+    let mut cmd = common::jired(&common::process_home());
     let out = cmd.args(["schema", "pull"]).output().unwrap();
     let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["$id"], "jired/pull/1");
@@ -2300,6 +2300,23 @@ fn an_issue_named_to_pull_is_read_even_behind_the_watermark() {
         .unwrap()
         .flatten()
         .any(|e| e.file_name().to_string_lossy() == "PROJ-0150. Edited by a colleague.md"));
+}
+
+/// The harness's own guarantee: a command never sees the developer's config
+/// or credentials. A `--global` write went to the real config directory.
+/// Not on Windows, whose config directory is asked of the shell rather than
+/// of the environment, so no variable moves it.
+#[cfg(not(windows))]
+#[test]
+fn a_test_command_has_a_home_of_its_own() {
+    let ws = Ws::new();
+    let out = ws.cmd(&["config", "path", "--global"]).output().unwrap();
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert!(
+        std::path::Path::new(&path).starts_with(ws.home.path()),
+        "the user config is {path}, outside {}",
+        ws.home.path().display()
+    );
 }
 
 #[test]
@@ -10619,8 +10636,7 @@ fn config_works_before_a_workspace_exists() {
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
 
-    let out = Command::cargo_bin("jired")
-        .unwrap()
+    let out = common::jired(&common::process_home())
         .current_dir(dir.path())
         .env("XDG_CONFIG_HOME", &home)
         .args(["config", "set", "creds.storage", "user_config", "--global"])
@@ -10632,8 +10648,7 @@ fn config_works_before_a_workspace_exists() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let path = Command::cargo_bin("jired")
-        .unwrap()
+    let path = common::jired(&common::process_home())
         .current_dir(dir.path())
         .env("XDG_CONFIG_HOME", &home)
         .args(["config", "path", "--global"])

@@ -7,7 +7,8 @@
 //! Ignored by default because it takes tens of seconds and writes thousands of
 //! files. Run it with `cargo test --test scale -- --ignored --nocapture`.
 
-use assert_cmd::Command;
+mod common;
+
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -99,8 +100,7 @@ struct Timed {
 
 fn run(dir: &Path, fixtures: &Path, label: &'static str, args: &[&str]) -> Timed {
     let start = Instant::now();
-    let out = Command::cargo_bin("jired")
-        .unwrap()
+    let out = common::jired(&common::process_home())
         .current_dir(dir)
         .env("JIRED_FIXTURES", fixtures)
         .env("JIRED_NO_KEYRING", "1")
