@@ -8,7 +8,6 @@ use crate::api::client::{next_page, FieldSet, Page, SearchQuery};
 use crate::api::model::jql_timestamp;
 use crate::context::Context;
 use crate::error::{JiredError, Result};
-use crate::json::Out;
 use crate::sync::{jql_quote, Engine};
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
@@ -25,21 +24,6 @@ pub struct FetchReport {
     pub since: Option<String>,
     pub keys: Vec<String>,
     pub fetched_at: String,
-}
-
-impl FetchReport {
-    pub fn render(&self, out: Out) {
-        out.say(format!(
-            "fetched {} issue(s), {} changed{}",
-            self.fetched,
-            self.changed,
-            if self.deleted > 0 {
-                format!(", {} no longer in scope", self.deleted)
-            } else {
-                String::new()
-            }
-        ));
-    }
 }
 
 /// What a fetch is asked for: the engine's half of `jired fetch`'s flags.

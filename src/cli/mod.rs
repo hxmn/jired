@@ -5,6 +5,7 @@
 
 pub mod cmd;
 pub mod context;
+pub mod render;
 
 use crate::error::{ExitCode, JiredError};
 use crate::json::Out;

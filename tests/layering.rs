@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 /// A module, and the modules nothing in it may name.
 const RULES: &[(&str, &[&str])] = &[
     // The engine is driven through options structs and a `Context` that live
-    // outside the command line.
-    ("sync", &["cli"]),
+    // outside the command line, and its reports are drawn there: colour is not
+    // the engine's to choose.
+    ("sync", &["cli", "style"]),
     ("rules", &["cli"]),
     // The client is handed a finished connection; where it was looked up is
     // the composing layer's business.
