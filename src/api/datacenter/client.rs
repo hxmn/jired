@@ -62,12 +62,13 @@ pub fn user_search_url(prefix: &str, query: &str, scope: UserScope<'_>) -> Strin
 /// here, and there is nothing to page.
 pub(crate) async fn projects(rest: &Rest) -> Result<Vec<Project>> {
     let v = rest.get(&routes::PROJECTS, &[], &[]).await?;
-    let mut out: Vec<Project> = v
-        .as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter_map(crate::api::rest::project_from)
-        .collect();
+    let mut out: Vec<Project> = crate::api::wire::decode_each::<crate::api::wire::WireProject>(
+        v.as_array().map(Vec::as_slice).unwrap_or_default(),
+        "projects",
+    )
+    .into_iter()
+    .map(Project::from)
+    .collect();
     out.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(out)
 }

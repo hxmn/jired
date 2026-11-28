@@ -21,6 +21,7 @@ use crate::api::datacenter::routes::{self, Module, Route};
 use crate::api::http::HttpClient;
 use crate::api::model::*;
 use crate::api::normalize::{self, FieldMap};
+use crate::api::wire;
 use crate::api::{filter, Deployment, Markup};
 use crate::error::{JiredError, Result};
 use async_trait::async_trait;
@@ -1088,22 +1089,11 @@ impl Agile for Rest {
                 .cloned()
                 .unwrap_or_default();
             let n = values.len();
-            out.extend(values.iter().filter_map(|b| {
-                Some(Board {
-                    id: id_string(b.get("id")?)?,
-                    name: b.get("name")?.as_str()?.to_string(),
-                    board_type: b
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    project_key: b
-                        .get("location")
-                        .and_then(|l| l.get("projectKey"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                })
-            }));
+            out.extend(
+                wire::decode_each::<wire::WireBoard>(&values, "boards")
+                    .into_iter()
+                    .map(Board::from),
+            );
             if v.get("isLast").and_then(Value::as_bool).unwrap_or(true) || n == 0 {
                 break;
             }
@@ -1172,7 +1162,11 @@ impl Agile for Rest {
                 .cloned()
                 .unwrap_or_default();
             let n = values.len();
-            out.extend(values.iter().filter_map(|s| sprint_from_json(s, board_id)));
+            out.extend(
+                wire::decode_each::<wire::WireSprint>(&values, "sprints")
+                    .into_iter()
+                    .map(|s| s.into_sprint(board_id)),
+            );
             if v.get("isLast").and_then(Value::as_bool).unwrap_or(true) || n == 0 {
                 break;
             }
@@ -1262,7 +1256,11 @@ impl Projects for Rest {
                 .cloned()
                 .unwrap_or_default();
             let n = values.len();
-            out.extend(values.iter().filter_map(project_from));
+            out.extend(
+                wire::decode_each::<wire::WireProject>(&values, "projects")
+                    .into_iter()
+                    .map(Project::from),
+            );
             let is_last = v.get("isLast").and_then(Value::as_bool).unwrap_or(true);
             if is_last || n == 0 {
                 break;
@@ -1294,7 +1292,12 @@ impl Projects for Rest {
             )
             .await?;
         Ok(v.as_array()
-            .map(|a| a.iter().filter_map(version_from_json).collect())
+            .map(|a| {
+                wire::decode_each::<wire::WireVersion>(a, "versions")
+                    .into_iter()
+                    .map(Version::from)
+                    .collect()
+            })
             .unwrap_or_default())
     }
 
@@ -1459,19 +1462,7 @@ pub(crate) fn cloud_user_search(prefix: &str, query: &str, scope: UserScope<'_>)
 }
 
 pub(crate) fn project_from(v: &Value) -> Option<Project> {
-    Some(Project {
-        id: id_string(v.get("id")?)?,
-        key: v.get("key")?.as_str()?.to_string(),
-        name: v
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        project_type: v
-            .get("projectTypeKey")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    })
+    wire::decode::<wire::WireProject>(v).ok().map(Project::from)
 }
 
 /// One sprint out of an agile-API payload.
@@ -1480,29 +1471,9 @@ pub(crate) fn project_from(v: &Value) -> Option<Project> {
 /// board's own sprint listing repeats the board in the URL rather than in
 /// every row.
 fn sprint_from_json(s: &Value, board: &str) -> Option<Sprint> {
-    Some(Sprint {
-        id: id_string(s.get("id")?)?,
-        name: s.get("name")?.as_str()?.to_string(),
-        state: SprintState::parse(s.get("state").and_then(Value::as_str).unwrap_or("")),
-        board_id: s
-            .get("originBoardId")
-            .and_then(id_string_ref)
-            .or_else(|| Some(board.to_string()))
-            .filter(|b| !b.is_empty()),
-        start_date: s
-            .get("startDate")
-            .and_then(Value::as_str)
-            .and_then(parse_timestamp),
-        end_date: s
-            .get("endDate")
-            .and_then(Value::as_str)
-            .and_then(parse_timestamp),
-        goal: s
-            .get("goal")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .filter(|g| !g.is_empty()),
-    })
+    wire::decode::<wire::WireSprint>(s)
+        .ok()
+        .map(|s| s.into_sprint(board))
 }
 
 /// One version out of a platform-API payload.
@@ -1510,22 +1481,7 @@ fn sprint_from_json(s: &Value, board: &str) -> Option<Sprint> {
 /// Shared with the fixture client, which keeps its versions in the server's
 /// own shape so a recording reads the way a live answer does.
 pub fn version_from_json(v: &Value) -> Option<Version> {
-    let text = |name: &str| {
-        v.get(name)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .filter(|t| !t.is_empty())
-    };
-    Some(Version {
-        id: id_string(v.get("id")?)?,
-        name: v.get("name")?.as_str()?.to_string(),
-        project_id: v.get("projectId").and_then(id_string_ref),
-        description: text("description"),
-        released: v.get("released").and_then(Value::as_bool).unwrap_or(false),
-        archived: v.get("archived").and_then(Value::as_bool).unwrap_or(false),
-        start_date: text("startDate").as_deref().and_then(parse_day),
-        release_date: text("releaseDate").as_deref().and_then(parse_day),
-    })
+    wire::decode::<wire::WireVersion>(v).ok().map(Version::from)
 }
 
 fn unreadable_filter(which: &str, response: Value) -> JiredError {

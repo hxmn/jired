@@ -20,6 +20,7 @@ pub mod normalize;
 pub mod rest;
 pub mod scrub;
 pub mod tls;
+pub mod wire;
 
 pub use client::{
     Agile, ApiSpec, FieldSet, Filters, Issues, JiraApi, Projects, SearchPage, SearchQuery, Server,
