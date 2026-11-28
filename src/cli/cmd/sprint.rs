@@ -302,7 +302,7 @@ pub(crate) fn resolve_sprint(ctx: &Context, wanted: &str) -> Result<SprintRow> {
 
     let open: Vec<String> = sprints
         .iter()
-        .filter(|s| s.state != "closed")
+        .filter(|s| !s.state.is_closed())
         .map(|s| format!("{} ({})", s.name, s.id))
         .collect();
     Err(
@@ -426,7 +426,7 @@ fn start(g: &GlobalArgs, args: &StartArgs, out: Out) -> Result<ExitCode> {
             goal: args.goal.clone(),
             start: given_start,
             end: given_end,
-            state: Some("active".to_string()),
+            state: Some(crate::api::SprintState::Active),
             ..Default::default()
         },
         args.dry_run,
@@ -599,7 +599,7 @@ fn close(g: &GlobalArgs, args: &CloseArgs, out: Out) -> Result<ExitCode> {
     let closed = crate::api::block_on(client.update_sprint(
         &sprint.id,
         &SprintUpdate {
-            state: Some("closed".to_string()),
+            state: Some(crate::api::SprintState::Closed),
             ..Default::default()
         },
     ))?;
@@ -724,7 +724,7 @@ fn carry_target(
         ))
         .with_hint("name the sprint they should go to, or leave the flag off"));
     }
-    if target.state == "closed" {
+    if target.state.is_closed() {
         return Err(
             already(&target, "is closed, so nothing can be carried into it")
                 .with_hint("carry them into a running or future sprint"),

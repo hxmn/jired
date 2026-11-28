@@ -53,7 +53,7 @@ pub(crate) fn already(sprint: &Sprint, what: &str) -> JiredError {
     JiredError::usage(format!("{} {what}", sprint.name))
         .with_detail("sprint", sprint.name.clone())
         .with_detail("sprint_id", sprint.id.clone())
-        .with_detail("state", sprint.state.clone())
+        .with_detail("state", sprint.state.to_string())
 }
 
 /// Jira allows one running sprint per board and answers 400 for the second,
@@ -72,7 +72,7 @@ pub(crate) fn check_one_running(
     // Boards over one backlog commonly share a sprint pool, so a running sprint
     // in the answer is only in the way when it is this board's own.
     let running = sprints.iter().find(|s| {
-        s.state == "active"
+        s.state == crate::api::SprintState::Active
             && s.id != starting.id
             && s.board_id.as_deref().is_none_or(|b| b == board)
     });

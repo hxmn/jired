@@ -259,7 +259,7 @@ pub struct SprintRow {
     pub id: String,
     pub board_id: Option<String>,
     pub name: String,
-    pub state: String,
+    pub state: crate::api::SprintState,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -934,7 +934,13 @@ impl StateStore {
                  ON CONFLICT(id) DO UPDATE SET
                    board_id = excluded.board_id, name = excluded.name,
                    state = excluded.state, raw = excluded.raw",
-                params![s.id, s.board_id, s.name, s.state, serde_json::to_string(s)?],
+                params![
+                    s.id,
+                    s.board_id,
+                    s.name,
+                    s.state.as_str(),
+                    serde_json::to_string(s)?
+                ],
             )?;
         }
         tx.commit()?;
@@ -950,7 +956,9 @@ impl StateStore {
                 id: r.get(0)?,
                 board_id: r.get(1)?,
                 name: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                state: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                state: crate::api::SprintState::parse(
+                    &r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                ),
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)

@@ -100,7 +100,7 @@ pub fn regroup(engine: &Engine, root: &Path, options: &GroupOptions) -> Result<G
             .state
             .sprints()?
             .into_iter()
-            .filter(|s| s.state == "closed")
+            .filter(|s| s.state.is_closed())
             .map(|s| s.name)
             .collect()
     };

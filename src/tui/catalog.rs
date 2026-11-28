@@ -36,16 +36,15 @@ pub struct Catalog {
 #[derive(Debug, Clone)]
 pub struct KnownSprint {
     pub name: String,
-    /// `active`, `future` or `closed`.
-    pub state: String,
+    pub state: crate::api::SprintState,
 }
 
 impl KnownSprint {
     /// How the state reads beside the name in a list.
     pub fn detail(&self) -> &'static str {
-        match self.state.as_str() {
-            "active" => "running now",
-            "future" => "not started",
+        match self.state {
+            crate::api::SprintState::Active => "running now",
+            crate::api::SprintState::Future => "not started",
             _ => "closed",
         }
     }
@@ -208,9 +207,10 @@ impl Catalog {
         // The one running, then the ones queued behind it, then the finished
         // ones newest first — a sprint that just ended is the likeliest of them.
         all.sort_by(|a, b| {
-            rank(&a.state)
-                .cmp(&rank(&b.state))
-                .then_with(|| match (rank(&a.state), rank(&b.state)) {
+            a.state
+                .rank()
+                .cmp(&b.state.rank())
+                .then_with(|| match (a.state.rank(), b.state.rank()) {
                     (2, 2) => recency(&b.id).cmp(&recency(&a.id)),
                     _ => std::cmp::Ordering::Equal,
                 })
@@ -248,15 +248,6 @@ impl Tally {
         let mut all: Vec<(String, usize)> = self.0.into_iter().collect();
         all.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         all.into_iter().map(|(value, _)| value).collect()
-    }
-}
-
-/// Where a sprint's state puts it in the list.
-fn rank(state: &str) -> u8 {
-    match state {
-        "active" => 0,
-        "future" => 1,
-        _ => 2,
     }
 }
 

@@ -181,7 +181,7 @@ pub fn run_sprints(g: &GlobalArgs, args: &SprintsArgs, out: Out) -> Result<ExitC
             .unwrap_or(false);
     let shown: Vec<_> = sprints
         .iter()
-        .filter(|s| include_closed || s.state != "closed")
+        .filter(|s| include_closed || !s.state.is_closed())
         .collect();
     if shown.is_empty() {
         out.say(if sprints.is_empty() {

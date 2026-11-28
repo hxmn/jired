@@ -1616,7 +1616,7 @@ impl Agile for FixtureClient {
             id: self.next_id(),
             name: input.name.clone(),
             // Jira decides this, and a sprint nobody has started yet is future.
-            state: "future".to_string(),
+            state: SprintState::Future,
             board_id: Some(input.board_id.clone()),
             start_date: input.start,
             end_date: input.end,

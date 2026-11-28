@@ -38,8 +38,7 @@ pub struct KnownBoard {
 pub struct BoardSprint {
     pub board_id: String,
     pub name: String,
-    /// `active`, `future` or `closed`.
-    pub state: String,
+    pub state: crate::api::SprintState,
 }
 
 /// What the command line already supplied; the form starts from these.

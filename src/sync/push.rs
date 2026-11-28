@@ -1899,16 +1899,12 @@ fn sprint_target(
         .iter()
         .filter(|s| s.name.eq_ignore_ascii_case(name))
         .collect();
-    candidates.sort_by_key(|s| match s.state.as_str() {
-        "active" => 0,
-        "future" => 1,
-        _ => 2,
-    });
+    candidates.sort_by_key(|s| s.state.rank());
     match candidates.first() {
         Some(sprint) => Ok(Some(sprint.id.clone())),
         None => Err(sprints
             .iter()
-            .filter(|s| s.state != "closed")
+            .filter(|s| !s.state.is_closed())
             .map(|s| s.name.clone())
             .collect()),
     }

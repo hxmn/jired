@@ -47,12 +47,92 @@ pub struct Board {
     pub project_key: Option<String>,
 }
 
+/// Where a sprint is in its life, as the agile API spells it.
+///
+/// Compared without regard to case: Data Center has spelled it `ACTIVE` in
+/// places, and a comparison against `"active"` that a server's spelling can
+/// slip past is how a closed sprint ends up offered as an open one. A state
+/// no one has seen yet is kept as it came, so it still round-trips.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SprintState {
+    Future,
+    Active,
+    Closed,
+    Other(String),
+}
+
+impl SprintState {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "future" => Self::Future,
+            "active" => Self::Active,
+            "closed" => Self::Closed,
+            _ => Self::Other(s.to_string()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Future => "future",
+            Self::Active => "active",
+            Self::Closed => "closed",
+            Self::Other(s) => s,
+        }
+    }
+
+    /// Where the state puts a sprint in a list: the running one first, then
+    /// the ones to come, then the finished — the order someone choosing a
+    /// sprint wants, and what a name shared by several resolves to.
+    pub fn rank(&self) -> u8 {
+        match self {
+            Self::Active => 0,
+            Self::Future => 1,
+            Self::Closed | Self::Other(_) => 2,
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        *self == Self::Closed
+    }
+}
+
+/// No state at all: what a sprint built in a test or read from an empty column
+/// has, and what the plain string these replaced defaulted to.
+impl Default for SprintState {
+    fn default() -> Self {
+        Self::Other(String::new())
+    }
+}
+
+impl From<&str> for SprintState {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl std::fmt::Display for SprintState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for SprintState {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SprintState {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self::parse(&String::deserialize(d)?))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Sprint {
     pub id: String,
     pub name: String,
-    /// `active`, `future`, or `closed`.
-    pub state: String,
+    pub state: SprintState,
     #[serde(default)]
     pub board_id: Option<String>,
     #[serde(default)]
@@ -117,8 +197,8 @@ pub struct SprintUpdate {
     pub goal: Option<String>,
     pub start: Option<DateTime<Utc>>,
     pub end: Option<DateTime<Utc>>,
-    /// `active` to start the sprint, `closed` to finish it.
-    pub state: Option<String>,
+    /// `Active` to start the sprint, `Closed` to finish it.
+    pub state: Option<SprintState>,
 }
 
 impl SprintUpdate {
@@ -829,9 +909,32 @@ mod tests {
     /// sprint keeps — and a `null` is a field it loses. Only what was asked for
     /// may appear.
     #[test]
+    fn a_sprint_state_is_read_whatever_its_case() {
+        assert_eq!(SprintState::parse("ACTIVE"), SprintState::Active);
+        assert_eq!(SprintState::parse(" Closed "), SprintState::Closed);
+        assert!(SprintState::parse("CLOSED").is_closed());
+    }
+
+    #[test]
+    fn a_sprint_state_no_one_has_seen_round_trips() {
+        let state: SprintState = serde_json::from_value(serde_json::json!("paused")).unwrap();
+        assert_eq!(state, SprintState::Other("paused".into()));
+        assert_eq!(serde_json::to_value(&state).unwrap(), "paused");
+        assert_eq!(serde_json::to_value(SprintState::Active).unwrap(), "active");
+    }
+
+    #[test]
+    fn sprints_rank_running_then_coming_then_finished() {
+        let mut states = ["closed", "paused", "future", "active"].map(SprintState::parse);
+        states.sort_by_key(SprintState::rank);
+        assert_eq!(states[0], SprintState::Active);
+        assert_eq!(states[1], SprintState::Future);
+    }
+
+    #[test]
     fn a_sprint_update_sends_only_the_fields_it_was_given() {
         let body = SprintUpdate {
-            state: Some("active".to_string()),
+            state: Some(SprintState::Active),
             ..Default::default()
         }
         .to_body();

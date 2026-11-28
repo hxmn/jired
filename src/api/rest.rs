@@ -1483,11 +1483,7 @@ fn sprint_from_json(s: &Value, board: &str) -> Option<Sprint> {
     Some(Sprint {
         id: id_string(s.get("id")?)?,
         name: s.get("name")?.as_str()?.to_string(),
-        state: s
-            .get("state")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_ascii_lowercase(),
+        state: SprintState::parse(s.get("state").and_then(Value::as_str).unwrap_or("")),
         board_id: s
             .get("originBoardId")
             .and_then(id_string_ref)
