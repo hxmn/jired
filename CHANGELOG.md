@@ -8,6 +8,17 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.17] — 2026-11-28
+
+### Changed
+
+- `jired pull --strategy theirs`, `jired reset` and the other commands that
+  name local edits before overwriting them no longer render the agent
+  instructions document just to throw it away.
+- Otherwise nothing in jired's behaviour: the sync engine is driven through
+  options of its own instead of the command line's, and the module layering is
+  checked by a test.
+
 ## [0.39.16] — 2026-11-27
 
 ### Changed
