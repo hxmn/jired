@@ -8,6 +8,15 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.19] — 2026-11-28
+
+### Fixed
+
+- A board, sprint, version or project that the server sends in a shape jired
+  cannot read is now left out with a warning that names it and says why.
+  Before, it was silently missing from `jired list`, `jired sprint` and
+  `jired release`.
+
 ## [0.39.18] — 2026-11-28
 
 ### Changed
