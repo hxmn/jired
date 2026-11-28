@@ -12,9 +12,10 @@ version between the one you have and the one you are moving to.
 
 ### Changed
 
-- `jired pull --strategy theirs`, `jired reset` and the other commands that
-  name local edits before overwriting them no longer render the agent
-  instructions document just to throw it away.
+- `jired pull` and `jired init` no longer render the agent instructions
+  document to throw it away: `pull` did it on naming the local edits
+  `--strategy theirs` would discard and again on its closing workspace state,
+  and `init` on its own.
 - Otherwise nothing in jired's behaviour: the sync engine is driven through
   options of its own instead of the command line's, and the module layering is
   checked by a test.
