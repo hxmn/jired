@@ -12,13 +12,26 @@ graph TD
     SYNC --> CONV[Conversion pipeline<br/>MD ⇄ JiredAst ⇄ ADF or wiki]
     SYNC --> STATE[(state.db)]
     AUTH --> SESS[(session.db)]
-    SYNC --> API[JiraApi trait]
-    API --> CLOUD[Rest — Cloud v3 ADF]
-    API --> DC[DataCenter v2 wiki<br/>routes.rs ⇄ vendored WADL]
+    SYNC --> API[JiraApi trait<br/>Server, Users, Issues, Agile, Projects, Filters]
+    API --> REST[Rest — one client for both deployments]
+    REST --> CLOUD[Cloud v3 ADF]
+    REST --> DC[Data Center v2 wiki<br/>routes.rs ⇄ vendored WADL]
     DC --> SPEC[(specs/datacenter/10.7.4)]
     SYNC --> PROJ[Filesystem projector<br/>files, renames, symlinks, groups]
     PROJ --> FS[Working copy .md + folders]
 ```
+
+Dependencies point down this picture and nowhere else, and
+`tests/layering.rs` reads the source to keep it so:
+
+- The command layer turns flags into plain options and a `Context` (both
+  outside `cli`), and builds the client. The engine never sees clap.
+- `api` is handed a finished connection. It knows nothing of the command line,
+  the stores or the configuration.
+- `api` (how Jira spells an issue) and `doc` (how a file does) share their
+  values through `value`, a leaf that names nothing else in the crate.
+- `rules` holds what is true of sprints, releases, filters and a parent's
+  sub-tasks, with neither a command nor a database in it.
 
 The linchpin is **`JiredAst`**, a single internal rich-text AST. ADF and wiki markup
 both parse into it; Markdown renders from it and parses back into it. Unrepresentable
@@ -46,7 +59,7 @@ attachment bytes, and the description endpoint itself).
 
 ## Data flows
 
-- **fetch** — `JiraApi::search(jql, page…)` → normalize (v2/v3 differences, TZ,
+- **fetch** — `Issues::search(jql, page…)` → normalize (v2/v3 differences, TZ,
   custom fields) → upsert into `state.db` remote-snapshot columns. Never touches files.
 - **pull** — fetch → per issue: load *base* (state.db) + *remote* (state.db) +
   *working* (parsed `.md`) → three-way merge → projector writes files/renames/symlinks
