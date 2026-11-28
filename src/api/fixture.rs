@@ -1314,7 +1314,7 @@ impl Issues for FixtureClient {
             "started": worklog.started.as_ref().map(format_worklog_started).unwrap_or_else(|| now.clone()),
             "created": now, "updated": now,
             "timeSpent": worklog.time_spent,
-            "timeSpentSeconds": crate::doc::parse_duration(&worklog.time_spent).unwrap_or(0),
+            "timeSpentSeconds": crate::value::parse_duration(&worklog.time_spent).unwrap_or(0),
             "comment": worklog.comment.to_field_value(),
         });
         {
@@ -1361,7 +1361,7 @@ impl Issues for FixtureClient {
                         }
                         w["timeSpent"] = json!(worklog.time_spent);
                         w["timeSpentSeconds"] =
-                            json!(crate::doc::parse_duration(&worklog.time_spent).unwrap_or(0));
+                            json!(crate::value::parse_duration(&worklog.time_spent).unwrap_or(0));
                         w["comment"] = worklog.comment.to_field_value();
                         if let Some(started) = &worklog.started {
                             w["started"] = json!(format_worklog_started(started));

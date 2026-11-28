@@ -190,7 +190,7 @@ pub fn issue_from_json(v: &Value, markup: Markup, map: &FieldMap) -> Result<Remo
         .to_string();
     // The key names the issue's file and its attachment folder; one the
     // server made up — `../x`, `/etc` — would be a path, not a name.
-    if !crate::doc::is_issue_key(&key) {
+    if !crate::value::is_issue_key(&key) {
         return Err(JiredError::generic(format!(
             "the server sent an issue whose key `{key}` is not a Jira key"
         ))
@@ -542,8 +542,8 @@ pub fn web_links(raw: &Value) -> Vec<IssueLink> {
                     let url = object.get("url")?.as_str()?;
                     let title = object.get("title").and_then(Value::as_str).unwrap_or("");
                     Some(IssueLink {
-                        link_type: crate::doc::frontmatter::WEB.to_string(),
-                        other_key: crate::doc::frontmatter::web_value(url, title),
+                        link_type: crate::value::WEB.to_string(),
+                        other_key: crate::value::web_value(url, title),
                     })
                 })
                 .collect()
@@ -561,7 +561,7 @@ pub fn set_remote_links(issue: &mut RemoteIssue, links: Vec<Value>) {
     issue
         .fields
         .links
-        .retain(|l| l.link_type != crate::doc::frontmatter::WEB);
+        .retain(|l| l.link_type != crate::value::WEB);
     issue.fields.links.extend(web_links(&issue.raw));
 }
 
@@ -615,7 +615,7 @@ pub fn subtask_ref(s: &Value) -> Option<SubtaskRef> {
 /// as a different rendering of itself. The plugin's own field is the fallback,
 /// for the instances that expose only that one — where the section stays
 /// read-only, since there is nothing a push could write.
-fn checklist(f: &Value, map: &FieldMap) -> Vec<crate::doc::ChecklistEntry> {
+fn checklist(f: &Value, map: &FieldMap) -> Vec<crate::value::ChecklistEntry> {
     for id in [&map.checklist_text, &map.checklist].into_iter().flatten() {
         let entries = f
             .get(id)
@@ -999,8 +999,8 @@ mod tests {
         let issue = issue_from_json(&cloud_issue(), Markup::Adf, &field_map()).unwrap();
         assert_eq!(
             issue.fields.checklist,
-            vec![crate::doc::ChecklistEntry::Item(
-                crate::doc::ChecklistItem {
+            vec![crate::value::ChecklistEntry::Item(
+                crate::value::ChecklistItem {
                     checked: false,
                     status: Some("IN PROGRESS".into()),
                     title: "Analyse the request".into(),

@@ -36,6 +36,7 @@ pub mod store;
 pub mod style;
 pub mod sync;
 pub mod tui;
+pub mod value;
 pub mod workspace;
 
 pub use error::{ExitCode, JiredError, Result};

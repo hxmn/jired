@@ -15,6 +15,7 @@ pub mod frontmatter;
 pub use frontmatter::{Frontmatter, SyncMeta};
 
 use crate::error::{JiredError, Result};
+pub use crate::value::{is_issue_key, parse_duration, ChecklistEntry, ChecklistItem};
 
 pub const SECTION_DESCRIPTION: &str = "Description";
 pub const SECTION_CHECKLIST: &str = "Checklist";
@@ -52,24 +53,6 @@ pub struct IssueDoc {
     pub attachments: Vec<AttachmentLine>,
     /// Sections jired does not know about, preserved in place.
     pub extra_sections: Vec<(String, String)>,
-}
-
-/// One line of `## Checklist`: an item, or the header of a group of items.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChecklistEntry {
-    Header(String),
-    Item(ChecklistItem),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChecklistItem {
-    pub checked: bool,
-    /// Status name, kept only when the checkbox does not already say it —
-    /// `IN PROGRESS`, `SKIPPED`, or whatever the instance has configured.
-    pub status: Option<String>,
-    pub title: String,
-    /// The item's note, if it has one.
-    pub description: Option<String>,
 }
 
 /// One line of `## Children`: a subtask, or a line someone added by hand.
@@ -771,22 +754,6 @@ pub fn is_temp_key(s: &str) -> bool {
     }
 }
 
-pub fn is_issue_key(s: &str) -> bool {
-    let Some((project, number)) = s.split_once('-') else {
-        return false;
-    };
-    !project.is_empty()
-        && project
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-        && project
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_uppercase())
-        && !number.is_empty()
-        && number.chars().all(|c| c.is_ascii_digit())
-}
-
 fn parse_comments(content: &str) -> Result<Vec<CommentBlock>> {
     let mut out: Vec<CommentBlock> = Vec::new();
     let mut current: Option<CommentBlock> = None;
@@ -961,7 +928,7 @@ fn parse_worklog_heading(text: &str) -> Result<WorklogEntry> {
     for part in parts {
         // A start time written by hand may name no zone; it means the one the
         // person writing it is in, which is also the one jired showed them.
-        if started.is_empty() && crate::api::model::parse_local_timestamp(&part).is_some() {
+        if started.is_empty() && crate::value::parse_local_timestamp(&part).is_some() {
             started = part;
         } else if author.is_empty() {
             author = part;
@@ -994,40 +961,6 @@ fn render_worklog_heading(w: &WorklogEntry) -> String {
         parts.push(w.started.clone());
     }
     format!("### {}", parts.join(" — "))
-}
-
-/// Check a duration in Jira's notation, returning it in seconds.
-///
-/// Only the syntax is checked. A week and a day are whatever the instance has
-/// them configured as — the seconds here are for comparison and error messages,
-/// never for what goes over the wire, which is always the text the user wrote.
-pub fn parse_duration(text: &str) -> Option<u64> {
-    let mut total: u64 = 0;
-    let mut digits = String::new();
-    let mut any = false;
-
-    for c in text.trim().chars() {
-        match c {
-            '0'..='9' => digits.push(c),
-            ' ' | ',' => {}
-            _ => {
-                let scale = match c.to_ascii_lowercase() {
-                    'w' => 5 * 8 * 3600,
-                    'd' => 8 * 3600,
-                    'h' => 3600,
-                    'm' => 60,
-                    _ => return None,
-                };
-                let n: u64 = digits.parse().ok()?;
-                digits.clear();
-                total = total.checked_add(n.checked_mul(scale)?)?;
-                any = true;
-            }
-        }
-    }
-    // A bare number is ambiguous — Jira reads it as minutes only because of an
-    // instance setting — so it is refused rather than assumed.
-    (any && digits.is_empty() && total > 0).then_some(total)
 }
 
 /// A link target as Markdown needs it written.

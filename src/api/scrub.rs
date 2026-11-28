@@ -166,7 +166,7 @@ impl Scrubber {
 
 /// `PROJ-142` — structural, and safe to keep.
 fn is_issue_key(s: &str) -> bool {
-    crate::doc::is_issue_key(s)
+    crate::value::is_issue_key(s)
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@
 //! rather than flattening it, because the field belongs to a plugin whose own
 //! reading of it is the one that counts.
 
-use crate::doc::{ChecklistEntry, ChecklistItem};
+use crate::value::{ChecklistEntry, ChecklistItem};
 use serde_json::Value;
 
 /// Status names that say nothing beyond what the checkbox already shows.

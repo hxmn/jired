@@ -127,7 +127,7 @@ fn wrap(scalar: &Value, element: Element, deployment: Deployment) -> Value {
         Element::User => {
             let id = scalar
                 .as_str()
-                .and_then(crate::doc::frontmatter::parse_user)
+                .and_then(crate::value::parse_user)
                 .unwrap_or_default();
             crate::api::user_field_value(deployment, Some(&id))
         }

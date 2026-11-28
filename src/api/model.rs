@@ -6,7 +6,11 @@
 //! a record that moves with whoever reads it is not a record.
 
 use crate::api::Markup;
-use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+pub use crate::value::{
+    format_local, format_local_iso, format_timestamp, jql_timestamp, names_a_zone,
+    parse_local_timestamp, parse_timestamp, UserRef,
+};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -394,14 +398,6 @@ pub struct BoardColumn {
     pub status_ids: Vec<String>,
 }
 
-/// A user reference. Cloud identifies by `accountId`, Data Center by `name`;
-/// both land here so mention rendering has one shape.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UserRef {
-    pub id: String,
-    pub display_name: String,
-}
-
 /// Rich text in whichever markup the server uses.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RichText {
@@ -512,7 +508,7 @@ pub struct IssueFields {
     pub due_date: Option<String>,
     pub subtasks: Vec<SubtaskRef>,
     /// The checklist plugin's list, if the instance has one [M5.4].
-    pub checklist: Vec<crate::doc::ChecklistEntry>,
+    pub checklist: Vec<crate::value::ChecklistEntry>,
     /// Custom fields with no well-known mapping, keyed by field id.
     pub custom: std::collections::BTreeMap<String, serde_json::Value>,
 }
@@ -724,127 +720,6 @@ pub struct ChangelogItem {
     pub field: String,
     pub from: Option<String>,
     pub to: Option<String>,
-}
-
-/// Parse a Jira timestamp into UTC.
-///
-/// Jira Cloud emits ISO-8601 with an offset; Data Center emits the same shape
-/// but in server-local time, and some proxies drop the colon from the offset.
-pub fn parse_timestamp(s: &str) -> Option<DateTime<Utc>> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Some(dt.with_timezone(&Utc));
-    }
-    for fmt in [
-        "%Y-%m-%dT%H:%M:%S%.3f%z",
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%d %H:%M:%S%.3f%z",
-    ] {
-        if let Ok(dt) = DateTime::parse_from_str(s, fmt) {
-            return Some(dt.with_timezone(&Utc));
-        }
-    }
-    // Date-only values appear in duedate and custom date fields.
-    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc());
-    }
-    None
-}
-
-/// Parse a timestamp a person typed, reading a missing offset as their own.
-///
-/// The server always says which zone it means; a person does not, and having
-/// just been shown a local time they will type one back. Anything with an
-/// offset keeps it — an explicit zone is never second-guessed — so this only
-/// ever fills in a blank.
-pub fn parse_local_timestamp(s: &str) -> Option<DateTime<Utc>> {
-    let s = s.trim();
-    // Naive shapes first: none of them match a string that carries an offset,
-    // and going the other way would let `parse_timestamp` read a bare date as
-    // midnight UTC before this ever saw it.
-    for fmt in [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%dT%H:%M",
-    ] {
-        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
-            return local_to_utc(naive);
-        }
-    }
-    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        if let Some(naive) = date.and_hms_opt(0, 0, 0) {
-            return local_to_utc(naive);
-        }
-    }
-    parse_timestamp(s)
-}
-
-/// Whether a written timestamp says which zone it is in.
-///
-/// What separates a value to leave in the words it was typed in from one that
-/// has to have a zone put on it before it is written down. A bare date says no
-/// zone, whatever [`parse_timestamp`] is willing to make of it.
-pub fn names_a_zone(s: &str) -> bool {
-    let s = s.trim();
-    DateTime::parse_from_rfc3339(s).is_ok()
-        || ["%Y-%m-%dT%H:%M:%S%.3f%z", "%Y-%m-%dT%H:%M:%S%z"]
-            .iter()
-            .any(|fmt| DateTime::parse_from_str(s, fmt).is_ok())
-}
-
-/// Pin a wall-clock reading to an instant.
-///
-/// The hour a clock skips forward over never happened and the hour it repeats
-/// happened twice; taking the earliest candidate answers both with the reading
-/// closest to what was meant, rather than refusing an otherwise good time.
-fn local_to_utc(naive: chrono::NaiveDateTime) -> Option<DateTime<Utc>> {
-    use chrono::offset::LocalResult;
-    match Local.from_local_datetime(&naive) {
-        LocalResult::Single(dt) => Some(dt.with_timezone(&Utc)),
-        LocalResult::Ambiguous(earlier, _) => Some(earlier.with_timezone(&Utc)),
-        LocalResult::None => Local
-            .from_local_datetime(&(naive + chrono::Duration::hours(1)))
-            .earliest()
-            .map(|dt| dt.with_timezone(&Utc)),
-    }
-}
-
-/// Serialize a timestamp the way jired writes it everywhere.
-///
-/// UTC, because this is what goes into `state.db`, into issue files, into API
-/// payloads and into `--json` documents — records, which have to mean the same
-/// thing on every machine that reads them. Text on a screen is the opposite
-/// case; see [`format_local`].
-pub fn format_timestamp(dt: &DateTime<Utc>) -> String {
-    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-}
-
-/// The same instant as the person reading it lives it.
-///
-/// Everything jired prints to a terminal goes through here. On a screen UTC is
-/// not a fact, it is a subtraction the reader has to do, and the offset is one
-/// they already know — so the zone marker goes too and what is left is the time
-/// their own clock shows.
-pub fn format_local(dt: &DateTime<Utc>) -> String {
-    dt.with_timezone(&Local)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
-}
-
-/// A local time that also has to survive being read back.
-///
-/// For the values shown on screen that are *also* records — a worklog's start
-/// time, which the form writes into the issue file. It keeps the offset, so it
-/// is every bit as unambiguous as a `Z` timestamp while still reading as the
-/// clock the person authoring it was looking at.
-pub fn format_local_iso(dt: &DateTime<Utc>) -> String {
-    dt.with_timezone(&Local)
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-}
-
-/// Format a JQL timestamp literal in the shape Jira's parser accepts.
-pub fn jql_timestamp(dt: &DateTime<Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M").to_string()
 }
 
 #[cfg(test)]

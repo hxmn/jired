@@ -16,10 +16,16 @@ const RULES: &[(&str, &[&str])] = &[
     ("rules", &["cli"]),
     // The client is handed a finished connection; where it was looked up is
     // the composing layer's business.
-    ("api", &["cli", "store", "config"]),
+    ("api", &["cli", "store", "config", "doc"]),
+    // The wire model and the file model share their values through `value`,
+    // not through each other.
+    ("doc", &["api", "cli", "sync"]),
     // A setting is checked when it is set, which must not need a terminal.
     ("config", &["tui", "cli", "sync"]),
 ];
+
+/// Modules that are one file rather than a directory: a leaf names nothing.
+const LEAVES: &[&str] = &["value"];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -66,6 +72,16 @@ fn lower_modules_do_not_name_the_ones_above_them() {
                         ));
                     }
                 }
+            }
+        }
+    }
+    for leaf in LEAVES {
+        let file = src.join(format!("{leaf}.rs"));
+        let text = std::fs::read_to_string(&file).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            if code.contains("crate::") {
+                found.push(format!("{leaf}.rs:{}: a leaf names {}", n + 1, code.trim()));
             }
         }
     }

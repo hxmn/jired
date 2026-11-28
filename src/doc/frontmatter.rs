@@ -5,26 +5,9 @@
 //! nowhere else.
 
 use crate::error::{JiredError, Result};
+pub use crate::value::{format_user, parse_user, web_value, WEB};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-/// The `links:` key a web (remote) link is written under, in place of a
-/// direction: `- web: https://wiki.example/x "Release notes"`.
-///
-/// One list for both kinds rather than a second key, because both are "what
-/// this issue points at" and an agent adding one should not have to know Jira
-/// keeps them in two places.
-pub const WEB: &str = "web";
-
-/// A web link as `links:` spells it: the URL, then the title in quotes when
-/// there is one that says more than the URL does.
-pub fn web_value(url: &str, title: &str) -> String {
-    let (url, title) = (url.trim(), title.trim());
-    match title.is_empty() || title == url {
-        true => url.to_string(),
-        false => format!("{url} \"{title}\""),
-    }
-}
 
 /// The `(url, title)` a `web:` value spells. The URL runs to the first space;
 /// the rest is the title, its outer quotes dropped, so a title with quotes of
@@ -377,11 +360,6 @@ mod sprint_field {
     }
 }
 
-/// Render a mention the way the file format spells it: `@[Name](id)`.
-pub fn format_user(user: Option<&crate::api::UserRef>) -> Option<String> {
-    user.map(|u| format!("@[{}]({})", u.display_name, u.id))
-}
-
 /// The readable half of `@[Ilya A](5b10a2)`, for output a person reads.
 ///
 /// The complement of [`parse_user`], which recovers the half a request needs.
@@ -390,21 +368,6 @@ pub fn display_name(mention: &str) -> String {
         .strip_prefix("@[")
         .and_then(|rest| rest.split_once("](").map(|(name, _)| name));
     name.unwrap_or(mention).to_string()
-}
-
-/// Recover the account id from `@[Name](id)`; a bare string is taken as an id.
-pub fn parse_user(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if let Some(rest) = value.strip_prefix("@[") {
-        if let Some(close) = rest.find("](") {
-            let id = &rest[close + 2..];
-            return Some(id.trim_end_matches(')').to_string());
-        }
-    }
-    Some(value.to_string())
 }
 
 #[cfg(test)]
@@ -570,7 +533,7 @@ jired:
 
     #[test]
     fn mention_syntax_round_trips() {
-        let user = crate::api::UserRef {
+        let user = crate::value::UserRef {
             id: "5b10a2".into(),
             display_name: "Ilya A".into(),
         };
