@@ -8,6 +8,14 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.21] — 2026-11-28
+
+### Changed
+
+- Nothing in jired's behaviour: the plan gains M7, verifying jired against a
+  real Jira Cloud site, which it has so far only been tested against fixtures
+  written by hand.
+
 ## [0.39.20] — 2026-11-28
 
 ### Changed
