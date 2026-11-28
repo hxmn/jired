@@ -8,6 +8,12 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.18] — 2026-11-28
+
+### Changed
+
+- Nothing in jired's behaviour: 0.39.17's changelog named the wrong commands.
+
 ## [0.39.17] — 2026-11-28
 
 ### Changed
