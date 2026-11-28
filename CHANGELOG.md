@@ -8,6 +8,13 @@ Versions follow [semantic versioning](https://semver.org). Before 1.0 a minor
 bump is where breaking changes go, so read the **Breaking** section of every
 version between the one you have and the one you are moving to.
 
+## [0.39.20] — 2026-11-28
+
+### Changed
+
+- Nothing in jired's behaviour: the sync engine's reports are drawn by the
+  command line rather than by the engine.
+
 ## [0.39.19] — 2026-11-28
 
 ### Fixed
