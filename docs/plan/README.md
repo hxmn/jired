@@ -25,10 +25,13 @@ them with Jira Cloud (REST v3, ADF) or Jira Data Center (REST v2, wiki markup).
 | M4 | [m4-grouping-tui.md](milestones/m4-grouping-tui.md) | Grouping folders, link fallback, board moves, TUI | grouping done; TUI framework and the `create` form done; **other screens not built** |
 | M5 | [m5-agent-json-polish.md](milestones/m5-agent-json-polish.md) | JSON schemas, agent docs, completion, hardening, release | contract, security and the checklist adapter done; **packaging not built** |
 | M6 | [m6-datacenter-spec-client.md](milestones/m6-datacenter-spec-client.md) | Data Center client rewritten against the server's own API description (10.7.4 WADL): route table + contract test, assignable users, complete comments, assignee route, screen checks, floor 10.0 | done |
+| M7 | [m7-cloud-verification.md](milestones/m7-cloud-verification.md) | Jira Cloud verified for real: OpenAPI route contract, fixtures recorded from a sandbox site, ADF corpus, live suite, weekly drift job | **backlog** — jired has never talked to a real Cloud site |
 
 ## Where the project stands
 
-Working end to end against recorded fixtures for **both Cloud and Data Center**:
+Working end to end against fixtures for **both Cloud and Data Center**. Data
+Center's routes are also checked against a real server's own description and
+have been used in the field; Cloud has only fixtures written by hand (M7):
 
 ```
 init → pull → edit → status/diff → push --dry-run → push
@@ -58,7 +61,7 @@ Guards that hold the design in place, each verified rather than asserted:
 
 **Not built:** the TUI, release packaging, and
 recording fixtures from real instances (`jired-record` exists but needs
-credentials to run).
+credentials to run). **Not verified:** anything on Jira Cloud — M7 is the plan.
 
 ## Tracking conventions
 
